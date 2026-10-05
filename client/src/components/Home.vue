@@ -71,25 +71,25 @@
             <div class="mt-4">
 
               <RouterLink
-                to="/Ex1/"
+                to="/Simulator/"
                 class="btn btn-success btn-lg me-2"
               >
                 Start Simulation
               </RouterLink>
 
-              <RouterLink
+              <!-- <RouterLink
                 to="/Ex2/"
                 class="btn btn-outline-success btn-lg"
               >
                 View Challenges
-              </RouterLink>
+              </RouterLink> -->
 
             </div>
 
           </div>
 
 
-          <!-- RIGHT SIDE -->
+          <!-- RIGHT SIDE
           <div class="col-lg-6 mt-5 mt-lg-0">
 
             <div class="card shadow-sm simulator-preview">
@@ -152,7 +152,7 @@
               </div>
             </div>
 
-          </div>
+          </div> -->
 
         </div>
       </div>
@@ -252,7 +252,7 @@
         </p>
 
         <RouterLink
-          to="/Ex1/"
+          to="/Simulator/"
           class="btn btn-success btn-lg mt-2"
         >
           Start Simulation →
