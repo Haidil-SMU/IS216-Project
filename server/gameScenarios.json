@@ -1,0 +1,87 @@
+{
+  "scenarios": [
+    {
+      "id": 1,
+      "name": "Heatwave",
+      "description": "Singapore is experiencing extremely hot weather. Keep your household comfortable without using excessive electricity.",
+      "difficulty": "Easy",
+      "conditions": {
+        "temperature": 35,
+        "humidity": 80,
+        "startingBudget": 5.00
+      },
+      "goals": {
+        "maxCost": 5.00,
+        "minEcoScore": 70,
+        "minComfortScore": 80
+      }
+    },
+    {
+      "id": 2,
+      "name": "Budget Challenge",
+      "description": "Keep electricity spending low while maintaining a reasonable level of household comfort.",
+      "difficulty": "Medium",
+      "conditions": {
+        "temperature": 32,
+        "humidity": 75,
+        "startingBudget": 3.00
+      },
+      "goals": {
+        "maxCost": 3.00,
+        "minEcoScore": 70,
+        "minComfortScore": 65
+      }
+    },
+    {
+      "id": 3,
+      "name": "Family Weekend",
+      "description": "The whole family is home, increasing electricity demand throughout the HDB.",
+      "difficulty": "Medium",
+      "conditions": {
+        "temperature": 33,
+        "humidity": 78,
+        "startingBudget": 5.50,
+        "occupants": 5
+      },
+      "goals": {
+        "maxCost": 5.50,
+        "minEcoScore": 65,
+        "minComfortScore": 80
+      }
+    },
+    {
+      "id": 4,
+      "name": "Faulty Appliance",
+      "description": "Something in the HDB is consuming more electricity than normal. Find the problem while keeping energy usage under control.",
+      "difficulty": "Hard",
+      "conditions": {
+        "temperature": 31,
+        "humidity": 75,
+        "startingBudget": 4.50,
+        "faultyAppliance": "fridge"
+      },
+      "goals": {
+        "maxCost": 4.50,
+        "minEcoScore": 70,
+        "minComfortScore": 70
+      }
+    },
+    {
+      "id": 5,
+      "name": "Ultimate Eco Challenge",
+      "description": "Balance household comfort, electricity cost and environmental impact under challenging conditions.",
+      "difficulty": "Hard",
+      "conditions": {
+        "temperature": 34,
+        "humidity": 82,
+        "startingBudget": 4.00,
+        "occupants": 4
+      },
+      "goals": {
+        "maxCost": 4.00,
+        "minEcoScore": 85,
+        "minComfortScore": 80
+      }
+    }
+  ]
+}
