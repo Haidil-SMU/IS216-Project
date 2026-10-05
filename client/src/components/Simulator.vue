@@ -11,7 +11,7 @@ const simulated = ref(false)
 const scenarios = ref([])
 const appliances = ref([])
 
-const selectedScenarioId = ref(null)
+const selectedScenario = ref(null)
 
 const acTemperature = ref(25)
 
@@ -28,6 +28,9 @@ async function loadData() {
 
     //console.log(scenarios.value)
     //console.log(appliances.value)
+    selectedScenario.value = scenarios.value[0]
+    console.log(selectedScenario.value)
+
 
     for (const appliance of appliances.value) {
       appliance.on = false
@@ -151,6 +154,16 @@ function getRoomAppliances(room) {
 
 }
 
+// const randomScenario = computed(() => {
+//     if (scenarios.value.length === 0) {
+//         return null
+//     }
+
+//     const randomIndex = Math.floor(Math.random() * scenarios.value.length)
+
+//     return scenarios.value[randomIndex]
+// })
+
 </script>
 
 
@@ -234,13 +247,51 @@ function getRoomAppliances(room) {
           Scenario
         </label>
 
-        <select class="form-select" v-model.number="selectedScenarioId">
+        <select class="form-select" v-model="selectedScenario">
 
-          <option v-for="scenario in scenarios" :key="scenario.id" :value="scenario.id">
+          <option v-for="scenario in scenarios" :key="scenario.id" :value="scenario">
             {{ scenario.name }}
           </option>
 
         </select>
+        <div v-if="selectedScenario" class="card mt-3">
+
+          <div class="card-body">
+
+            <h4 class="card-title">
+              {{ selectedScenario.name }}
+            </h4>
+
+            <p class="card-text">
+              {{ selectedScenario.description }}
+            </p>
+
+            <p>
+              <strong>Difficulty:</strong>
+              {{ selectedScenario.difficulty }}
+            </p>
+
+            <hr>
+
+            <h5>🎯 Goals</h5>
+
+            <ul class="mb-0">
+              <li>
+                Maximum Cost: ${{ selectedScenario.goals.maxCost }}
+              </li>
+
+              <li>
+                Minimum Eco Score: {{ selectedScenario.goals.minEcoScore }}
+              </li>
+
+              <li>
+                Minimum Comfort Score: {{ selectedScenario.goals.minComfortScore }}
+              </li>
+            </ul>
+
+          </div>
+
+        </div>
 
       </div>
 
@@ -663,18 +714,17 @@ function getRoomAppliances(room) {
 
           <!-- FEEDBACK -->
 
-          <div v-if="totalEnergy > 15" class="alert alert-warning mt-3 mb-0">
-
-            ⚡ Your household used a lot of energy today.
-            Try reducing appliance usage.
-
+          <div v-if="
+            totalCost <= selectedScenario.goals.maxCost &&
+            ecoScore >= selectedScenario.goals.minEcoScore &&
+            comfortScore >= selectedScenario.goals.minComfortScore
+          " class="alert alert-success mt-3 mb-0">
+            🌱 Great job! You achieved all the goals for this scenario.
           </div>
 
+          <div v-else class="alert alert-warning mt-3 mb-0">
 
-          <div v-else class="alert alert-success mt-3 mb-0">
-
-            🌱 Great job! Your household kept its energy
-            consumption relatively low.
+            ⚠️ You did not meet all the goals for this scenario.
 
           </div>
 
