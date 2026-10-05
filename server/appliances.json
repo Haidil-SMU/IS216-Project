@@ -1,0 +1,40 @@
+{
+  "appliances": [
+    {
+      "id": 1,
+      "name": "Air Conditioner",
+      "room": "Bedroom",
+      "power": 0.9
+    },
+    {
+      "id": 2,
+      "name": "Ceiling Fan",
+      "room": "Living Room",
+      "power": 0.05
+    },
+    {
+      "id": 3,
+      "name": "Television",
+      "room": "Living Room",
+      "power": 0.1
+    },
+    {
+      "id": 4,
+      "name": "Lights",
+      "room": "Living Room",
+      "power": 0.04
+    },
+    {
+      "id": 5,
+      "name": "Water Heater",
+      "room": "Bathroom",
+      "power": 3
+    },
+    {
+      "id": 6,
+      "name": "Refrigerator",
+      "room": "Kitchen",
+      "power": 0.1
+    }
+  ]
+}

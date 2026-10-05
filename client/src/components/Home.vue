@@ -29,13 +29,13 @@
               My HDB
             </RouterLink>
 
-            <RouterLink class="nav-link" to="/Ex2/">
+            <!-- <RouterLink class="nav-link" to="/Ex2/">
               Challenges
             </RouterLink>
 
             <RouterLink class="nav-link" to="/Ex3/">
               Dashboard
-            </RouterLink>
+            </RouterLink> -->
 
           </div>
         </div>

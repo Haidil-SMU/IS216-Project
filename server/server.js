@@ -3,26 +3,37 @@ const fs = require('fs');
 const path = require('path');
 
 const PORT = process.env.PORT || 8000;
-const FILE_LOC = path.join(__dirname, 'courses.json');
+const SCENARIO_FILE = path.join(__dirname, 'gameScenarios.json');
+const APPLIANCE_FILE = path.join(__dirname, 'appliances.json');
 
-function loadData() {
+function loadGameData() {
     try {
-        const raw = fs.readFileSync(FILE_LOC, 'utf8');
-        const data = JSON.parse(raw);
+        const scenarioRaw = fs.readFileSync(SCENARIO_FILE, 'utf8');
+        const applianceRaw = fs.readFileSync(APPLIANCE_FILE, 'utf8');
+
+        const scenarioData = JSON.parse(scenarioRaw);
+        const applianceData = JSON.parse(applianceRaw);
 
         return {
-            courseInfo: Array.isArray(data.courseInfo) ? data.courseInfo : []
+            scenarios: Array.isArray(scenarioData.scenarios)
+                ? scenarioData.scenarios
+                : [],
+
+            appliances: Array.isArray(applianceData.appliances)
+                ? applianceData.appliances
+                : []
         };
-    } catch {
-        return { courseInfo: [] };
+
+    } catch(error) {
+        console.log(error);
+
+        return {
+            scenarios: [],
+            appliances: []
+        }
     }
 }
 
-function saveData(data) {
-    const tmp = `${FILE_LOC}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(data, null, 4));
-    fs.renameSync(tmp, FILE_LOC);
-}
 
 const app = express();
 
@@ -49,7 +60,7 @@ app.use('/api', (req, res, next) => {
 // ============================================================
 
 app.get('/api', (req, res) => {
-    res.status(200).json(loadData());
+    res.status(200).json(loadGameData());
 });
 
 // ============================================================
