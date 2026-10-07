@@ -4,7 +4,11 @@ import { ref, computed, onMounted } from 'vue'
 import axios from 'axios'
 
 const API_URL = 'http://127.0.0.1:8000/api'
-const NEA_URL = "https://api-open.data.gov.sg/v2/real-time/api/air-temperature"
+const TEMPERATURE_URL = "https://api-open.data.gov.sg/v2/real-time/api/air-temperature"
+const RAINFALL_URL =  "https://api-open.data.gov.sg/v2/real-time/api/rainfall"
+const PSI_URL = "https://api-open.data.gov.sg/v2/real-time/api/psi"
+
+
 
 
 const electricityRate = 0.32
@@ -18,15 +22,15 @@ const selectedAppliance = ref(null)
 
 const acTemperature = ref(25)
 const temperature = ref(0)
-
+const rainfall = ref(0)
+const psi = ref(0)
 
 
 async function getWeatherData() {
   try {
     let total = 0
     let average = 0
-    const weatherData = await axios.get(NEA_URL)
-    console.log(weatherData)
+    const weatherData = await axios.get(TEMPERATURE_URL)
     let readings = weatherData.data.data.readings[0].data //gets the weather accross all stations
     console.log(readings)
     //we calculate the average accross all stations in singapore, to  get the current weather
@@ -34,9 +38,10 @@ async function getWeatherData() {
       total += reading.value
 
     }
+
     average = total / (readings.length)
     temperature.value = Number(average.toFixed(2))
-    console.log(temperature.value)
+
   } catch (error) {
 
     console.log(error)
@@ -54,11 +59,8 @@ async function loadData() {
     scenarios.value = response.data.scenarios
     appliances.value = response.data.appliances
 
-    //console.log(scenarios.value)
-    //console.log(appliances.value)
     selectedScenario.value = scenarios.value[0]
     console.log(selectedScenario.value)
-
 
     for (const appliance of appliances.value) {
       appliance.on = false
@@ -94,11 +96,6 @@ const totalEnergy = computed(() => {
 
 })
 
-
-// =========================
-// TOTAL COST
-// =========================
-
 const totalCost = computed(() => {
 
   return totalEnergy.value * electricityRate
@@ -106,36 +103,41 @@ const totalCost = computed(() => {
 })
 
 
-// =========================
-// ECO SCORE
-// =========================
+
 
 const ecoScore = computed(() => {
 
-  if (totalEnergy.value <= 8) {
+  if (totalEnergy.value <= 4) {
     return 100
   }
 
-  if (totalEnergy.value <= 12) {
+  if (totalEnergy.value <= 7) {
     return 85
   }
 
-  if (totalEnergy.value <= 16) {
+  if (totalEnergy.value <= 10) {
     return 70
   }
 
-  return 50
+  if (totalEnergy.value <= 13) {
+    return 55
+  }
+
+  if (totalEnergy.value <= 16) {
+    return 40
+  }
+
+  if (totalEnergy.value <= 20) {
+    return 25
+  }
+
+  return 10
 
 })
 
 
-// =========================
-// COMFORT SCORE
-// =========================
-
 const comfortScore = computed(() => {
-
-  let score = 70
+  let score = 0
 
   const aircon = appliances.value.find(
     appliance => appliance.name === 'Air Conditioner'
@@ -145,6 +147,20 @@ const comfortScore = computed(() => {
     appliance => appliance.name === 'Ceiling Fan'
   )
 
+  const lights = appliances.value.find(
+    appliance => appliance.name === 'Lights'
+  )
+
+  const tv = appliances.value.find(
+    appliance => appliance.name === 'TV'
+  )
+
+  const waterHeater = appliances.value.find(
+    appliance => appliance.name === 'Water Heater'
+  )
+
+
+  // Comfort from appliances
   if (aircon?.on) {
     score += 15
   }
@@ -153,18 +169,36 @@ const comfortScore = computed(() => {
     score += 5
   }
 
+  if (lights?.on) {
+    score += 5
+  }
+
+  if (tv?.on) {
+    score += 5
+  }
+
+  if (waterHeater?.on) {
+    score += 10
+  }
+
+
+  // AC provides less comfort if temperature is too high
   if (aircon?.on && acTemperature.value >= 27) {
     score -= 5
   }
 
-  return Math.min(100, score)
 
+  return Math.min(100, Math.max(0, score))
 })
 
+const scenarioDescription = computed(() => {
 
-// =========================
-// SIMULATE DAY
-// =========================
+  return selectedScenario.value.description
+    .replace('{temperature}', temperature.value)
+    .replace('{rainfall}', rainfall.value)
+    .replace('{psi}', psi.value)
+
+})
 
 function simulateDay() {
 
@@ -176,9 +210,7 @@ function selectAppliance(appliance) {
   selectedAppliance.value = appliance
 }
 
-// =========================
-// GET APPLIANCES BY ROOM
-// =========================
+
 
 function getRoomAppliances(room) {
 
@@ -196,9 +228,6 @@ function getRoomAppliances(room) {
 
   <div>
 
-    <!-- ========================= -->
-    <!-- NAVBAR -->
-    <!-- ========================= -->
 
     <nav class="navbar navbar-expand-lg navbar-dark bg-success">
 
@@ -208,12 +237,7 @@ function getRoomAppliances(room) {
           🏠 HDB EcoHome
         </RouterLink>
 
-        <button
-          class="navbar-toggler"
-          type="button"
-          data-bs-toggle="collapse"
-          data-bs-target="#navbar"
-        >
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar">
           <span class="navbar-toggler-icon"></span>
         </button>
 
@@ -242,9 +266,7 @@ function getRoomAppliances(room) {
     <main class="container py-4">
 
 
-      <!-- ========================= -->
-      <!-- PAGE TITLE -->
-      <!-- ========================= -->
+
 
       <div class="mb-4">
 
@@ -259,27 +281,15 @@ function getRoomAppliances(room) {
       </div>
 
 
-
-      <!-- ========================= -->
-      <!-- SCENARIO SELECT -->
-      <!-- ========================= -->
-
       <div class="mb-4">
 
         <label class="form-label fw-bold">
           🎮 Select Challenge
         </label>
 
-        <select
-          class="form-select"
-          v-model="selectedScenario"
-        >
+        <select class="form-select" v-model="selectedScenario">
 
-          <option
-            v-for="scenario in scenarios"
-            :key="scenario.id"
-            :value="scenario"
-          >
+          <option v-for="scenario in scenarios" :key="scenario.id" :value="scenario">
             {{ scenario.name }}
           </option>
 
@@ -287,12 +297,7 @@ function getRoomAppliances(room) {
 
 
 
-        <!-- SCENARIO INFORMATION -->
-
-        <div
-          v-if="selectedScenario"
-          class="card mt-3 scenario-card"
-        >
+        <div v-if="selectedScenario" class="card mt-3 scenario-card">
 
           <div class="card-body">
 
@@ -308,31 +313,12 @@ function getRoomAppliances(room) {
 
             </div>
 
-
-            <!-- NORMAL DESCRIPTION -->
-
-            <p
-              v-if="selectedScenario.name !== 'Heatwave'"
-              class="card-text"
-            >
-              {{ selectedScenario.description }}
-            </p>
-
-
-            <!-- HEATWAVE DESCRIPTION -->
-
-            <p
-              v-else
-              class="card-text"
-            >
-              Singapore's current average temperature is
-              <strong>{{ temperature }}°C</strong>.
-              Keep your household comfortable while controlling electricity usage.
+            <p class="card-text">
+              {{ scenarioDescription }}
             </p>
 
 
 
-            <!-- LIVE WEATHER -->
 
             <div class="alert alert-light border mt-3 mb-3">
 
@@ -344,17 +330,12 @@ function getRoomAppliances(room) {
                 🌡️ {{ temperature }}°C
               </strong>
 
-              <small class="text-secondary ms-2">
-                Average across NEA stations
-              </small>
 
             </div>
 
 
             <hr>
 
-
-            <!-- MISSION OBJECTIVES -->
 
             <h5 class="mb-3">
               🎯 Mission Objectives
@@ -364,7 +345,6 @@ function getRoomAppliances(room) {
             <div class="scenario-goals">
 
 
-              <!-- COST GOAL -->
 
               <div class="goal-item">
 
@@ -386,10 +366,6 @@ function getRoomAppliances(room) {
 
               </div>
 
-
-
-              <!-- ECO GOAL -->
-
               <div class="goal-item">
 
                 <span class="goal-icon">
@@ -409,10 +385,6 @@ function getRoomAppliances(room) {
                 </div>
 
               </div>
-
-
-
-              <!-- COMFORT GOAL -->
 
               <div class="goal-item">
 
@@ -443,11 +415,6 @@ function getRoomAppliances(room) {
 
       </div>
 
-
-
-      <!-- ========================= -->
-      <!-- CURRENT HOUSEHOLD STATUS -->
-      <!-- ========================= -->
 
       <h5 class="fw-bold mb-3">
         ⚡ Current Household Status
@@ -482,10 +449,6 @@ function getRoomAppliances(room) {
 
         </div>
 
-
-
-        <!-- COST -->
-
         <div class="col-6 col-lg-3">
 
           <div class="card h-100 stat-card">
@@ -506,10 +469,6 @@ function getRoomAppliances(room) {
 
         </div>
 
-
-
-        <!-- COMFORT -->
-
         <div class="col-6 col-lg-3">
 
           <div class="card h-100 stat-card">
@@ -529,10 +488,6 @@ function getRoomAppliances(room) {
           </div>
 
         </div>
-
-
-
-        <!-- ECO SCORE -->
 
         <div class="col-6 col-lg-3">
 
@@ -559,16 +514,7 @@ function getRoomAppliances(room) {
 
 
 
-      <!-- ========================= -->
-      <!-- HDB + CONTROLS -->
-      <!-- ========================= -->
-
       <div class="row g-4">
-
-
-        <!-- ========================= -->
-        <!-- INTERACTIVE HDB -->
-        <!-- ========================= -->
 
         <div class="col-lg-8">
 
@@ -589,7 +535,6 @@ function getRoomAppliances(room) {
               <div class="hdb-floorplan">
 
 
-                <!-- BEDROOM -->
 
                 <div class="room bedroom">
 
@@ -597,32 +542,20 @@ function getRoomAppliances(room) {
                     🛏️ Bedroom
                   </h5>
 
-                  <div
-                    v-for="appliance in getRoomAppliances('Bedroom')"
-                    :key="appliance.id"
-                    class="appliance"
-                    :class="{
-                      'appliance-on': appliance.on,
-                      'appliance-selected': selectedAppliance?.id === appliance.id
-                    }"
-                    @click="selectAppliance(appliance)"
-                  >
+                  <div v-for="appliance in getRoomAppliances('Bedroom')" :key="appliance.id" class="appliance" :class="{
+                    'appliance-on': appliance.on,
+                    'appliance-selected': selectedAppliance?.id === appliance.id
+                  }" @click="selectAppliance(appliance)">
 
                     <span>
                       {{ appliance.name }}
                     </span>
 
-                    <span
-                      v-if="appliance.on"
-                      class="badge bg-success"
-                    >
+                    <span v-if="appliance.on" class="badge bg-success">
                       ON
                     </span>
 
-                    <span
-                      v-else
-                      class="badge bg-secondary"
-                    >
+                    <span v-else class="badge bg-secondary">
                       OFF
                     </span>
 
@@ -631,8 +564,6 @@ function getRoomAppliances(room) {
                 </div>
 
 
-
-                <!-- LIVING ROOM -->
 
                 <div class="room living-room">
 
@@ -640,32 +571,21 @@ function getRoomAppliances(room) {
                     🛋️ Living Room
                   </h5>
 
-                  <div
-                    v-for="appliance in getRoomAppliances('Living Room')"
-                    :key="appliance.id"
-                    class="appliance"
+                  <div v-for="appliance in getRoomAppliances('Living Room')" :key="appliance.id" class="appliance"
                     :class="{
                       'appliance-on': appliance.on,
                       'appliance-selected': selectedAppliance?.id === appliance.id
-                    }"
-                    @click="selectAppliance(appliance)"
-                  >
+                    }" @click="selectAppliance(appliance)">
 
                     <span>
                       {{ appliance.name }}
                     </span>
 
-                    <span
-                      v-if="appliance.on"
-                      class="badge bg-success"
-                    >
+                    <span v-if="appliance.on" class="badge bg-success">
                       ON
                     </span>
 
-                    <span
-                      v-else
-                      class="badge bg-secondary"
-                    >
+                    <span v-else class="badge bg-secondary">
                       OFF
                     </span>
 
@@ -675,7 +595,6 @@ function getRoomAppliances(room) {
 
 
 
-                <!-- KITCHEN -->
 
                 <div class="room kitchen">
 
@@ -683,32 +602,20 @@ function getRoomAppliances(room) {
                     🍳 Kitchen
                   </h5>
 
-                  <div
-                    v-for="appliance in getRoomAppliances('Kitchen')"
-                    :key="appliance.id"
-                    class="appliance"
-                    :class="{
-                      'appliance-on': appliance.on,
-                      'appliance-selected': selectedAppliance?.id === appliance.id
-                    }"
-                    @click="selectAppliance(appliance)"
-                  >
+                  <div v-for="appliance in getRoomAppliances('Kitchen')" :key="appliance.id" class="appliance" :class="{
+                    'appliance-on': appliance.on,
+                    'appliance-selected': selectedAppliance?.id === appliance.id
+                  }" @click="selectAppliance(appliance)">
 
                     <span>
                       {{ appliance.name }}
                     </span>
 
-                    <span
-                      v-if="appliance.on"
-                      class="badge bg-success"
-                    >
+                    <span v-if="appliance.on" class="badge bg-success">
                       ON
                     </span>
 
-                    <span
-                      v-else
-                      class="badge bg-secondary"
-                    >
+                    <span v-else class="badge bg-secondary">
                       OFF
                     </span>
 
@@ -716,42 +623,26 @@ function getRoomAppliances(room) {
 
                 </div>
 
-
-
-                <!-- BATHROOM -->
-
                 <div class="room bathroom">
 
                   <h5>
                     🚿 Bathroom
                   </h5>
 
-                  <div
-                    v-for="appliance in getRoomAppliances('Bathroom')"
-                    :key="appliance.id"
-                    class="appliance"
-                    :class="{
-                      'appliance-on': appliance.on,
-                      'appliance-selected': selectedAppliance?.id === appliance.id
-                    }"
-                    @click="selectAppliance(appliance)"
-                  >
+                  <div v-for="appliance in getRoomAppliances('Bathroom')" :key="appliance.id" class="appliance" :class="{
+                    'appliance-on': appliance.on,
+                    'appliance-selected': selectedAppliance?.id === appliance.id
+                  }" @click="selectAppliance(appliance)">
 
                     <span>
                       {{ appliance.name }}
                     </span>
 
-                    <span
-                      v-if="appliance.on"
-                      class="badge bg-success"
-                    >
+                    <span v-if="appliance.on" class="badge bg-success">
                       ON
                     </span>
 
-                    <span
-                      v-else
-                      class="badge bg-secondary"
-                    >
+                    <span v-else class="badge bg-secondary">
                       OFF
                     </span>
 
@@ -767,12 +658,6 @@ function getRoomAppliances(room) {
           </div>
 
         </div>
-
-
-
-        <!-- ========================= -->
-        <!-- SELECTED APPLIANCE -->
-        <!-- ========================= -->
 
         <div class="col-lg-4">
 
@@ -794,12 +679,7 @@ function getRoomAppliances(room) {
             <div class="card-body">
 
 
-              <!-- NOTHING SELECTED -->
-
-              <div
-                v-if="!selectedAppliance"
-                class="text-center text-secondary py-4"
-              >
+              <div v-if="!selectedAppliance" class="text-center text-secondary py-4">
 
                 <div class="fs-1 mb-2">
                   👆
@@ -811,9 +691,6 @@ function getRoomAppliances(room) {
 
               </div>
 
-
-
-              <!-- APPLIANCE SELECTED -->
 
               <div v-else>
 
@@ -831,9 +708,6 @@ function getRoomAppliances(room) {
                 <hr>
 
 
-
-                <!-- POWER -->
-
                 <div class="d-flex justify-content-between align-items-center mb-3">
 
                   <strong>
@@ -842,24 +716,14 @@ function getRoomAppliances(room) {
 
                   <div class="form-check form-switch">
 
-                    <input
-                      class="form-check-input"
-                      type="checkbox"
-                      v-model="selectedAppliance.on"
-                    >
+                    <input class="form-check-input" type="checkbox" v-model="selectedAppliance.on">
 
                   </div>
 
                 </div>
 
-
-
-                <!-- CONTROLS WHEN ON -->
-
                 <div v-if="selectedAppliance.on">
 
-
-                  <!-- USAGE -->
 
                   <label class="form-label">
 
@@ -872,23 +736,10 @@ function getRoomAppliances(room) {
                   </label>
 
 
-                  <input
-                    type="range"
-                    class="form-range"
-                    min="0"
-                    max="24"
-                    step="0.5"
-                    v-model.number="selectedAppliance.hours"
-                  >
+                  <input type="range" class="form-range" min="0" max="24" step="0.5"
+                    v-model.number="selectedAppliance.hours">
 
-
-
-                  <!-- AC TEMPERATURE -->
-
-                  <div
-                    v-if="selectedAppliance.name === 'Air Conditioner'"
-                    class="mt-4"
-                  >
+                  <div v-if="selectedAppliance.name === 'Air Conditioner'" class="mt-4">
 
                     <label class="form-label">
 
@@ -901,10 +752,7 @@ function getRoomAppliances(room) {
                     </label>
 
 
-                    <select
-                      class="form-select"
-                      v-model.number="acTemperature"
-                    >
+                    <select class="form-select" v-model.number="acTemperature">
 
                       <option value="20">20°C</option>
                       <option value="21">21°C</option>
@@ -937,36 +785,20 @@ function getRoomAppliances(room) {
       </div>
 
 
-
-      <!-- ========================= -->
-      <!-- SIMULATE DAY -->
-      <!-- ========================= -->
-
       <div class="text-center my-5">
 
         <p class="text-secondary mb-2">
           Ready with your household setup?
         </p>
 
-        <button
-          class="btn btn-success btn-lg px-5 simulate-btn"
-          @click="simulateDay"
-        >
+        <button class="btn btn-success btn-lg px-5 simulate-btn" @click="simulateDay">
           ▶ SIMULATE DAY
         </button>
 
       </div>
 
 
-
-      <!-- ========================= -->
-      <!-- RESULTS -->
-      <!-- ========================= -->
-
-      <div
-        v-if="simulated && selectedScenario"
-        class="card result-card mb-5"
-      >
+      <div v-if="simulated && selectedScenario" class="card result-card mb-5">
 
         <div class="card-body">
 
@@ -984,8 +816,6 @@ function getRoomAppliances(room) {
           </div>
 
 
-
-          <!-- RESULT VALUES -->
 
           <div class="row g-3 mb-4">
 
@@ -1068,15 +898,9 @@ function getRoomAppliances(room) {
           <hr>
 
 
-          <!-- MISSION RESULTS -->
-
           <h5 class="fw-bold mt-4">
             🎯 Mission Results
           </h5>
-
-
-
-          <!-- COST -->
 
           <div class="mission-result">
 
@@ -1084,25 +908,16 @@ function getRoomAppliances(room) {
               💰 Keep Cost Below ${{ selectedScenario.goals.maxCost }}
             </span>
 
-            <span
-              v-if="totalCost <= selectedScenario.goals.maxCost"
-              class="badge bg-success"
-            >
+            <span v-if="totalCost <= selectedScenario.goals.maxCost" class="badge bg-success">
               ✓ PASSED
             </span>
 
-            <span
-              v-else
-              class="badge bg-danger"
-            >
+            <span v-else class="badge bg-danger">
               ✕ FAILED
             </span>
 
           </div>
 
-
-
-          <!-- ECO -->
 
           <div class="mission-result">
 
@@ -1110,17 +925,11 @@ function getRoomAppliances(room) {
               🌱 Eco Score {{ selectedScenario.goals.minEcoScore }}+
             </span>
 
-            <span
-              v-if="ecoScore >= selectedScenario.goals.minEcoScore"
-              class="badge bg-success"
-            >
+            <span v-if="ecoScore >= selectedScenario.goals.minEcoScore" class="badge bg-success">
               ✓ PASSED
             </span>
 
-            <span
-              v-else
-              class="badge bg-danger"
-            >
+            <span v-else class="badge bg-danger">
               ✕ FAILED
             </span>
 
@@ -1128,7 +937,6 @@ function getRoomAppliances(room) {
 
 
 
-          <!-- COMFORT -->
 
           <div class="mission-result">
 
@@ -1136,34 +944,21 @@ function getRoomAppliances(room) {
               ❤️ Comfort Score {{ selectedScenario.goals.minComfortScore }}+
             </span>
 
-            <span
-              v-if="comfortScore >= selectedScenario.goals.minComfortScore"
-              class="badge bg-success"
-            >
+            <span v-if="comfortScore >= selectedScenario.goals.minComfortScore" class="badge bg-success">
               ✓ PASSED
             </span>
 
-            <span
-              v-else
-              class="badge bg-danger"
-            >
+            <span v-else class="badge bg-danger">
               ✕ FAILED
             </span>
 
           </div>
 
-
-
-          <!-- ALL GOALS PASSED -->
-
-          <div
-            v-if="
-              totalCost <= selectedScenario.goals.maxCost &&
-              ecoScore >= selectedScenario.goals.minEcoScore &&
-              comfortScore >= selectedScenario.goals.minComfortScore
-            "
-            class="alert alert-success text-center mt-4 mb-0"
-          >
+          <div v-if="
+            totalCost <= selectedScenario.goals.maxCost &&
+            ecoScore >= selectedScenario.goals.minEcoScore &&
+            comfortScore >= selectedScenario.goals.minComfortScore
+          " class="alert alert-success text-center mt-4 mb-0">
 
             <h5 class="fw-bold">
               🏆 Challenge Complete!
@@ -1175,14 +970,7 @@ function getRoomAppliances(room) {
 
           </div>
 
-
-
-          <!-- NOT ALL GOALS PASSED -->
-
-          <div
-            v-else
-            class="alert alert-warning text-center mt-4 mb-0"
-          >
+          <div v-else class="alert alert-warning text-center mt-4 mb-0">
 
             <h5 class="fw-bold">
               ⚠️ Challenge Incomplete
@@ -1208,11 +996,6 @@ function getRoomAppliances(room) {
 
 
 <style scoped>
-
-/* ============================= */
-/* SCENARIO */
-/* ============================= */
-
 .scenario-card {
   border: none;
   border-radius: 14px;
@@ -1222,7 +1005,6 @@ function getRoomAppliances(room) {
 }
 
 
-/* Mission goals */
 
 .scenario-goals {
   display: grid;
@@ -1284,10 +1066,6 @@ function getRoomAppliances(room) {
 
 
 
-/* ============================= */
-/* STAT CARDS */
-/* ============================= */
-
 .stat-card {
   border: none;
 
@@ -1310,12 +1088,6 @@ function getRoomAppliances(room) {
     0;
 }
 
-
-
-/* ============================= */
-/* FLOOR PLAN */
-/* ============================= */
-
 .hdb-floorplan {
   display: grid;
 
@@ -1335,11 +1107,6 @@ function getRoomAppliances(room) {
     hidden;
 }
 
-
-
-/* ============================= */
-/* ROOMS */
-/* ============================= */
 
 .room {
   border:
@@ -1394,11 +1161,6 @@ function getRoomAppliances(room) {
     #f4faff;
 }
 
-
-
-/* ============================= */
-/* APPLIANCES INSIDE ROOMS */
-/* ============================= */
 
 .appliance {
   display: flex;
@@ -1463,10 +1225,6 @@ function getRoomAppliances(room) {
 
 
 
-/* ============================= */
-/* APPLIANCE CONTROL PANEL */
-/* ============================= */
-
 .appliance-control {
   margin-bottom:
     10px;
@@ -1482,10 +1240,6 @@ function getRoomAppliances(room) {
 }
 
 
-
-/* ============================= */
-/* SIMULATE BUTTON */
-/* ============================= */
 
 .simulate-btn {
   font-weight:
@@ -1509,9 +1263,6 @@ function getRoomAppliances(room) {
 
 
 
-/* ============================= */
-/* RESULTS */
-/* ============================= */
 
 .result-card {
   border:
@@ -1525,8 +1276,6 @@ function getRoomAppliances(room) {
 }
 
 
-
-/* Individual result boxes */
 
 .result-item {
   height:
@@ -1594,9 +1343,6 @@ function getRoomAppliances(room) {
 
 
 
-/* ============================= */
-/* MOBILE */
-/* ============================= */
 
 @media (max-width: 768px) {
 
@@ -1631,5 +1377,4 @@ function getRoomAppliances(room) {
   }
 
 }
-
 </style>
