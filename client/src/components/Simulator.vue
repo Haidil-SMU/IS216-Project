@@ -26,11 +26,18 @@ const rainfall = ref(0)
 const psi = ref(0)
 
 
-async function getWeatherData() {
+async function getScenarioData() {
   try {
     let total = 0
     let average = 0
+
+    //RETRIEVE ALL DATA ACRROSS ALL APIS FIRST
     const weatherData = await axios.get(TEMPERATURE_URL)
+    const rainfallData = await axios.get(RAINFALL_URL)
+    const PSIData = await axios.get(PSI_URL)
+
+
+    //assign the response to the respective variables
     let readings = weatherData.data.data.readings[0].data //gets the weather accross all stations
     console.log(readings)
     //we calculate the average accross all stations in singapore, to  get the current weather
@@ -77,7 +84,7 @@ async function loadData() {
 
 onMounted(() => {
   loadData()
-  getWeatherData()
+  getScenarioData()
 })
 
 const totalEnergy = computed(() => {
