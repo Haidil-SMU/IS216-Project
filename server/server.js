@@ -70,13 +70,7 @@ app.get('/api', (req, res) => {
 // ============================================================
 
 
-app.use((req, res) => {
-    res.status(404).type('text/plain').send('Not found');
-});
 
-app.listen(PORT, '127.0.0.1', () => {
-    console.log(`Server running at http://127.0.0.1:${PORT}/`);
-});
 
 
 // DARYL EDWIN
@@ -98,34 +92,47 @@ app.post('/api/analyze-quotations', async (req, res) => {
             apiKey: process.env.GEMINI_API_KEY
         });
 
-        const prompt = `
-You are helping a Singapore homeowner compare renovation contractor quotations.
+const prompt = `
+You are helping a Singapore homeowner compare renovation quotations.
 
-Here are the contractors and their quotation details:
-${JSON.stringify(contractors, null, 2)}
+Contractor data:
+${JSON.stringify(contractors)}
 
-Analyze the quotations and explain:
-1. Which services each contractor is quoting for.
-2. Any overlapping services between contractors.
-3. Potential hidden costs, exclusions, or unclear quotation details.
-4. Differences in warranties, materials, and scope of work.
-5. Which quotation offers better value and why.
+Recommend the best combination of contractors based on price,
+scope of work, hidden costs, discounts, and warranty.
 
-Important rules:
-- Do not invent prices, services, warranties, or contractor qualifications.
-- If information is missing, clearly state that it is missing.
-- Do not assume the cheapest quotation is the best.
-- Keep the explanation clear and easy for a homeowner to understand.
+IMPORTANT:
+- Keep the response extremely short.
+- Do not invent prices, discounts, or additional fees.
+- Only apply discounts if their conditions are clearly satisfied.
+- Do not recommend duplicate services.
+- Return ONLY valid JSON, without Markdown.
+
+Use this exact JSON structure:
+{
+  "recommendation": "One sentence recommending contractors and services",
+  "reasons": [
+    "Short reason 1",
+    "Short reason 2",
+    "Short reason 3"
+  ]
+}
+
+Maximum 4 reasons.
+Each reason must be under 20 words.
 `;
+const response = await ai.models.generateContent({
+    model: 'gemini-3.1-flash-lite',
+    contents: prompt,
+    config: {
+        responseMimeType: 'application/json',
+        maxOutputTokens: 1000
+    }
+});
 
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt
-        });
+const analysis = JSON.parse(response.text);
 
-        res.json({
-            analysis: response.text
-        });
+res.json({ analysis });
 
     } catch (error) {
         console.error('Gemini error:', error);
@@ -133,4 +140,12 @@ Important rules:
             error: 'Unable to analyze quotations'
         });
     }
+});
+
+app.use((req, res) => {
+    res.status(404).type('text/plain').send('Not found');
+});
+
+app.listen(PORT, '127.0.0.1', () => {
+    console.log(`Server running at http://127.0.0.1:${PORT}/`);
 });

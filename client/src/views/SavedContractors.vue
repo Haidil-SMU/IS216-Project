@@ -1,5 +1,6 @@
 <script setup>
-import { ref } from 'vue'
+import { ref,computed } from 'vue'
+import axios from 'axios'
 import workheads from '@/data/workheads.json'
 
 // Load saved contractors from localStorage
@@ -7,11 +8,43 @@ const savedContractors = ref(JSON.parse(localStorage.getItem('savedContractors')
 
 // Load saved quotations from localStorage
 const quotations = ref(JSON.parse(localStorage.getItem('contractorQuotations') || '{}'))
+
+// Load quotation descriptions from localStorage
+const descriptions = ref(JSON.parse(localStorage.getItem('quotationDescriptions') || '{}'))
+
+const requiredServices = computed(() => {
+    const services = new Set();
+
+    savedContractors.value.forEach(contractor => {
+        contractor.registrations.forEach(registration => {
+            const price =
+                quotations.value[contractor.uen_no]?.[registration.workhead];
+
+            if (price !== '' && price !== null && price !== undefined) {
+                services.add(
+                    workheads[registration.workhead] || registration.workhead
+                );
+            }
+        });
+    });
+
+    return [...services];
+});
+
 for (const contractor of savedContractors.value) {
   if (!quotations.value[contractor.uen_no]) {
     quotations.value[contractor.uen_no] = {}
   }
+
+  if (!descriptions.value[contractor.uen_no]) {
+    descriptions.value[contractor.uen_no] = ''
+  }
 }
+
+// AI results
+const aiAnalysis = ref('')
+const aiLoading = ref(false)
+const aiError = ref('')
 
 // Remove a saved contractor
 function removeContractor(uen) {
@@ -22,6 +55,7 @@ function removeContractor(uen) {
 // Save quotations
 function saveQuotations() {
   localStorage.setItem('contractorQuotations', JSON.stringify(quotations.value))
+  localStorage.setItem('quotationDescriptions', JSON.stringify(descriptions.value))
 }
 
 // Calculate total quotation for a contractor
@@ -33,6 +67,41 @@ function getTotal(uen) {
   }
 
   return total
+}
+
+// Analyze quotations using Gemini AI
+async function analyzeQuotations() {
+  aiLoading.value = true
+  aiError.value = ''
+  aiAnalysis.value = ''
+
+  saveQuotations()
+
+  try {
+    const contractors = savedContractors.value.map(contractor => ({
+      company_name: contractor.company_name,
+      uen_no: contractor.uen_no,
+      services: contractor.registrations.map(registration => ({
+        workhead: registration.workhead,
+        service: workheads[registration.workhead] || registration.workhead,
+        price: quotations.value[contractor.uen_no][registration.workhead] || null
+      })),
+      total: getTotal(contractor.uen_no),
+      description: descriptions.value[contractor.uen_no]
+    }))
+
+    const response = await axios.post(
+      'http://127.0.0.1:8000/api/analyze-quotations',
+      { contractors }
+    )
+
+    aiAnalysis.value = response.data.analysis
+
+  } catch (error) {
+    aiError.value = error.response?.data?.error || error.message
+  } finally {
+    aiLoading.value = false
+  }
 }
 </script>
 
@@ -168,6 +237,22 @@ function getTotal(uen) {
 
               </div>
 
+              <!-- QUOTATION DESCRIPTION -->
+              <div class="mb-3">
+                <label class="form-label small fw-semibold">Quotation Details (Optional)</label>
+
+                <textarea
+                  class="form-control"
+                  rows="4"
+                  placeholder="E.g. Includes installation and 1-year warranty. Electrical wiring excluded. Additional piping costs $20/metre."
+                  v-model="descriptions[contractor.uen_no]"
+                ></textarea>
+
+                <p class="small text-muted mt-1">
+                  Add inclusions, exclusions, warranties, materials or additional charges for AI analysis.
+                </p>
+              </div>
+
               <!-- SAVE BUTTON -->
               <button class="btn btn-success w-100 fw-semibold mb-3" @click="saveQuotations">
                 Save Quotations
@@ -233,6 +318,70 @@ function getTotal(uen) {
 
     </div>
 
+    <!-- AI QUOTATION ANALYSIS -->
+    <div v-if="savedContractors.length > 0" class="card border-0 shadow-sm rounded-4 mt-5">
+
+      <div class="card-body p-4 p-md-5">
+
+        <span class="badge bg-success-subtle text-success-emphasis rounded-pill px-3 py-2 mb-3">
+          AI-Powered Analysis
+        </span>
+
+        <h3 class="fw-bold mb-2">
+          Compare Your <span class="text-success">Contractor Quotations</span>
+        </h3>
+
+        <p class="text-muted mb-4">
+          Let Gemini AI compare your shortlisted contractors, identify potential hidden costs,
+          and highlight important differences between quotations.
+        </p>
+
+        <button class="btn btn-success px-4 py-2 fw-semibold" :disabled="aiLoading" @click="analyzeQuotations">
+          {{ aiLoading ? 'Analyzing Quotations...' : 'Analyze Quotations with AI →' }}
+        </button>
+
+        <!-- LOADING -->
+        <div v-if="aiLoading" class="mt-4">
+          <div class="spinner-border text-success" role="status"></div>
+          <p class="text-muted mt-2">Gemini is analyzing your quotations...</p>
+        </div>
+
+        <!-- ERROR -->
+        <div v-if="aiError" class="alert alert-danger mt-4">
+          {{ aiError }}
+        </div>
+
+        <!-- AI RESULTS -->
+       <div v-if="aiAnalysis" class="mt-4">
+
+    <h4>🤖 AI Quotation Analysis</h4>
+
+    <!-- Recommendation -->
+    <h5 class="mt-4">⭐ AI Recommendation</h5>
+    <p>{{ aiAnalysis.recommendation }}</p>
+
+    <!-- Reasons -->
+    <h5 class="mt-4">💡 Reasons</h5>
+    <ul>
+        <li
+            v-for="(reason, index) in aiAnalysis.reasons"
+            :key="index"
+        >
+            {{ reason }}
+        </li>
+    </ul>
+
+    <!-- Required Services -->
+    <h5 class="mt-4">🛠️ Required Services</h5>
+
+    <p>{{ requiredServices.join(' • ') }}</p>
+
+</div>
+
+      </div>
+
+    </div>
+
     <!-- DISCLAIMER -->
     <div v-if="savedContractors.length > 0" class="mt-5 p-3 bg-light rounded-3">
       <p class="small text-muted mb-0">
@@ -253,5 +402,10 @@ function getTotal(uen) {
 .contractor-card:hover {
   transform: translateY(-4px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1) !important;
+}
+
+.ai-result {
+  white-space: pre-wrap;
+  line-height: 1.8;
 }
 </style>
