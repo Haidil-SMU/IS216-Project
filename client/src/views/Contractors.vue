@@ -10,6 +10,9 @@ const showResults = ref(false)
 const loading = ref(false)
 const errorMessage = ref('')
 
+// Saved contractors
+const savedContractors = ref(JSON.parse(localStorage.getItem('savedContractors') || '[]'))
+
 // Services shown in the questionnaire
 const services = [
   { code: 'CR06', name: 'Interior Design & Renovation' },
@@ -45,7 +48,30 @@ async function getContractors() {
       }
     )
 
-    contractors.value = response.data.result.records
+    // Group contractors with the same UEN
+    const companies = {}
+
+    for (const contractor of response.data.result.records) {
+      const uen = contractor.uen_no
+
+      if (!companies[uen]) {
+        companies[uen] = {
+          ...contractor,
+          registrations: []
+        }
+      }
+
+      // Store each registered service, grade and expiry date
+      if (!companies[uen].registrations.some(r => r.workhead === contractor.workhead)) {
+        companies[uen].registrations.push({
+          workhead: contractor.workhead,
+          grade: contractor.grade,
+          expiry_date: contractor.expiry_date
+        })
+      }
+    }
+
+    contractors.value = Object.values(companies)
     showResults.value = true
 
   } catch (error) {
@@ -53,6 +79,16 @@ async function getContractors() {
   } finally {
     loading.value = false
   }
+}
+
+// Save contractor to localStorage
+function saveContractor(contractor) {
+  if (savedContractors.value.some(c => c.uen_no === contractor.uen_no)) {
+    return
+  }
+
+  savedContractors.value.push(contractor)
+  localStorage.setItem('savedContractors', JSON.stringify(savedContractors.value))
 }
 </script>
 
@@ -107,6 +143,9 @@ async function getContractors() {
         <div class="d-flex flex-wrap gap-2">
           <button class="btn btn-success px-4 py-2 fw-semibold" :disabled="selectedServices.length === 0 || loading" @click="getContractors">Find Matching Contractors →</button>
           <button class="btn btn-outline-secondary px-4 py-2" :disabled="loading" @click="selectedServices = []; showResults = false">Clear Selection</button>
+          <RouterLink to="/SavedContractors" class="btn btn-outline-success px-4 py-2 fw-semibold">
+  View Saved Contractors →
+</RouterLink>
         </div>
 
       </div>
@@ -140,7 +179,7 @@ async function getContractors() {
 
       <!-- CONTRACTOR CARDS -->
       <div class="row g-4">
-        <div v-for="contractor in contractors" :key="contractor._id" class="col-md-6 col-lg-4">
+        <div v-for="contractor in contractors" :key="contractor.uen_no" class="col-md-6 col-lg-4">
 
           <div class="card h-100 border-0 shadow-sm rounded-4 contractor-card">
 
@@ -148,17 +187,24 @@ async function getContractors() {
 
               <!-- COMPANY NAME -->
               <div class="mb-3">
-                <span class="badge bg-success-subtle text-success-emphasis mb-3">{{ contractor.workhead }}</span>
+                <span class="badge bg-success-subtle text-success-emphasis mb-3">
+                  {{ contractor.registrations.length }} Matching Service(s)
+                </span>
+
                 <h5 class="fw-bold mb-2">{{ contractor.company_name }}</h5>
                 <p class="small text-muted mb-0">UEN: {{ contractor.uen_no }}</p>
               </div>
 
               <hr class="text-muted" />
 
-              <!-- SERVICE -->
+              <!-- RENOVATION SERVICES -->
               <div class="mb-3">
-                <p class="small text-muted mb-1">Renovation Service</p>
-                <p class="fw-semibold mb-0">{{ workheads[contractor.workhead] || contractor.workhead }}</p>
+                <p class="small text-muted mb-2">Renovation Services</p>
+
+                <div v-for="registration in contractor.registrations" :key="registration.workhead" class="mb-2">
+                  <span class="badge bg-success-subtle text-success-emphasis me-2">{{ registration.workhead }}</span>
+                  <span class="fw-semibold">{{ workheads[registration.workhead] || registration.workhead }}</span>
+                </div>
               </div>
 
               <!-- ADDRESS -->
@@ -179,15 +225,23 @@ async function getContractors() {
 
               <!-- REGISTRATION -->
               <div class="bg-light rounded-3 p-3">
-                <div class="d-flex justify-content-between mb-2">
-                  <span class="text-muted small">Registration Grade</span>
-                  <span class="fw-semibold small">{{ contractor.grade }}</span>
+
+                <div v-for="registration in contractor.registrations" :key="registration.workhead" class="mb-2">
+
+                  <p class="fw-semibold small mb-1">{{ registration.workhead }}</p>
+
+                  <div class="d-flex justify-content-between">
+                    <span class="text-muted small">Registration Grade</span>
+                    <span class="fw-semibold small">{{ registration.grade }}</span>
+                  </div>
+
+                  <div class="d-flex justify-content-between">
+                    <span class="text-muted small">Expiry Date</span>
+                    <span class="fw-semibold small">{{ registration.expiry_date }}</span>
+                  </div>
+
                 </div>
 
-                <div class="d-flex justify-content-between">
-                  <span class="text-muted small">Expiry Date</span>
-                  <span class="fw-semibold small">{{ contractor.expiry_date }}</span>
-                </div>
               </div>
 
             </div>
@@ -195,13 +249,25 @@ async function getContractors() {
             <!-- CARD FOOTER -->
             <div class="card-footer bg-white border-0 px-4 pb-4">
 
-              <a
-                v-if="contractor.tel_no && !['na', 'n/a'].includes(String(contractor.tel_no).toLowerCase())"
-                :href="'tel:' + contractor.tel_no"
-                class="btn btn-outline-success w-100 fw-semibold"
-              >Contact Contractor →</a>
+              <div class="d-flex gap-2">
 
-              <button v-else class="btn btn-outline-secondary w-100" disabled>Contact Unavailable</button>
+                <button
+                  class="btn btn-success flex-fill fw-semibold"
+                  :disabled="savedContractors.some(c => c.uen_no === contractor.uen_no)"
+                  @click="saveContractor(contractor)"
+                >
+                  {{ savedContractors.some(c => c.uen_no === contractor.uen_no) ? '✓ Saved' : '♡ Save Contractor' }}
+                </button>
+
+                <a
+                  v-if="contractor.tel_no && !['na', 'n/a'].includes(String(contractor.tel_no).toLowerCase())"
+                  :href="'tel:' + contractor.tel_no"
+                  class="btn btn-outline-success flex-fill fw-semibold"
+                >Contact →</a>
+
+                <button v-else class="btn btn-outline-secondary flex-fill" disabled>Contact Unavailable</button>
+
+              </div>
 
             </div>
 
@@ -214,7 +280,7 @@ async function getContractors() {
       <div class="mt-5 p-3 bg-light rounded-3">
         <p class="small text-muted mb-0">
           <strong>Note:</strong> Contractor information is sourced from data.gov.sg.
-          Results show up to 100 matching registration records.
+          Results show up to 100 matching registration records, grouped by company.
           Please verify current registration and HDB renovation requirements
           before engaging a contractor.
         </p>
