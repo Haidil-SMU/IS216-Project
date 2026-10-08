@@ -2,46 +2,6 @@
   <div>
 
     <!-- NAVBAR -->
-    <nav class="navbar navbar-expand-lg navbar-dark bg-success">
-      <div class="container">
-
-        <RouterLink class="navbar-brand fw-bold" to="/">
-          🏠 HDB EcoHome
-        </RouterLink>
-
-        <button
-          class="navbar-toggler"
-          type="button"
-          data-bs-toggle="collapse"
-          data-bs-target="#navbarNav"
-        >
-          <span class="navbar-toggler-icon"></span>
-        </button>
-
-        <div class="collapse navbar-collapse" id="navbarNav">
-          <div class="navbar-nav ms-auto">
-
-            <RouterLink class="nav-link" to="/">
-              Home
-            </RouterLink>
-
-            <RouterLink class="nav-link" to="/Simulator/">
-              My HDB
-            </RouterLink>
-
-            <!-- <RouterLink class="nav-link" to="/Ex2/">
-              Challenges
-            </RouterLink>
-
-            <RouterLink class="nav-link" to="/Ex3/">
-              Dashboard
-            </RouterLink> -->
-
-          </div>
-        </div>
-
-      </div>
-    </nav>
 
 
     <!-- HERO SECTION -->
