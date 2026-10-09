@@ -2,8 +2,15 @@
 
 import { ref, computed, onMounted } from 'vue'
 import axios from 'axios'
+import NavBar from './NavBar.vue'
 
 const API_URL = 'http://127.0.0.1:8000/api'
+const TEMPERATURE_URL = "https://api-open.data.gov.sg/v2/real-time/api/air-temperature"
+const RAINFALL_URL = "https://api-open.data.gov.sg/v2/real-time/api/rainfall"
+const PSI_URL = "https://api-open.data.gov.sg/v2/real-time/api/psi"
+
+
+
 
 const electricityRate = 0.32
 const simulated = ref(false)
@@ -11,14 +18,65 @@ const simulated = ref(false)
 const scenarios = ref([])
 const appliances = ref([])
 
-const selectedScenarioId = ref(null)
+const selectedScenario = ref(null)
+const selectedAppliance = ref(null)
 
 const acTemperature = ref(25)
+const temperature = ref(0)
+const rainfall = ref(0)
+const psiReadings = ref({})
 
+const selectedRegion = ref('central')
+
+async function getExternalAPIs() {
+  try { //loading from APIs
+
+    let totalTemp = 0
+    let averageTemperature = 0
+    let totalRainfall = 0
+    let averageRainfall = 0
+    let totalPSI = 0
+
+    //RETRIEVE ALL DATA ACRROSS ALL APIS FIRST
+    const weatherData = await axios.get(TEMPERATURE_URL)
+    const rainfallData = await axios.get(RAINFALL_URL)
+    const PSIData = await axios.get(PSI_URL)
+    console.log(PSIData)
+
+
+    //assign the response to the respective variables
+    let weatherReadings = weatherData.data.data.readings[0].data //gets the weather accross all stations
+    let rainfallReadings = rainfallData.data.data.readings[0].data
+    psiReadings.value = PSIData.data.data.items[0].readings.psi_twenty_four_hourly
+
+
+    //we calculate the average accross all stations in singapore, to  get the current weather
+    for (const reading of weatherReadings) {
+      totalTemp += reading.value
+
+    }
+
+    for (const reading of rainfallReadings) {
+      totalRainfall += reading.value
+    }
+
+
+
+    averageTemperature = totalTemp / (weatherReadings.length)
+    temperature.value = Number(averageTemperature.toFixed(2))
+    averageRainfall = totalRainfall / (rainfallReadings.length)
+    rainfall.value = Number(averageRainfall.toFixed(2))
+
+  } catch (error) {
+
+    console.log(error)
+
+  }
+}
 
 async function loadData() {
 
-  try {
+  try { //loading from local JSON Files
 
     const response = await axios.get(API_URL)
 
@@ -26,8 +84,8 @@ async function loadData() {
     scenarios.value = response.data.scenarios
     appliances.value = response.data.appliances
 
-    //console.log(scenarios.value)
-    //console.log(appliances.value)
+    selectedScenario.value = scenarios.value[0]
+    console.log(selectedScenario.value)
 
     for (const appliance of appliances.value) {
       appliance.on = false
@@ -42,7 +100,10 @@ async function loadData() {
 
 }
 
-onMounted(loadData)
+onMounted(() => {
+  loadData()
+  getExternalAPIs()
+})
 
 const totalEnergy = computed(() => {
 
@@ -60,11 +121,6 @@ const totalEnergy = computed(() => {
 
 })
 
-
-// =========================
-// TOTAL COST
-// =========================
-
 const totalCost = computed(() => {
 
   return totalEnergy.value * electricityRate
@@ -72,36 +128,41 @@ const totalCost = computed(() => {
 })
 
 
-// =========================
-// ECO SCORE
-// =========================
+
 
 const ecoScore = computed(() => {
 
-  if (totalEnergy.value <= 8) {
+  if (totalEnergy.value <= 4) {
     return 100
   }
 
-  if (totalEnergy.value <= 12) {
+  if (totalEnergy.value <= 7) {
     return 85
   }
 
-  if (totalEnergy.value <= 16) {
+  if (totalEnergy.value <= 10) {
     return 70
   }
 
-  return 50
+  if (totalEnergy.value <= 13) {
+    return 55
+  }
+
+  if (totalEnergy.value <= 16) {
+    return 40
+  }
+
+  if (totalEnergy.value <= 20) {
+    return 25
+  }
+
+  return 10
 
 })
 
 
-// =========================
-// COMFORT SCORE
-// =========================
-
 const comfortScore = computed(() => {
-
-  let score = 70
+  let score = 0
 
   const aircon = appliances.value.find(
     appliance => appliance.name === 'Air Conditioner'
@@ -111,6 +172,20 @@ const comfortScore = computed(() => {
     appliance => appliance.name === 'Ceiling Fan'
   )
 
+  const lights = appliances.value.find(
+    appliance => appliance.name === 'Lights'
+  )
+
+  const tv = appliances.value.find(
+    appliance => appliance.name === 'TV'
+  )
+
+  const waterHeater = appliances.value.find(
+    appliance => appliance.name === 'Water Heater'
+  )
+
+
+  // Comfort from appliances
   if (aircon?.on) {
     score += 15
   }
@@ -119,18 +194,36 @@ const comfortScore = computed(() => {
     score += 5
   }
 
+  if (lights?.on) {
+    score += 5
+  }
+
+  if (tv?.on) {
+    score += 5
+  }
+
+  if (waterHeater?.on) {
+    score += 10
+  }
+
+
+  // AC provides less comfort if temperature is too high
   if (aircon?.on && acTemperature.value >= 27) {
     score -= 5
   }
 
-  return Math.min(100, score)
 
+  return Math.min(100, Math.max(0, score))
 })
 
+const scenarioDescription = computed(() => {
 
-// =========================
-// SIMULATE DAY
-// =========================
+  return selectedScenario.value.description
+    .replace('{temperature}', temperature.value)
+    .replace('{rainfall}', rainfall.value)
+    .replace('{psi}', psi.value)
+
+})
 
 function simulateDay() {
 
@@ -138,10 +231,11 @@ function simulateDay() {
 
 }
 
+function selectAppliance(appliance) {
+  selectedAppliance.value = appliance
+}
 
-// =========================
-// GET APPLIANCES BY ROOM
-// =========================
+
 
 function getRoomAppliances(room) {
 
@@ -151,6 +245,56 @@ function getRoomAppliances(room) {
 
 }
 
+const psi = computed(() => {
+  return psiReadings.value[selectedRegion.value] ?? 0
+})
+
+const hazeGoals = computed(() => {
+  if (psi.value <= 100) {
+    return {
+      maxCost: 2.50,
+      minEcoScore: 85,
+      minComfortScore: 85
+    }
+  } else if (psi.value <= 130) {
+    return {
+      maxCost: 3.00,
+      minEcoScore: 85,
+      minComfortScore: 80
+    }
+  } else if (psi.value <= 160) {
+    return {
+      maxCost: 3.50,
+      minEcoScore: 70,
+      minComfortScore: 75
+    }
+  } else if (psi.value <= 200) {
+    return {
+      maxCost: 4.00,
+      minEcoScore: 70,
+      minComfortScore: 70
+    }
+  } else {
+    return {
+      maxCost: 4.50,
+      minEcoScore: 70,
+      minComfortScore: 65
+    }
+  }
+})
+
+const currentGoals = computed(() => {
+  if (!selectedScenario.value) {
+    return null
+  }
+
+  if (selectedScenario.value.name === 'Haze Alert') {
+    return hazeGoals.value
+  }
+
+  return selectedScenario.value.goals
+})
+
 </script>
 
 
@@ -158,47 +302,235 @@ function getRoomAppliances(room) {
 
   <div>
 
-    <!-- NAVBAR -->
+    <!-- <nav class="navbar navbar-expand-lg navbar-dark bg-success">
 
+      <div class="container">
 
+        <RouterLink class="navbar-brand fw-bold" to="/">
+          🏠 HDB EcoHome
+        </RouterLink>
+
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+
+        <div class="collapse navbar-collapse" id="navbar">
+
+          <div class="navbar-nav ms-auto">
+
+            <RouterLink class="nav-link" to="/">
+              Home
+            </RouterLink>
+
+            <RouterLink class="nav-link active" to="/hdb">
+              My HDB
+            </RouterLink>
+
+          </div>
+
+        </div>
+
+      </div>
+
+    </nav> -->
 
 
 
     <main class="container py-4">
 
-      <!-- PAGE TITLE -->
+
+
 
       <div class="mb-4">
 
         <h1 class="fw-bold">
-          My HDB
+          🏠 My HDB
         </h1>
 
         <p class="text-secondary">
-          Manage your appliances and reduce your household energy usage.
+          Manage your appliances, complete the challenge and keep your household efficient.
         </p>
 
       </div>
 
+
       <div class="mb-4">
 
-        <label class="form-label">
-          Scenario
+        <label class="form-label fw-bold">
+          🎮 Select Challenge
         </label>
 
-        <select class="form-select" v-model.number="selectedScenarioId">
+        <select class="form-select" v-model="selectedScenario">
 
-          <option v-for="scenario in scenarios" :key="scenario.id" :value="scenario.id">
+          <option v-for="scenario in scenarios" :key="scenario.id" :value="scenario">
             {{ scenario.name }}
           </option>
 
         </select>
 
+
+
+        <div v-if="selectedScenario" class="card mt-3 scenario-card">
+
+          <div class="card-body">
+
+            <div class="d-flex justify-content-between align-items-center mb-2">
+
+              <h4 class="card-title mb-0">
+                {{ selectedScenario.name }}
+              </h4>
+
+              <span class="badge bg-success">
+                {{ selectedScenario.difficulty }}
+              </span>
+
+            </div>
+
+            <p class="card-text">
+              {{ scenarioDescription }}
+            </p>
+
+
+
+
+            <div v-if="selectedScenario?.name === 'Heatwave'" class="alert alert-light border mt-3 mb-3">
+
+              <small class="text-secondary d-block">
+                LIVE SINGAPORE WEATHER
+              </small>
+
+              <strong class="fs-5">
+                🌡️ {{ temperature }}°C
+              </strong>
+
+            </div>
+
+
+            <div v-else-if="selectedScenario?.name === 'Rainy Day'" class="alert alert-light border mt-3 mb-3">
+
+              <small class="text-secondary d-block">
+                LIVE SINGAPORE RAINFALL
+              </small>
+
+              <strong class="fs-5">
+                🌧️ {{ rainfall }} mm
+              </strong>
+
+            </div>
+
+
+            <div v-else-if="selectedScenario?.name === 'Haze Alert'" class="alert alert-light border mt-3 mb-3">
+
+              <small class="text-secondary d-block">
+                SINGAPORE 24-HOUR PSI
+              </small>
+
+              <label class="form-label fw-semibold">
+                Choose Your Area
+              </label>
+
+              <select v-model="selectedRegion" class="form-select my-2">
+                <option value="north">North</option>
+                <option value="south">South</option>
+                <option value="east">East</option>
+                <option value="west">West</option>
+                <option value="central">Central</option>
+              </select>
+
+              <strong class="fs-5">
+                Current Region PSI:{{psiReadings[selectedRegion] }}
+              </strong>
+
+
+            </div>
+
+
+            <hr>
+
+
+            <h5 class="mb-3">
+              🎯 Mission Objectives
+            </h5>
+
+
+            <div class="scenario-goals">
+
+
+
+              <div class="goal-item">
+
+                <span class="goal-icon">
+                  💰
+                </span>
+
+                <div>
+
+                  <small>
+                    KEEP COST BELOW
+                  </small>
+
+                  <div class="goal-value">
+                    ${{ currentGoals.maxCost }}
+                  </div>
+
+                </div>
+
+              </div>
+
+              <div class="goal-item">
+
+                <span class="goal-icon">
+                  🌱
+                </span>
+
+                <div>
+
+                  <small>
+                    ECO SCORE
+                  </small>
+
+                  <div class="goal-value">
+                    {{ currentGoals.minEcoScore }}+
+                  </div>
+
+                </div>
+
+              </div>
+
+              <div class="goal-item">
+
+                <span class="goal-icon">
+                  ❤️
+                </span>
+
+                <div>
+
+                  <small>
+                    COMFORT SCORE
+                  </small>
+
+                  <div class="goal-value">
+                    {{ currentGoals.minComfortScore }}+
+                  </div>
+
+                </div>
+
+              </div>
+
+
+            </div>
+
+          </div>
+
+        </div>
+
       </div>
 
 
+      <h5 class="fw-bold mb-3">
+        ⚡ Current Household Status
+      </h5>
 
-      <!-- TOP STATISTICS -->
 
       <div class="row g-3 mb-4">
 
@@ -207,17 +539,19 @@ function getRoomAppliances(room) {
 
         <div class="col-6 col-lg-3">
 
-          <div class="card h-100">
+          <div class="card h-100 stat-card">
 
             <div class="card-body">
 
-              <small class="text-secondary">
-                ⚡ Energy
+              <small class="text-secondary fw-bold">
+                ⚡ ENERGY
               </small>
 
               <h3>
                 {{ totalEnergy.toFixed(1) }}
-                <small class="fs-6">kWh</small>
+                <small class="fs-6">
+                  kWh
+                </small>
               </h3>
 
             </div>
@@ -226,18 +560,14 @@ function getRoomAppliances(room) {
 
         </div>
 
-
-
-        <!-- COST -->
-
         <div class="col-6 col-lg-3">
 
-          <div class="card h-100">
+          <div class="card h-100 stat-card">
 
             <div class="card-body">
 
-              <small class="text-secondary">
-                💰 Cost
+              <small class="text-secondary fw-bold">
+                💰 COST
               </small>
 
               <h3>
@@ -250,18 +580,14 @@ function getRoomAppliances(room) {
 
         </div>
 
-
-
-        <!-- COMFORT -->
-
         <div class="col-6 col-lg-3">
 
-          <div class="card h-100">
+          <div class="card h-100 stat-card">
 
             <div class="card-body">
 
-              <small class="text-secondary">
-                ❤️ Comfort
+              <small class="text-secondary fw-bold">
+                ❤️ COMFORT
               </small>
 
               <h3>
@@ -274,18 +600,14 @@ function getRoomAppliances(room) {
 
         </div>
 
-
-
-        <!-- ECO SCORE -->
-
         <div class="col-6 col-lg-3">
 
-          <div class="card h-100">
+          <div class="card h-100 stat-card">
 
             <div class="card-body">
 
-              <small class="text-secondary">
-                🌱 Eco Score
+              <small class="text-secondary fw-bold">
+                🌱 ECO SCORE
               </small>
 
               <h3>
@@ -304,11 +626,6 @@ function getRoomAppliances(room) {
 
 
       <div class="row g-4">
-
-
-        <!-- ========================= -->
-        <!-- HDB FLOOR PLAN -->
-        <!-- ========================= -->
 
         <div class="col-lg-8">
 
@@ -329,7 +646,6 @@ function getRoomAppliances(room) {
               <div class="hdb-floorplan">
 
 
-                <!-- BEDROOM -->
 
                 <div class="room bedroom">
 
@@ -337,19 +653,28 @@ function getRoomAppliances(room) {
                     🛏️ Bedroom
                   </h5>
 
+                  <div v-for="appliance in getRoomAppliances('Bedroom')" :key="appliance.id" class="appliance" :class="{
+                    'appliance-on': appliance.on,
+                    'appliance-selected': selectedAppliance?.id === appliance.id
+                  }" @click="selectAppliance(appliance)">
 
-                  <div v-for="appliance in getRoomAppliances('Bedroom')" :key="appliance.id" class="appliance">
+                    <span>
+                      {{ appliance.name }}
+                    </span>
 
-                    {{ appliance.icon }}
-                    {{ appliance.name }}
+                    <span v-if="appliance.on" class="badge bg-success">
+                      ON
+                    </span>
+
+                    <span v-else class="badge bg-secondary">
+                      OFF
+                    </span>
 
                   </div>
 
                 </div>
 
 
-
-                <!-- LIVING ROOM -->
 
                 <div class="room living-room">
 
@@ -357,11 +682,23 @@ function getRoomAppliances(room) {
                     🛋️ Living Room
                   </h5>
 
+                  <div v-for="appliance in getRoomAppliances('Living Room')" :key="appliance.id" class="appliance"
+                    :class="{
+                      'appliance-on': appliance.on,
+                      'appliance-selected': selectedAppliance?.id === appliance.id
+                    }" @click="selectAppliance(appliance)">
 
-                  <div v-for="appliance in getRoomAppliances('Living Room')" :key="appliance.id" class="appliance">
+                    <span>
+                      {{ appliance.name }}
+                    </span>
 
-                    {{ appliance.icon }}
-                    {{ appliance.name }}
+                    <span v-if="appliance.on" class="badge bg-success">
+                      ON
+                    </span>
+
+                    <span v-else class="badge bg-secondary">
+                      OFF
+                    </span>
 
                   </div>
 
@@ -369,7 +706,6 @@ function getRoomAppliances(room) {
 
 
 
-                <!-- KITCHEN -->
 
                 <div class="room kitchen">
 
@@ -377,19 +713,26 @@ function getRoomAppliances(room) {
                     🍳 Kitchen
                   </h5>
 
+                  <div v-for="appliance in getRoomAppliances('Kitchen')" :key="appliance.id" class="appliance" :class="{
+                    'appliance-on': appliance.on,
+                    'appliance-selected': selectedAppliance?.id === appliance.id
+                  }" @click="selectAppliance(appliance)">
 
-                  <div v-for="appliance in getRoomAppliances('Kitchen')" :key="appliance.id" class="appliance">
+                    <span>
+                      {{ appliance.name }}
+                    </span>
 
-                    {{ appliance.icon }}
-                    {{ appliance.name }}
+                    <span v-if="appliance.on" class="badge bg-success">
+                      ON
+                    </span>
+
+                    <span v-else class="badge bg-secondary">
+                      OFF
+                    </span>
 
                   </div>
 
                 </div>
-
-
-
-                <!-- BATHROOM -->
 
                 <div class="room bathroom">
 
@@ -397,11 +740,22 @@ function getRoomAppliances(room) {
                     🚿 Bathroom
                   </h5>
 
+                  <div v-for="appliance in getRoomAppliances('Bathroom')" :key="appliance.id" class="appliance" :class="{
+                    'appliance-on': appliance.on,
+                    'appliance-selected': selectedAppliance?.id === appliance.id
+                  }" @click="selectAppliance(appliance)">
 
-                  <div v-for="appliance in getRoomAppliances('Bathroom')" :key="appliance.id" class="appliance">
+                    <span>
+                      {{ appliance.name }}
+                    </span>
 
-                    {{ appliance.icon }}
-                    {{ appliance.name }}
+                    <span v-if="appliance.on" class="badge bg-success">
+                      ON
+                    </span>
+
+                    <span v-else class="badge bg-secondary">
+                      OFF
+                    </span>
 
                   </div>
 
@@ -416,21 +770,19 @@ function getRoomAppliances(room) {
 
         </div>
 
-
-
-        <!-- ========================= -->
-        <!-- APPLIANCE CONTROLS -->
-        <!-- ========================= -->
-
         <div class="col-lg-4">
 
           <div class="card">
 
-            <div class="card-header">
+            <div class="card-header game-card-header">
 
               <strong>
-                ⚡ Appliance Controls
+                🎮 Appliance Controls
               </strong>
+
+              <small class="d-block text-secondary mt-1">
+                Select an appliance in your HDB.
+              </small>
 
             </div>
 
@@ -438,55 +790,76 @@ function getRoomAppliances(room) {
             <div class="card-body">
 
 
-              <div v-for="appliance in appliances" :key="appliance.id" class="appliance-control">
+              <div v-if="!selectedAppliance" class="text-center text-secondary py-4">
+
+                <div class="fs-1 mb-2">
+                  👆
+                </div>
+
+                <p class="mb-0">
+                  Click an appliance in your HDB to control it.
+                </p>
+
+              </div>
 
 
-                <!-- NAME + SWITCH -->
+              <div v-else>
 
-                <div class="d-flex justify-content-between align-items-center">
+
+                <!-- NAME -->
+
+                <h5 class="fw-bold">
+                  {{ selectedAppliance.name }}
+                </h5>
+
+                <p class="text-secondary">
+                  {{ selectedAppliance.room }}
+                </p>
+
+                <hr>
+
+
+                <div class="d-flex justify-content-between align-items-center mb-3">
 
                   <strong>
-
-                    {{ appliance.icon }}
-                    {{ appliance.name }}
-
+                    Power
                   </strong>
-
 
                   <div class="form-check form-switch">
 
-                    <input class="form-check-input" type="checkbox" v-model="appliance.on">
+                    <input class="form-check-input" type="checkbox" v-model="selectedAppliance.on">
 
                   </div>
 
                 </div>
 
+                <div v-if="selectedAppliance.on">
 
-
-                <!-- HOURS -->
-
-                <div v-if="appliance.on" class="mt-2">
 
                   <label class="form-label">
 
                     Usage:
 
                     <strong>
-                      {{ appliance.hours }} hours
+                      {{ selectedAppliance.hours }} hours
                     </strong>
 
                   </label>
 
 
-                  <input type="range" class="form-range" min="0" max="24" step="0.5" v-model.number="appliance.hours">
+                  <input type="range" class="form-range" min="0" max="24" step="0.5"
+                    v-model.number="selectedAppliance.hours">
 
-
-                  <!-- AC TEMPERATURE -->
-
-                  <div v-if="appliance.name === 'Air Conditioner'" class="mt-2">
+                  <div v-if="selectedAppliance.name === 'Air Conditioner'" class="mt-4">
 
                     <label class="form-label">
-                      Temperature
+
+                      Temperature:
+
+                      <strong>
+                        {{ acTemperature }}°C
+                      </strong>
+
                     </label>
 
 
@@ -510,8 +883,6 @@ function getRoomAppliances(room) {
                 </div>
 
 
-                <hr>
-
               </div>
 
 
@@ -525,87 +896,108 @@ function getRoomAppliances(room) {
       </div>
 
 
+      <div class="text-center my-5">
 
-      <!-- ========================= -->
-      <!-- SIMULATE BUTTON -->
-      <!-- ========================= -->
+        <p class="text-secondary mb-2">
+          Ready with your household setup?
+        </p>
 
-      <div class="text-center my-4">
-
-        <button class="btn btn-success btn-lg px-5" @click="simulateDay">
-
-          ▶ Simulate Day
-
+        <button class="btn btn-success btn-lg px-5 simulate-btn" @click="simulateDay">
+          ▶ SIMULATE DAY
         </button>
 
       </div>
 
 
-
-      <!-- ========================= -->
-      <!-- RESULTS -->
-      <!-- ========================= -->
-
-      <div v-if="simulated" class="card border-success">
+      <div v-if="simulated && selectedScenario" class="card result-card mb-5">
 
         <div class="card-body">
 
-          <h4 class="fw-bold">
-            📊 Today's Results
-          </h4>
+
+          <div class="text-center mb-4">
+
+            <h3 class="fw-bold">
+              🏁 Day Complete!
+            </h3>
+
+            <p class="text-secondary mb-0">
+              Here's how your household performed.
+            </p>
+
+          </div>
 
 
-          <div class="row mt-4">
+
+          <div class="row g-3 mb-4">
 
 
-            <div class="col-md-3">
+            <div class="col-6 col-lg-3">
 
-              <p class="text-secondary mb-1">
-                Energy Used
-              </p>
+              <div class="result-item">
 
-              <h4>
-                {{ totalEnergy.toFixed(1) }} kWh
-              </h4>
+                <small>
+                  ⚡ ENERGY
+                </small>
 
-            </div>
+                <h4>
+                  {{ totalEnergy.toFixed(1) }} kWh
+                </h4>
 
-
-            <div class="col-md-3">
-
-              <p class="text-secondary mb-1">
-                Estimated Cost
-              </p>
-
-              <h4>
-                ${{ totalCost.toFixed(2) }}
-              </h4>
-
-            </div>
-
-
-            <div class="col-md-3">
-
-              <p class="text-secondary mb-1">
-                Comfort
-              </p>
-
-              <h4>
-                {{ comfortScore }}%
-              </h4>
+              </div>
 
             </div>
 
 
-            <div class="col-md-3">
 
-              <p class="text-secondary mb-1">
-                Eco Score
-              </p>
+            <div class="col-6 col-lg-3">
 
-              <h4>
-                {{ ecoScore }}
-              </h4>
+              <div class="result-item">
+
+                <small>
+                  💰 COST
+                </small>
+
+                <h4>
+                  ${{ totalCost.toFixed(2) }}
+                </h4>
+
+              </div>
+
+            </div>
+
+
+
+            <div class="col-6 col-lg-3">
+
+              <div class="result-item">
+
+                <small>
+                  ❤️ COMFORT
+                </small>
+
+                <h4>
+                  {{ comfortScore }}%
+                </h4>
+
+              </div>
+
+            </div>
+
+
+
+            <div class="col-6 col-lg-3">
+
+              <div class="result-item">
+
+                <small>
+                  🌱 ECO
+                </small>
+
+                <h4>
+                  {{ ecoScore }}
+                </h4>
+
+              </div>
 
             </div>
 
@@ -613,20 +1005,91 @@ function getRoomAppliances(room) {
           </div>
 
 
-          <!-- FEEDBACK -->
 
-          <div v-if="totalEnergy > 15" class="alert alert-warning mt-3 mb-0">
+          <hr>
 
-            ⚡ Your household used a lot of energy today.
-            Try reducing appliance usage.
+
+          <h5 class="fw-bold mt-4">
+            🎯 Mission Results
+          </h5>
+
+          <div class="mission-result">
+
+            <span>
+              💰 Keep Cost Below ${{ currentGoals.maxCost }}
+            </span>
+
+            <span v-if="totalCost <= selectedScenario.goals.maxCost" class="badge bg-success">
+              ✓ PASSED
+            </span>
+
+            <span v-else class="badge bg-danger">
+              ✕ FAILED
+            </span>
 
           </div>
 
 
-          <div v-else class="alert alert-success mt-3 mb-0">
+          <div class="mission-result">
 
-            🌱 Great job! Your household kept its energy
-            consumption relatively low.
+            <span>
+              🌱 Eco Score {{ currentGoals.minEcoScore }}+
+            </span>
+
+            <span v-if="ecoScore >= selectedScenario.goals.minEcoScore" class="badge bg-success">
+              ✓ PASSED
+            </span>
+
+            <span v-else class="badge bg-danger">
+              ✕ FAILED
+            </span>
+
+          </div>
+
+
+
+
+          <div class="mission-result">
+
+            <span>
+              ❤️ Comfort Score {{ currentGoals.minComfortScore }}+
+            </span>
+
+            <span v-if="comfortScore >= selectedScenario.goals.minComfortScore" class="badge bg-success">
+              ✓ PASSED
+            </span>
+
+            <span v-else class="badge bg-danger">
+              ✕ FAILED
+            </span>
+
+          </div>
+
+          <div v-if="
+            totalCost <= selectedScenario.goals.maxCost &&
+            ecoScore >= selectedScenario.goals.minEcoScore &&
+            comfortScore >= selectedScenario.goals.minComfortScore
+          " class="alert alert-success text-center mt-4 mb-0">
+
+            <h5 class="fw-bold">
+              🏆 Challenge Complete!
+            </h5>
+
+            <p class="mb-0">
+              You achieved all mission objectives.
+            </p>
+
+          </div>
+
+          <div v-else class="alert alert-warning text-center mt-4 mb-0">
+
+            <h5 class="fw-bold">
+              ⚠️ Challenge Incomplete
+            </h5>
+
+            <p class="mb-0">
+              Adjust your household setup and try again.
+            </p>
 
           </div>
 
@@ -644,83 +1107,180 @@ function getRoomAppliances(room) {
 
 
 <style scoped>
-/* ============================= */
-/* FLOOR PLAN */
-/* ============================= */
+.scenario-card {
+  border: none;
+  border-radius: 14px;
+
+  box-shadow:
+    0 3px 10px rgba(0, 0, 0, 0.08);
+}
+
+
+
+.scenario-goals {
+  display: grid;
+
+  grid-template-columns:
+    repeat(3, 1fr);
+
+  gap: 12px;
+}
+
+
+.goal-item {
+  display: flex;
+
+  align-items: center;
+
+  gap: 12px;
+
+  padding: 14px;
+
+  background-color:
+    #f8f9fa;
+
+  border:
+    1px solid #dee2e6;
+
+  border-radius:
+    12px;
+}
+
+
+.goal-icon {
+  font-size:
+    28px;
+}
+
+
+.goal-item small {
+  display: block;
+
+  font-size:
+    11px;
+
+  font-weight:
+    700;
+
+  color:
+    #6c757d;
+}
+
+
+.goal-value {
+  font-size:
+    20px;
+
+  font-weight:
+    700;
+}
+
+
+
+.stat-card {
+  border: none;
+
+  border-radius:
+    12px;
+
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+
+.stat-card h3 {
+  font-weight:
+    700;
+
+  margin-top:
+    5px;
+
+  margin-bottom:
+    0;
+}
 
 .hdb-floorplan {
-
   display: grid;
 
   grid-template-columns:
     1fr 1fr;
 
-  min-height: 520px;
+  min-height:
+    520px;
 
   border:
-    5px solid #343a40;
+    2px solid #343a40;
 
+  border-radius:
+    12px;
+
+  overflow:
+    hidden;
 }
 
 
 .room {
-
   border:
-    2px solid #6c757d;
+    1px solid #ced4da;
 
-  padding: 20px;
+  padding:
+    24px;
 
   transition:
     0.2s;
+}
 
+
+.room h5 {
+  font-weight:
+    700;
+
+  margin-bottom:
+    16px;
 }
 
 
 .room:hover {
-
   background-color:
     #f1f8f4;
-
 }
 
 
-.bedroom {
 
+/* Room colours */
+
+.bedroom {
   background-color:
     #f8f9fa;
-
 }
 
 
 .living-room {
-
   background-color:
-    #fff;
-
+    #ffffff;
 }
 
 
 .kitchen {
-
   background-color:
     #fffdf5;
-
 }
 
 
 .bathroom {
-
   background-color:
     #f4faff;
-
 }
 
 
-/* ============================= */
-/* APPLIANCES */
-/* ============================= */
-
 .appliance {
+  display: flex;
+
+  justify-content:
+    space-between;
+
+  align-items:
+    center;
 
   background-color:
     white;
@@ -729,36 +1289,202 @@ function getRoomAppliances(room) {
     1px solid #dee2e6;
 
   border-radius:
-    8px;
+    10px;
 
   padding:
-    8px 10px;
+    12px 14px;
 
   margin-top:
     10px;
 
+  cursor:
+    pointer;
+
+  transition:
+    0.2s;
 }
+
+
+/* Hover over appliance */
+
+.appliance:hover {
+  border-color:
+    #198754;
+
+  background-color:
+    #f8fff9;
+}
+
+
+/* Appliance is turned ON */
+
+.appliance-on {
+  background-color:
+    #f0fff6;
+
+  border-color:
+    #198754;
+}
+
+
+/* Appliance currently selected by player */
+
+.appliance-selected {
+  border:
+    2px solid #198754;
+}
+
 
 
 .appliance-control {
-
   margin-bottom:
     10px;
-
 }
 
 
-/* ============================= */
-/* MOBILE */
-/* ============================= */
+.game-card-header {
+  background-color:
+    white;
+
+  padding:
+    16px;
+}
+
+
+
+.simulate-btn {
+  font-weight:
+    700;
+
+  border-radius:
+    12px;
+
+  min-width:
+    240px;
+
+  padding-top:
+    12px;
+
+  padding-bottom:
+    12px;
+
+  box-shadow:
+    0 3px 8px rgba(0, 0, 0, 0.15);
+}
+
+
+
+
+.result-card {
+  border:
+    2px solid #198754;
+
+  border-radius:
+    14px;
+
+  box-shadow:
+    0 3px 12px rgba(0, 0, 0, 0.1);
+}
+
+
+
+.result-item {
+  height:
+    100%;
+
+  text-align:
+    center;
+
+  padding:
+    16px;
+
+  background-color:
+    #f8f9fa;
+
+  border-radius:
+    10px;
+}
+
+
+.result-item small {
+  font-size:
+    11px;
+
+  font-weight:
+    700;
+
+  color:
+    #6c757d;
+}
+
+
+.result-item h4 {
+  font-weight:
+    700;
+
+  margin-top:
+    6px;
+
+  margin-bottom:
+    0;
+}
+
+
+
+/* Mission pass/fail rows */
+
+.mission-result {
+  display: flex;
+
+  justify-content:
+    space-between;
+
+  align-items:
+    center;
+
+  gap:
+    10px;
+
+  padding:
+    12px 0;
+
+  border-bottom:
+    1px solid #dee2e6;
+}
+
+
+
 
 @media (max-width: 768px) {
 
-  .hdb-floorplan {
+  /* Stack rooms */
 
+  .hdb-floorplan {
     grid-template-columns:
       1fr;
+  }
 
+
+  /* Stack mission goals */
+
+  .scenario-goals {
+    grid-template-columns:
+      1fr;
+  }
+
+
+  .room {
+    padding:
+      18px;
+  }
+
+
+  .mission-result {
+    align-items:
+      flex-start;
+
+    flex-direction:
+      column;
   }
 
 }
