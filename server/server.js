@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -68,6 +69,78 @@ app.get('/api', (req, res) => {
 // Create a new course
 // ============================================================
 
+
+
+
+
+// DARYL EDWIN
+// ============================================================
+// POST - Analyze Contractor Quotations with Gemini AI
+// ============================================================
+
+app.post('/api/analyze-quotations', async (req, res) => {
+    try {
+        const { contractors } = req.body;
+
+        if (!Array.isArray(contractors) || contractors.length === 0) {
+            return res.status(400).json({ error: 'No contractor quotations provided' });
+        }
+
+        const { GoogleGenAI } = await import('@google/genai');
+
+        const ai = new GoogleGenAI({
+            apiKey: process.env.GEMINI_API_KEY
+        });
+
+const prompt = `
+You are helping a Singapore homeowner compare renovation quotations.
+
+Contractor data:
+${JSON.stringify(contractors)}
+
+Recommend the best combination of contractors based on price,
+scope of work, hidden costs, discounts, and warranty.
+
+IMPORTANT:
+- Keep the response extremely short.
+- Do not invent prices, discounts, or additional fees.
+- Only apply discounts if their conditions are clearly satisfied.
+- Do not recommend duplicate services.
+- Return ONLY valid JSON, without Markdown.
+
+Use this exact JSON structure:
+{
+  "recommendation": "One sentence recommending contractors and services",
+  "reasons": [
+    "Short reason 1",
+    "Short reason 2",
+    "Short reason 3"
+  ]
+}
+
+Maximum 4 reasons.
+Each reason must be under 20 words.
+`;
+const response = await ai.models.generateContent({
+    model: 'gemini-3.1-flash-lite',
+    contents: prompt,
+    config: {
+        responseMimeType: 'application/json',
+        maxOutputTokens: 1000
+    }
+});
+
+const analysis = JSON.parse(response.text);
+
+res.json({ analysis });
+
+    } catch (error) {
+        console.error('Gemini error:', error);
+        res.status(500).json({
+            error: 'Unable to analyze quotations'
+        });
+    }
+});
 
 app.use((req, res) => {
     res.status(404).type('text/plain').send('Not found');
