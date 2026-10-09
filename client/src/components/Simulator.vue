@@ -2,10 +2,11 @@
 
 import { ref, computed, onMounted } from 'vue'
 import axios from 'axios'
+import NavBar from './NavBar.vue'
 
 const API_URL = 'http://127.0.0.1:8000/api'
 const TEMPERATURE_URL = "https://api-open.data.gov.sg/v2/real-time/api/air-temperature"
-const RAINFALL_URL =  "https://api-open.data.gov.sg/v2/real-time/api/rainfall"
+const RAINFALL_URL = "https://api-open.data.gov.sg/v2/real-time/api/rainfall"
 const PSI_URL = "https://api-open.data.gov.sg/v2/real-time/api/psi"
 
 
@@ -23,31 +24,48 @@ const selectedAppliance = ref(null)
 const acTemperature = ref(25)
 const temperature = ref(0)
 const rainfall = ref(0)
-const psi = ref(0)
+const psiReadings = ref({})
 
+const selectedRegion = ref('central')
 
-async function getScenarioData() {
-  try {
-    let total = 0
-    let average = 0
+async function getExternalAPIs() {
+  try { //loading from APIs
+
+    let totalTemp = 0
+    let averageTemperature = 0
+    let totalRainfall = 0
+    let averageRainfall = 0
+    let totalPSI = 0
 
     //RETRIEVE ALL DATA ACRROSS ALL APIS FIRST
     const weatherData = await axios.get(TEMPERATURE_URL)
     const rainfallData = await axios.get(RAINFALL_URL)
     const PSIData = await axios.get(PSI_URL)
+    console.log(PSIData)
 
 
     //assign the response to the respective variables
-    let readings = weatherData.data.data.readings[0].data //gets the weather accross all stations
-    console.log(readings)
+    let weatherReadings = weatherData.data.data.readings[0].data //gets the weather accross all stations
+    let rainfallReadings = rainfallData.data.data.readings[0].data
+    psiReadings.value = PSIData.data.data.items[0].readings.psi_twenty_four_hourly
+
+
     //we calculate the average accross all stations in singapore, to  get the current weather
-    for (const reading of readings) {
-      total += reading.value
+    for (const reading of weatherReadings) {
+      totalTemp += reading.value
 
     }
 
-    average = total / (readings.length)
-    temperature.value = Number(average.toFixed(2))
+    for (const reading of rainfallReadings) {
+      totalRainfall += reading.value
+    }
+
+
+
+    averageTemperature = totalTemp / (weatherReadings.length)
+    temperature.value = Number(averageTemperature.toFixed(2))
+    averageRainfall = totalRainfall / (rainfallReadings.length)
+    rainfall.value = Number(averageRainfall.toFixed(2))
 
   } catch (error) {
 
@@ -58,7 +76,7 @@ async function getScenarioData() {
 
 async function loadData() {
 
-  try {
+  try { //loading from local JSON Files
 
     const response = await axios.get(API_URL)
 
@@ -84,7 +102,7 @@ async function loadData() {
 
 onMounted(() => {
   loadData()
-  getScenarioData()
+  getExternalAPIs()
 })
 
 const totalEnergy = computed(() => {
@@ -227,6 +245,55 @@ function getRoomAppliances(room) {
 
 }
 
+const psi = computed(() => {
+  return psiReadings.value[selectedRegion.value] ?? 0
+})
+
+const hazeGoals = computed(() => {
+  if (psi.value <= 100) {
+    return {
+      maxCost: 2.50,
+      minEcoScore: 85,
+      minComfortScore: 85
+    }
+  } else if (psi.value <= 130) {
+    return {
+      maxCost: 3.00,
+      minEcoScore: 85,
+      minComfortScore: 80
+    }
+  } else if (psi.value <= 160) {
+    return {
+      maxCost: 3.50,
+      minEcoScore: 70,
+      minComfortScore: 75
+    }
+  } else if (psi.value <= 200) {
+    return {
+      maxCost: 4.00,
+      minEcoScore: 70,
+      minComfortScore: 70
+    }
+  } else {
+    return {
+      maxCost: 4.50,
+      minEcoScore: 70,
+      minComfortScore: 65
+    }
+  }
+})
+
+const currentGoals = computed(() => {
+  if (!selectedScenario.value) {
+    return null
+  }
+
+  if (selectedScenario.value.name === 'Haze Alert') {
+    return hazeGoals.value
+  }
+
+  return selectedScenario.value.goals
+})
 
 </script>
 
@@ -235,8 +302,7 @@ function getRoomAppliances(room) {
 
   <div>
 
-
-    <nav class="navbar navbar-expand-lg navbar-dark bg-success">
+    <!-- <nav class="navbar navbar-expand-lg navbar-dark bg-success">
 
       <div class="container">
 
@@ -266,7 +332,7 @@ function getRoomAppliances(room) {
 
       </div>
 
-    </nav>
+    </nav> -->
 
 
 
@@ -327,7 +393,7 @@ function getRoomAppliances(room) {
 
 
 
-            <div class="alert alert-light border mt-3 mb-3">
+            <div v-if="selectedScenario?.name === 'Heatwave'" class="alert alert-light border mt-3 mb-3">
 
               <small class="text-secondary d-block">
                 LIVE SINGAPORE WEATHER
@@ -335,6 +401,44 @@ function getRoomAppliances(room) {
 
               <strong class="fs-5">
                 🌡️ {{ temperature }}°C
+              </strong>
+
+            </div>
+
+
+            <div v-else-if="selectedScenario?.name === 'Rainy Day'" class="alert alert-light border mt-3 mb-3">
+
+              <small class="text-secondary d-block">
+                LIVE SINGAPORE RAINFALL
+              </small>
+
+              <strong class="fs-5">
+                🌧️ {{ rainfall }} mm
+              </strong>
+
+            </div>
+
+
+            <div v-else-if="selectedScenario?.name === 'Haze Alert'" class="alert alert-light border mt-3 mb-3">
+
+              <small class="text-secondary d-block">
+                SINGAPORE 24-HOUR PSI
+              </small>
+
+              <label class="form-label fw-semibold">
+                Choose Your Area
+              </label>
+
+              <select v-model="selectedRegion" class="form-select my-2">
+                <option value="north">North</option>
+                <option value="south">South</option>
+                <option value="east">East</option>
+                <option value="west">West</option>
+                <option value="central">Central</option>
+              </select>
+
+              <strong class="fs-5">
+                Current Region PSI:{{psiReadings[selectedRegion] }}
               </strong>
 
 
@@ -366,7 +470,7 @@ function getRoomAppliances(room) {
                   </small>
 
                   <div class="goal-value">
-                    ${{ selectedScenario.goals.maxCost }}
+                    ${{ currentGoals.maxCost }}
                   </div>
 
                 </div>
@@ -386,7 +490,7 @@ function getRoomAppliances(room) {
                   </small>
 
                   <div class="goal-value">
-                    {{ selectedScenario.goals.minEcoScore }}+
+                    {{ currentGoals.minEcoScore }}+
                   </div>
 
                 </div>
@@ -406,7 +510,7 @@ function getRoomAppliances(room) {
                   </small>
 
                   <div class="goal-value">
-                    {{ selectedScenario.goals.minComfortScore }}+
+                    {{ currentGoals.minComfortScore }}+
                   </div>
 
                 </div>
@@ -912,7 +1016,7 @@ function getRoomAppliances(room) {
           <div class="mission-result">
 
             <span>
-              💰 Keep Cost Below ${{ selectedScenario.goals.maxCost }}
+              💰 Keep Cost Below ${{ currentGoals.maxCost }}
             </span>
 
             <span v-if="totalCost <= selectedScenario.goals.maxCost" class="badge bg-success">
@@ -929,7 +1033,7 @@ function getRoomAppliances(room) {
           <div class="mission-result">
 
             <span>
-              🌱 Eco Score {{ selectedScenario.goals.minEcoScore }}+
+              🌱 Eco Score {{ currentGoals.minEcoScore }}+
             </span>
 
             <span v-if="ecoScore >= selectedScenario.goals.minEcoScore" class="badge bg-success">
@@ -948,7 +1052,7 @@ function getRoomAppliances(room) {
           <div class="mission-result">
 
             <span>
-              ❤️ Comfort Score {{ selectedScenario.goals.minComfortScore }}+
+              ❤️ Comfort Score {{ currentGoals.minComfortScore }}+
             </span>
 
             <span v-if="comfortScore >= selectedScenario.goals.minComfortScore" class="badge bg-success">

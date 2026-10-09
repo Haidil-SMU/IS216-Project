@@ -36,7 +36,7 @@
     {
       "id": 4,
       "name": "Haze Alert",
-      "description": "Singapore's current PSI is {psi}. Maintain a comfortable indoor environment while controlling electricity usage.",
+      "description": "Singapore's current highest PSI is {psi}. Maintain a comfortable indoor environment while controlling electricity usage.",
       "difficulty": "Hard",
       "goals": {
         "maxCost": 3.50,
