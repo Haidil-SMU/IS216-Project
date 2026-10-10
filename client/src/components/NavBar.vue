@@ -30,6 +30,10 @@
             Find Contractors
           </RouterLink>
 
+          <RouterLink class="nav-link" to="/3d">
+            3D Spacial
+          </RouterLink>
+
         </div>
       </div>
 

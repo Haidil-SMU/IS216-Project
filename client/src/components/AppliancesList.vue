@@ -1,10 +1,14 @@
 <template>
-  <div class="d-flex flex-column justify-content-between h-100 w-100 px-3 py-2 overflow-hidden">
+  <div class="d-flex flex-column justify-content-between h-100 w-100 px-3 py-2 text-white overflow-hidden">
     <div class="d-flex align-items-center justify-content-between pb-1 border-bottom border-secondary flex-shrink-0">
       <ul class="nav nav-pills gap-1 flex-nowrap overflow-x-auto">
         <li v-for="tab in tabs" :key="tab.id" class="nav-item">
-          <button class="nav-link nav-link-sm py-1 px-3 text-capitalize fw-semibold text-nowrap" :class="{ 'active bg-success': activeTab === tab.id, 'text-dark': activeTab !== tab.id }" @click="selectTab(tab.id)">
-            {{ tab.label }}
+          <button 
+            class="nav-link nav-link-sm py-1 px-3 text-capitalize fw-semibold text-nowrap"
+            :class="{ 'active bg-success text-white': activeTab === tab.id, 'text-light': activeTab !== tab.id }"
+            @click="selectTab(tab.id)"
+          >
+            {{ tab.icon }} {{ tab.label }}
           </button>
         </li>
       </ul>
@@ -16,7 +20,13 @@
 
     <div class="d-flex align-items-center flex-grow-1 min-h-0 py-1">
       <div class="d-flex gap-2 overflow-x-auto align-items-stretch w-100 py-1">
-        <div v-for="item in visibleApplianceTypes" :key="item.typeKey" class="card bg-black text-white border-secondary p-2 text-center flex-shrink-0 shadow-sm d-flex flex-column justify-content-between" style="min-width: 165px; max-width: 165px;">
+        <div 
+          v-for="item in visibleApplianceTypes" 
+          :key="item.typeKey"
+          class="card bg-black text-white border-secondary p-2 text-center flex-shrink-0 shadow-sm d-flex flex-column justify-content-between"
+          style="min-width: 165px; max-width: 165px;"
+        >
+
           <Appliance3D :type="item.typeKey" :category="item.categoryKey" />
 
           <div class="fw-bold fs-7 text-truncate text-light my-1" :title="item.typeData.name">
@@ -24,6 +34,7 @@
           </div>
 
           <template v-if="item.categoryKey !== 'build'">
+
             <div class="d-flex justify-content-center gap-1 my-1" style="min-height: 20px;">
               <template v-if="hasTicks(item.typeData)">
                 <button
@@ -32,8 +43,9 @@
                   class="btn btn-xs py-0 px-1 border-0"
                   :class="selectedTicks[item.typeKey] === tickKey ? 'btn-warning text-dark fw-bold' : 'btn-outline-secondary text-white-50'"
                   style="font-size: 0.65rem;"
-                  @click.stop="setTick(item.typeKey, tickKey)">
-                  {{ tickKey.replace('_tick', '✔').replace('standard', '✔') }}
+                  @click.stop="setTick(item.typeKey, tickKey)"
+                >
+                  {{ tickKey.replace('_tick', '★').replace('standard', '★') }}
                 </button>
               </template>
             </div>

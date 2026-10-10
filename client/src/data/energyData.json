@@ -1,4 +1,5 @@
 {
+  "electricityTariff": 0.31,
   "dataNotes": {
     "source": "Singapore NEA MELS and MEPS",
     "electricityTariffUnit": "SGD/kWh",
@@ -78,7 +79,10 @@
           }
         },
         "quartz_countertop": {
-        "name": "Kitchen Quartz Countertop"
+          "name": "Kitchen Quartz Countertop"
+        },
+        "plain_countertop": {
+          "name": "Plain Countertop"
         }
       }
     },
@@ -145,6 +149,26 @@
               "description": "Illustrative high-efficiency commercial refrigerator"
             }
           }
+        },
+        "microwave_oven": {
+          "name": "Microwave Oven",
+          "kwhYear": 130,
+          "description": "Illustrative: ~1200W for about 20 minutes a day"
+        },
+        "air_fryer": {
+          "name": "Air Fryer",
+          "kwhYear": 220,
+          "description": "Illustrative: ~1500W for about 25 minutes a day"
+        },
+        "rice_cooker": {
+          "name": "Rice Cooker",
+          "kwhYear": 165,
+          "description": "Illustrative: ~600W for about 45 minutes a day"
+        },
+        "induction_cooker": {
+          "name": "Induction Cooker",
+          "kwhYear": 365,
+          "description": "Illustrative: ~2000W for 30 minutes a day"
         }
       }
     },

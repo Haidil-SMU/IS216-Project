@@ -25,7 +25,9 @@ const loadModel = () => {
 
   const box = new THREE.Box3().setFromObject(currentModel)
   const center = box.getCenter(new THREE.Vector3())
-  currentModel.position.sub(center)
+  const size = box.getSize(new THREE.Vector3())
+  currentModel.scale.setScalar(1.3 / Math.max(size.x, size.y, size.z))
+  currentModel.position.copy(center).multiplyScalar(-currentModel.scale.x)
 
   scene.add(currentModel)
 }
@@ -39,7 +41,7 @@ const initThree = async () => {
 
   scene = new THREE.Scene()
   camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100)
-  camera.position.set(1.8, 1.2, 2.2)
+  camera.position.set(1.4, 0.9, 1.8)
 
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'low-power' })
   renderer.setSize(width, height)
