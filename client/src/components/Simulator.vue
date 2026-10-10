@@ -23,10 +23,11 @@ const selectedAppliance = ref(null)
 
 const acTemperature = ref(25)
 const temperature = ref(0)
-const rainfall = ref(0)
 const psiReadings = ref({})
 
 const selectedRegion = ref('central')
+const rainfallAreas = ref({})
+const selectedStation = ref('')
 
 async function getExternalAPIs() {
   try { //loading from APIs
@@ -42,12 +43,26 @@ async function getExternalAPIs() {
     const rainfallData = await axios.get(RAINFALL_URL)
     const PSIData = await axios.get(PSI_URL)
     console.log(PSIData)
+    console.log(rainfallData)
 
 
     //assign the response to the respective variables
     let weatherReadings = weatherData.data.data.readings[0].data //gets the weather accross all stations
     let rainfallReadings = rainfallData.data.data.readings[0].data
+    let rainfallStations = rainfallData.data.data.stations
     psiReadings.value = PSIData.data.data.items[0].readings.psi_twenty_four_hourly
+
+    for (const station of rainfallStations) {
+      const reading = rainfallReadings.find(
+        item => item.stationId === station.id
+      )
+
+      if (reading) {
+        rainfallAreas.value[station.name] = reading.value
+      }
+    }
+
+    console.log(rainfallAreas.value)
 
 
     //we calculate the average accross all stations in singapore, to  get the current weather
@@ -59,8 +74,6 @@ async function getExternalAPIs() {
     for (const reading of rainfallReadings) {
       totalRainfall += reading.value
     }
-
-
 
     averageTemperature = totalTemp / (weatherReadings.length)
     temperature.value = Number(averageTemperature.toFixed(2))
@@ -162,7 +175,7 @@ const ecoScore = computed(() => {
 
 
 const comfortScore = computed(() => {
-  let score = 0
+  let score = 60
 
   const aircon = appliances.value.find(
     appliance => appliance.name === 'Air Conditioner'
@@ -283,6 +296,25 @@ const hazeGoals = computed(() => {
   }
 })
 
+const rainGoals = computed(() => {
+    if (rainfall.value === null) {
+        return null
+    }
+
+    if (rainfall.value === 0) {
+        return { maxCost: 3.50, minEcoScore: 85, minComfortScore: 85 }
+    }
+    else if (rainfall.value <= 1) {
+        return { maxCost: 3.00, minEcoScore: 85, minComfortScore: 85 }
+    }
+    else if (rainfall.value <= 2.5) {
+        return { maxCost: 2.50, minEcoScore: 85, minComfortScore: 85 }
+    }
+    else {
+        return { maxCost: 2.00, minEcoScore: 85, minComfortScore: 85 }
+    } 
+})
+
 const currentGoals = computed(() => {
   if (!selectedScenario.value) {
     return null
@@ -292,7 +324,15 @@ const currentGoals = computed(() => {
     return hazeGoals.value
   }
 
+  if (selectedScenario.value.name === 'Rainy Day') {
+    return rainGoals.value
+  }
+
   return selectedScenario.value.goals
+})
+
+const rainfall = computed(() => {
+  return rainfallAreas.value[selectedStation.value] ?? null
 })
 
 </script>
@@ -412,8 +452,16 @@ const currentGoals = computed(() => {
                 LIVE SINGAPORE RAINFALL
               </small>
 
-              <strong class="fs-5">
-                🌧️ {{ rainfall }} mm
+              <select v-model="selectedStation" class="form-select">
+                <option value="" disabled>Select a station</option>
+
+                <option v-for="(rainfall, name) in rainfallAreas" :key="name" :value="name">
+                  {{ name }}
+                </option>
+              </select>
+
+              <strong v-if="selectedStation" class="fs-5">
+                Rainfall: 🌧️ {{ rainfall }} mm
               </strong>
 
             </div>
@@ -438,7 +486,7 @@ const currentGoals = computed(() => {
               </select>
 
               <strong class="fs-5">
-                Current Region PSI:{{psiReadings[selectedRegion] }}
+                Current Region PSI:{{ psiReadings[selectedRegion] }}
               </strong>
 
 
@@ -453,7 +501,7 @@ const currentGoals = computed(() => {
             </h5>
 
 
-            <div class="scenario-goals">
+            <div v-if="currentGoals" class="scenario-goals">
 
 
 
@@ -469,7 +517,7 @@ const currentGoals = computed(() => {
                     KEEP COST BELOW
                   </small>
 
-                  <div class="goal-value">
+                  <div v-if="currentGoals" class="goal-value">
                     ${{ currentGoals.maxCost }}
                   </div>
 
@@ -477,7 +525,7 @@ const currentGoals = computed(() => {
 
               </div>
 
-              <div class="goal-item">
+              <div v-if="currentGoals" class="goal-item">
 
                 <span class="goal-icon">
                   🌱
@@ -489,7 +537,7 @@ const currentGoals = computed(() => {
                     ECO SCORE
                   </small>
 
-                  <div class="goal-value">
+                  <div v-if="currentGoals" class="goal-value">
                     {{ currentGoals.minEcoScore }}+
                   </div>
 
@@ -509,7 +557,7 @@ const currentGoals = computed(() => {
                     COMFORT SCORE
                   </small>
 
-                  <div class="goal-value">
+                  <div v-if="currentGoals" class="goal-value">
                     {{ currentGoals.minComfortScore }}+
                   </div>
 
@@ -1019,7 +1067,7 @@ const currentGoals = computed(() => {
               💰 Keep Cost Below ${{ currentGoals.maxCost }}
             </span>
 
-            <span v-if="totalCost <= selectedScenario.goals.maxCost" class="badge bg-success">
+            <span v-if="totalCost <= currentGoals.maxCost" class="badge bg-success">
               ✓ PASSED
             </span>
 
@@ -1036,7 +1084,7 @@ const currentGoals = computed(() => {
               🌱 Eco Score {{ currentGoals.minEcoScore }}+
             </span>
 
-            <span v-if="ecoScore >= selectedScenario.goals.minEcoScore" class="badge bg-success">
+            <span v-if="ecoScore >= currentGoals.minEcoScore" class="badge bg-success">
               ✓ PASSED
             </span>
 
@@ -1055,7 +1103,7 @@ const currentGoals = computed(() => {
               ❤️ Comfort Score {{ currentGoals.minComfortScore }}+
             </span>
 
-            <span v-if="comfortScore >= selectedScenario.goals.minComfortScore" class="badge bg-success">
+            <span v-if="comfortScore >= currentGoals.minComfortScore" class="badge bg-success">
               ✓ PASSED
             </span>
 
