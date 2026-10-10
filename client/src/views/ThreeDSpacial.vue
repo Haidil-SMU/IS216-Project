@@ -79,7 +79,7 @@
                 <div class="fw-bold text-truncate">{{ item.name }}</div>
                 <div class="text-muted fs-7">
                   <span v-if="item.tick !== 'none'" class="badge bg-warning text-dark me-1">
-                    {{ item.tick.replace('_tick', '★') }}
+                    {{ item.tick.replace('_tick', '✔') }}
                   </span>
                   <span>{{ rowOf(item.id) ? Math.round(rowOf(item.id).kwh) : item.kwhYear }} kWh/yr</span>
                 </div>
