@@ -35,7 +35,7 @@
           </RouterLink>
 
           <RouterLink class="nav-link" to="/3d">
-            3D Spacial
+            3D Spatial
           </RouterLink>
 
         </div>

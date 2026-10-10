@@ -45,7 +45,7 @@
                   style="font-size: 0.65rem;"
                   @click.stop="setTick(item.typeKey, tickKey)"
                 >
-                  {{ tickKey.replace('_tick', '★').replace('standard', '★') }}
+                  {{ tickKey.replace('_tick', '✔').replace('standard', '✔') }}
                 </button>
               </template>
             </div>
