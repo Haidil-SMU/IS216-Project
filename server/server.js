@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const { randomUUID } = require('crypto');
 
 const PORT = process.env.PORT || 8000;
 const SCENARIO_FILE = path.join(__dirname, 'gameScenarios.json');
@@ -141,6 +142,129 @@ res.json({ analysis });
         });
     }
 });
+
+// Energy planner: JSON storage and GET, POST, PUT, DELETE routes.
+function readJson(filename) {
+  const content = fs.readFileSync(path.join(__dirname, filename), "utf8");
+  return JSON.parse(content);
+}
+
+function writeJson(filename, data) {
+  fs.writeFileSync(
+    path.join(__dirname, filename),
+    JSON.stringify(data, null, 2),
+  );
+}
+
+// GET: return the JSON data to the Vue page.
+app.get("/api/planner", (req, res) => {
+  const catalogue = JSON.parse(
+    fs.readFileSync(path.join(__dirname, "appliances.json"), "utf8"),
+  );
+  for (const appliance of catalogue.appliances) {
+    appliance.type = appliance.type || appliance.name;
+    appliance.location = appliance.location || "Not specified";
+  }
+  res.json({
+    appliances: catalogue.appliances,
+    flatTypes: readJson("hdb_rooms.json").flatTypes,
+    users: readJson("users.json").users,
+    plans: readJson("plans.json").plans,
+  });
+});
+
+// POST: add a new household to users.json.
+app.post("/api/users", (req, res) => {
+  if (!req.body || !req.body.name) {
+    return res.status(400).json({ error: "Household name is required." });
+  }
+  const data = readJson("users.json");
+  const user = { ...req.body, id: randomUUID() };
+  data.users.push(user);
+  writeJson("users.json", data);
+  res.status(201).json(user);
+});
+
+// PUT: replace the household matching the ID in the URL.
+app.put("/api/users/:id", (req, res) => {
+  if (!req.body || !req.body.name) {
+    return res.status(400).json({ error: "Household name is required." });
+  }
+  const data = readJson("users.json");
+  for (let i = 0; i < data.users.length; i++) {
+    if (data.users[i].id === req.params.id) {
+      data.users[i] = { ...req.body, id: req.params.id };
+      writeJson("users.json", data);
+      return res.json(data.users[i]);
+    }
+  }
+  res.status(404).json({ error: "Household not found." });
+});
+
+// POST: save a plan and the estimate calculated in EnergyPlanner.vue.
+app.post("/api/plans", (req, res) => {
+  if (
+    !req.body ||
+    !req.body.name ||
+    !req.body.userId ||
+    !Array.isArray(req.body.items) ||
+    !req.body.estimate ||
+    !req.body.profile
+  ) {
+    return res.status(400).json({ error: "Plan details are required." });
+  }
+  const data = readJson("plans.json");
+  const plan = { ...req.body, id: randomUUID() };
+  data.plans.push(plan);
+  writeJson("plans.json", data);
+  res.status(201).json(plan);
+});
+
+// PUT: update an existing plan in plans.json.
+app.put("/api/plans/:id", (req, res) => {
+  if (
+    !req.body ||
+    !req.body.name ||
+    !req.body.userId ||
+    !Array.isArray(req.body.items) ||
+    !req.body.estimate ||
+    !req.body.profile
+  ) {
+    return res.status(400).json({ error: "Plan details are required." });
+  }
+  const data = readJson("plans.json");
+  for (let i = 0; i < data.plans.length; i++) {
+    if (data.plans[i].id === req.params.id) {
+      data.plans[i] = { ...req.body, id: req.params.id };
+      writeJson("plans.json", data);
+      return res.json(data.plans[i]);
+    }
+  }
+  res.status(404).json({ error: "Plan not found." });
+});
+
+// DELETE: remove the plan matching the ID, then save the remaining plans.
+app.delete("/api/plans/:id", (req, res) => {
+  const data = readJson("plans.json");
+  for (let i = 0; i < data.plans.length; i++) {
+    if (data.plans[i].id === req.params.id) {
+      data.plans.splice(i, 1);
+      writeJson("plans.json", data);
+      return res.sendStatus(204);
+    }
+  }
+  res.status(404).json({ error: "Plan not found." });
+});
+
+// One error handler for file or request errors across these routes.
+app.use((error, req, res, next) => {
+  if (res.headersSent) return next(error);
+  console.log(error.message);
+  res
+    .status(error.status || 500)
+    .json({ error: "Unable to process the planner request." });
+});
+
 
 app.use((req, res) => {
     res.status(404).type('text/plain').send('Not found');

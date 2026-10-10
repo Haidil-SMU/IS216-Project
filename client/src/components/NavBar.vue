@@ -26,6 +26,10 @@
             My HDB
           </RouterLink>
 
+          <RouterLink class="nav-link" to="/EnergyPlanner/">
+            Energy Planner
+          </RouterLink>
+
           <RouterLink class="nav-link" to="/Contractors">
             Find Contractors
           </RouterLink>

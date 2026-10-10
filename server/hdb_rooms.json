@@ -1,0 +1,53 @@
+{
+  "flatTypes": [
+    {
+      "id": "2-room",
+      "name": "2-room HDB",
+      "bedrooms": 1,
+      "rooms": [
+        "Living Room",
+        "Kitchen",
+        "Bathroom",
+        "Bedroom 1"
+      ]
+    },
+    {
+      "id": "3-room",
+      "name": "3-room HDB",
+      "bedrooms": 2,
+      "rooms": [
+        "Living Room",
+        "Kitchen",
+        "Bathroom",
+        "Bedroom 1",
+        "Bedroom 2"
+      ]
+    },
+    {
+      "id": "4-room",
+      "name": "4-room HDB",
+      "bedrooms": 3,
+      "rooms": [
+        "Living Room",
+        "Kitchen",
+        "Bathroom",
+        "Bedroom 1",
+        "Bedroom 2",
+        "Bedroom 3"
+      ]
+    },
+    {
+      "id": "5-room",
+      "name": "5-room HDB",
+      "bedrooms": 3,
+      "rooms": [
+        "Living Room",
+        "Kitchen",
+        "Bathroom",
+        "Bedroom 1",
+        "Bedroom 2",
+        "Bedroom 3"
+      ]
+    }
+  ]
+}
