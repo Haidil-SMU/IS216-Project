@@ -2,21 +2,12 @@
   "users": [
     {
       "id": "f053a6ef-7258-4b2c-9d60-fb3173fcf065",
-      "name": "My household",
+      "name": "new household",
       "flatType": "4-room",
       "occupants": 4,
       "bedrooms": 3,
       "budget": 150,
       "pattern": "3"
-    },
-    {
-      "id": "56e10b2f-f3b4-4f58-ab02-9aac800000e4",
-      "name": "My household",
-      "flatType": "4-room",
-      "occupants": 4,
-      "bedrooms": 3,
-      "budget": 150,
-      "pattern": "Mostly home in the evenings"
     }
   ]
 }

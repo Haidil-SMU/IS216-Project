@@ -3,6 +3,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
+const { MongoClient } = require('mongodb');
 
 const PORT = process.env.PORT || 8000;
 const SCENARIO_FILE = path.join(__dirname, 'gameScenarios.json');
@@ -269,6 +270,30 @@ app.use((error, req, res, next) => {
 app.use((req, res) => {
     res.status(404).type('text/plain').send('Not found');
 });
+
+async function testMongoDB() {
+    const client = new MongoClient(process.env.DB);
+
+    try {
+        await client.connect();
+        console.log("MongoDB connected successfully!");
+
+        const db = client.db("ecohome");
+        const test = db.collection("test");
+
+        const firstDocument = await test.findOne({});
+
+        console.log("Testing:", firstDocument);
+
+    } catch (error) {
+        console.error("MongoDB error:", error.message);
+    } finally {
+        await client.close();
+    }
+}
+
+
+testMongoDB();
 
 app.listen(PORT, '127.0.0.1', () => {
     console.log(`Server running at http://127.0.0.1:${PORT}/`);
