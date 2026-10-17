@@ -3,6 +3,7 @@
 import { ref, computed, onMounted } from 'vue'
 import axios from 'axios'
 import NavBar from './NavBar.vue'
+import dummyHousehold from '../data/dummyHousehold.json'
 
 const API_URL = 'http://127.0.0.1:8000/api'
 const TEMPERATURE_URL = "https://api-open.data.gov.sg/v2/real-time/api/air-temperature"
@@ -18,6 +19,8 @@ const simulated = ref(false)
 const scenarios = ref([])
 const appliances = ref([])
 
+const household = ref(null)
+
 const selectedScenario = ref(null)
 const selectedAppliance = ref(null)
 
@@ -28,6 +31,23 @@ const psiReadings = ref({})
 const selectedRegion = ref('central')
 const rainfallAreas = ref({})
 const selectedStation = ref('')
+
+function applyHousehold(data) {
+  household.value = data
+
+  appliances.value = (data.rooms ?? []).flatMap(room =>
+    (room.spawnedAppliances ?? []).map(appliance => ({
+      ...appliance,
+      room: room.name,
+      roomId: room.id,
+      on: false,
+      hours: 0
+    }))
+  )
+
+  selectedAppliance.value = null
+  simulated.value = false
+}
 
 async function getExternalAPIs() {
   try { //loading from APIs
@@ -77,8 +97,6 @@ async function getExternalAPIs() {
 
     averageTemperature = totalTemp / (weatherReadings.length)
     temperature.value = Number(averageTemperature.toFixed(2))
-    averageRainfall = totalRainfall / (rainfallReadings.length)
-    rainfall.value = Number(averageRainfall.toFixed(2))
 
   } catch (error) {
 
@@ -89,21 +107,19 @@ async function getExternalAPIs() {
 
 async function loadData() {
 
-  try { //loading from local JSON Files
+   try {
 
     const response = await axios.get(API_URL)
 
-    console.log(response.data)
     scenarios.value = response.data.scenarios
-    appliances.value = response.data.appliances
+
+    // Load dummy household data instead of the old appliance list
+    applyHousehold(dummyHousehold)
 
     selectedScenario.value = scenarios.value[0]
-    console.log(selectedScenario.value)
 
-    for (const appliance of appliances.value) {
-      appliance.on = false
-      appliance.hours = 0
-    }
+    console.log("Household:", household.value)
+    console.log("Appliances:", appliances.value)
 
   } catch (error) {
 
@@ -190,7 +206,7 @@ const comfortScore = computed(() => {
   )
 
   const tv = appliances.value.find(
-    appliance => appliance.name === 'TV'
+    appliance => appliance.name === 'Television'
   )
 
   const waterHeater = appliances.value.find(
@@ -230,6 +246,11 @@ const comfortScore = computed(() => {
 })
 
 const scenarioDescription = computed(() => {
+
+   if (!selectedScenario.value) {
+    return ''
+  }
+
 
   return selectedScenario.value.description
     .replace('{temperature}', temperature.value)
@@ -297,22 +318,22 @@ const hazeGoals = computed(() => {
 })
 
 const rainGoals = computed(() => {
-    if (rainfall.value === null) {
-        return null
-    }
+  if (rainfall.value === null) {
+    return null
+  }
 
-    if (rainfall.value === 0) {
-        return { maxCost: 3.50, minEcoScore: 85, minComfortScore: 85 }
-    }
-    else if (rainfall.value <= 1) {
-        return { maxCost: 3.00, minEcoScore: 85, minComfortScore: 85 }
-    }
-    else if (rainfall.value <= 2.5) {
-        return { maxCost: 2.50, minEcoScore: 85, minComfortScore: 85 }
-    }
-    else {
-        return { maxCost: 2.00, minEcoScore: 85, minComfortScore: 85 }
-    } 
+  if (rainfall.value === "No Rain") {
+    return { maxCost: 3.50, minEcoScore: 85, minComfortScore: 85 }
+  }
+  else if (rainfall.value === "Light Rain") {
+    return { maxCost: 3.00, minEcoScore: 85, minComfortScore: 85 }
+  }
+  else if (rainfall.value === "Moderate Rain") {
+    return { maxCost: 2.50, minEcoScore: 85, minComfortScore: 85 }
+  }
+  else {
+    return { maxCost: 2.00, minEcoScore: 85, minComfortScore: 85 }
+  }
 })
 
 const currentGoals = computed(() => {
@@ -332,7 +353,27 @@ const currentGoals = computed(() => {
 })
 
 const rainfall = computed(() => {
-  return rainfallAreas.value[selectedStation.value] ?? null
+  let rainfallAmount = rainfallAreas.value[selectedStation.value] ?? null
+
+  if (rainfallAmount === null) {
+    return "No Data"
+  }
+  else if (rainfallAmount === 0) {
+    return "No Rain"
+  }
+  else if (rainfallAmount <= 2.5) {
+    return "Light Rain"
+  }
+  else if (rainfallAmount <= 10) {
+    return "Moderate Rain"
+  }
+  else if (rainfallAmount <= 50) {
+    return "Heavy Rain"
+  }
+  else {
+    return "Very Heavy Rain"
+  }
+
 })
 
 </script>
@@ -461,7 +502,7 @@ const rainfall = computed(() => {
               </select>
 
               <strong v-if="selectedStation" class="fs-5">
-                Rainfall: 🌧️ {{ rainfall }} mm
+                Rainfall:  {{ rainfall }} 🌧️
               </strong>
 
             </div>
