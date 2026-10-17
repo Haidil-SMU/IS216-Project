@@ -9,6 +9,7 @@ const PORT = process.env.PORT || 8000;
 const SCENARIO_FILE = path.join(__dirname, 'gameScenarios.json');
 const APPLIANCE_FILE = path.join(__dirname, 'appliances.json');
 
+
 function loadGameData() {
     try {
         const scenarioRaw = fs.readFileSync(SCENARIO_FILE, 'utf8');
@@ -257,6 +258,9 @@ app.delete("/api/plans/:id", (req, res) => {
   res.status(404).json({ error: "Plan not found." });
 });
 
+const spatialRoutes = require('./spatialRoutes');
+app.use('/api', spatialRoutes);
+
 // One error handler for file or request errors across these routes.
 app.use((error, req, res, next) => {
   if (res.headersSent) return next(error);
@@ -278,7 +282,8 @@ async function testMongoDB() {
         await client.connect();
         console.log("MongoDB connected successfully!");
 
-        const db = client.db("ecohome");
+        const db = client.db("wq_test");
+        // const test = db.collection("test");
         const test = db.collection("test");
 
         const firstDocument = await test.findOne({});
