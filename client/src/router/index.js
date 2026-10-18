@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import HomeView from '../components/Home.vue';
+import HomeView from '../components/Home_Redesigned.vue';
 import SimulatorView from '../components/Simulator.vue';
 import EnergyPlannerView from '../components/EnergyPlanner.vue';
 import Contractors from '@/views/Contractors.vue';
