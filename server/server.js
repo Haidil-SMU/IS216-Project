@@ -67,6 +67,357 @@ app.get('/api', (req, res) => {
 });
 
 // ============================================================
+// GET - Retrieve contractors from MongoDB
+// ============================================================
+
+app.get('/api/contractors', async (req, res) => {
+    try {
+        const db = mongoClient.db('ecohome');
+
+        const contractors = await db
+            .collection('contractors')
+            .find({})
+            .toArray();
+
+        res.status(200).json(contractors);
+
+    } catch (error) {
+        console.error('Error retrieving contractors:', error);
+
+        res.status(500).json({
+            error: 'Unable to retrieve contractors'
+        });
+    }
+});
+// ============================================================
+// POST - SUBMIT QUOTATION REQUEST
+// ============================================================
+
+app.post('/api/quotation-requests', async (req, res) => {
+  try {
+    const {
+      contractorId,
+      householdId,
+      household,
+      services,
+      description,
+      budget,
+      preferredStartDate
+    } = req.body;
+
+    // Validate required fields
+    if (
+      !contractorId ||
+      !household ||
+      !household.name ||
+      !household.flatType ||
+      !Array.isArray(services) ||
+      services.length === 0 ||
+      !description ||
+      !Number.isFinite(budget) ||
+      budget <= 0
+    ) {
+      return res.status(400).json({
+        error: 'Missing or invalid quotation request information'
+      });
+    }
+
+    const db = mongoClient.db('ecohome');
+
+    // Check that the contractor exists
+    const { ObjectId } = require('mongodb');
+
+    if (!ObjectId.isValid(contractorId)) {
+      return res.status(400).json({
+        error: 'Invalid contractor ID'
+      });
+    }
+
+    const contractor = await db.collection('contractors').findOne({
+      _id: new ObjectId(contractorId)
+    });
+
+    if (!contractor) {
+      return res.status(404).json({
+        error: 'Contractor not found'
+      });
+    }
+
+    // Prepare quotation request document
+    const quotationRequest = {
+      contractorId: new ObjectId(contractorId),
+
+      householdId: householdId || null,
+
+      household: {
+        name: household.name,
+        flatType: household.flatType,
+        occupants: Number(household.occupants),
+        bedrooms: Number(household.bedrooms)
+      },
+
+      services,
+      description,
+      budget,
+
+      preferredStartDate: preferredStartDate || null,
+
+      status: 'pending',
+
+      quotation: null,
+
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    // Save to MongoDB
+    const result = await db
+      .collection('quotationRequests')
+      .insertOne(quotationRequest);
+
+    res.status(201).json({
+      message: 'Quotation request submitted successfully',
+      requestId: result.insertedId
+    });
+
+  } catch (error) {
+    console.error('Error submitting quotation request:', error);
+
+    res.status(500).json({
+      error: 'Unable to submit quotation request'
+    });
+  }
+});
+
+// ============================================================
+// GET - RETRIEVE QUOTATION REQUESTS
+// ============================================================
+
+app.get('/api/quotation-requests', async (req, res) => {
+  try {
+    const db = mongoClient.db('ecohome');
+
+    const requests = await db
+      .collection('quotationRequests')
+      .find({})
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    res.status(200).json(requests);
+
+  } catch (error) {
+    console.error('Error retrieving quotation requests:', error);
+
+    res.status(500).json({
+      error: 'Unable to retrieve quotation requests'
+    });
+  }
+});
+// ============================================================
+// GET - SAVED CONTRACTORS
+// ============================================================
+
+app.get('/api/saved-contractors', async (req, res) => {
+  try {
+    const db = mongoClient.db('ecohome');
+
+    const contractors = await db
+      .collection('savedContractors')
+      .find({})
+      .toArray();
+
+    res.status(200).json(contractors);
+
+  } catch (error) {
+    console.error('Error retrieving saved contractors:', error);
+
+    res.status(500).json({
+      error: 'Unable to retrieve saved contractors'
+    });
+  }
+});
+
+
+// ============================================================
+// POST - SAVE CONTRACTOR
+// ============================================================
+
+app.post('/api/saved-contractors', async (req, res) => {
+  try {
+    const { savedId, source, ...contractor } = req.body;
+
+    if (
+      !savedId ||
+      !['website', 'api'].includes(source)
+    ) {
+      return res.status(400).json({
+        error: 'Invalid contractor information'
+      });
+    }
+
+    const db = mongoClient.db('ecohome');
+
+    // Prevent duplicate saved contractors
+    const existing = await db
+      .collection('savedContractors')
+      .findOne({ savedId });
+
+    if (existing) {
+      return res.status(409).json({
+        error: 'Contractor already saved'
+      });
+    }
+
+    const savedContractor = {
+      ...contractor,
+      savedId,
+      source,
+      savedAt: new Date()
+    };
+
+    const result = await db
+      .collection('savedContractors')
+      .insertOne(savedContractor);
+
+    res.status(201).json({
+      message: 'Contractor saved successfully',
+      savedId: result.insertedId
+    });
+
+  } catch (error) {
+    console.error('Error saving contractor:', error);
+
+    res.status(500).json({
+      error: 'Unable to save contractor'
+    });
+  }
+});
+// ============================================================
+// DELETE - REMOVE SAVED CONTRACTOR
+// ============================================================
+
+app.delete('/api/saved-contractors/:savedId', async (req, res) => {
+  try {
+    const { savedId } = req.params;
+
+    const db = mongoClient.db('ecohome');
+
+    const result = await db
+      .collection('savedContractors')
+      .deleteOne({ savedId });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({
+        error: 'Saved contractor not found'
+      });
+    }
+
+    res.status(200).json({
+      message: 'Contractor removed successfully'
+    });
+
+  } catch (error) {
+    console.error('Error removing saved contractor:', error);
+
+    res.status(500).json({
+      error: 'Unable to remove contractor'
+    });
+  }
+});
+// ============================================================
+// PUT - UPDATE PENDING QUOTATION REQUEST
+// ============================================================
+
+app.put('/api/quotation-requests/:requestId', async (req, res) => {
+  try {
+    const { ObjectId } = require('mongodb')
+    const { requestId } = req.params
+
+    if (!ObjectId.isValid(requestId)) {
+      return res.status(400).json({
+        error: 'Invalid quotation request ID'
+      })
+    }
+
+    const {
+      contractorId,
+      householdId,
+      household,
+      services,
+      description,
+      budget,
+      preferredStartDate
+    } = req.body
+
+    if (
+      !ObjectId.isValid(contractorId) ||
+      !household ||
+      !String(household.name || '').trim() ||
+      !household.flatType ||
+      !Number.isInteger(Number(household.occupants)) ||
+      Number(household.occupants) < 1 ||
+      !Number.isInteger(Number(household.bedrooms)) ||
+      Number(household.bedrooms) < 0 ||
+      !Array.isArray(services) ||
+      services.length === 0 ||
+      !String(description || '').trim() ||
+      !Number.isFinite(budget) ||
+      budget <= 0
+    ) {
+      return res.status(400).json({
+        error: 'Missing or invalid quotation information'
+      })
+    }
+
+    const db = mongoClient.db('ecohome')
+
+    const result = await db
+      .collection('quotationRequests')
+      .updateOne(
+        {
+          _id: new ObjectId(requestId),
+          contractorId: new ObjectId(contractorId),
+          status: 'pending'
+        },
+        {
+          $set: {
+            householdId: householdId || null,
+
+            household: {
+              name: String(household.name).trim(),
+              flatType: household.flatType,
+              occupants: Number(household.occupants),
+              bedrooms: Number(household.bedrooms)
+            },
+
+            services,
+            description: description.trim(),
+            budget,
+            preferredStartDate: preferredStartDate || null,
+            updatedAt: new Date()
+          }
+        }
+      )
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({
+        error: 'Pending quotation request not found'
+      })
+    }
+
+    res.status(200).json({
+      message: 'Quotation request updated successfully'
+    })
+
+  } catch (error) {
+    console.error('Error updating quotation request:', error)
+
+    res.status(500).json({
+      error: 'Unable to update quotation request'
+    })
+  }
+})
+// ============================================================
 // POST
 // Create a new course
 // ============================================================
@@ -271,30 +622,26 @@ app.use((req, res) => {
     res.status(404).type('text/plain').send('Not found');
 });
 
-async function testMongoDB() {
-    const client = new MongoClient(process.env.DB);
+// ============================================================
+// MongoDB Connection
+// ============================================================
 
+const mongoClient = new MongoClient(process.env.DB);
+
+async function startServer() {
     try {
-        await client.connect();
-        console.log("MongoDB connected successfully!");
+        await mongoClient.connect();
 
-        const db = client.db("ecohome");
-        const test = db.collection("test");
+        console.log('MongoDB connected successfully!');
 
-        const firstDocument = await test.findOne({});
-
-        console.log("Testing:", firstDocument);
+        app.listen(PORT, '127.0.0.1', () => {
+            console.log(`Server running at http://127.0.0.1:${PORT}/`);
+        });
 
     } catch (error) {
-        console.error("MongoDB error:", error.message);
-    } finally {
-        await client.close();
+        console.error('MongoDB connection failed:', error.message);
+        process.exit(1);
     }
 }
 
-
-testMongoDB();
-
-app.listen(PORT, '127.0.0.1', () => {
-    console.log(`Server running at http://127.0.0.1:${PORT}/`);
-});
+startServer();
