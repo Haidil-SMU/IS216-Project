@@ -49,6 +49,10 @@ async function logout() {
           <RouterLink class="nav-link" to="/Contractors">
             Find Contractors
           </RouterLink>
+<!-- this is temporary, will move to only contractor's account once caleb has implemented auth -->
+          <RouterLink class="nav-link" to="/ContractorDashboard">
+            Contractor Dashboard
+          </RouterLink>
 
           <RouterLink class="nav-link" to="/3d">
             3D Spatial
@@ -77,7 +81,7 @@ async function logout() {
                 <RouterLink class="dropdown-item" to="/EnergyPlanner/">My households &amp; plans</RouterLink>
               </li>
               <li>
-                <RouterLink class="dropdown-item" to="/SavedContractors">Saved contractors</RouterLink>
+                <RouterLink class="dropdown-item" to="/MyQuotations">My quotations</RouterLink>
               </li>
               <li><hr class="dropdown-divider" /></li>
               <li>

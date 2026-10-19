@@ -3,8 +3,10 @@ import HomeView from '../components/Home.vue';
 import SimulatorView from '../components/Simulator.vue';
 import EnergyPlannerView from '../components/EnergyPlanner.vue';
 import Contractors from '@/views/Contractors.vue';
-import SavedContractors from '@/views/SavedContractors.vue';
+import MyQuotations from '@/views/MyQuotations.vue';
 import ThreeDSpacial from '@/views/ThreeDSpacial.vue';
+import QuotationRequest from '@/views/QuotationRequest.vue';
+import ContractorDashboard from '@/views/ContractorDashboard.vue';
 import AuthView from '@/views/AuthView.vue';
 import { useAuthStore, safeRedirect } from '@/stores/auth';
 
@@ -30,14 +32,23 @@ const router = createRouter({
     component: Contractors
   },
       {
-    path: '/SavedContractors',
-    component: SavedContractors,
+    path: '/MyQuotations',
+    component: MyQuotations,
     meta: { requiresAuth: true }
   },
 
   {
     path: '/3d',
     component: ThreeDSpacial
+  },
+    {
+    path: '/QuotationRequest',
+    component: QuotationRequest,
+    meta: { requiresAuth: true }
+  },
+      {
+    path: '/ContractorDashboard',
+    component: ContractorDashboard
   },
 
   {

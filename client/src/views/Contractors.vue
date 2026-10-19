@@ -1,37 +1,26 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
 import workheads from '@/data/workheads.json'
-import { useAuthStore } from '@/stores/auth'
 
-const SAVED_API = '/api/saved-contractors'
-const auth = useAuthStore()
 const router = useRouter()
 
-// Data
-const contractors = ref([])
+const CONTRACTORS_API = '/api/contractors'
+const QUOTATIONS_API = '/api/quotation-requests'
+const DATA_GOV_API = 'https://data.gov.sg/api/action/datastore_search'
+
+const websiteContractors = ref([])
+const apiContractors = ref([])
+const quotationRequests = ref([])
+
 const selectedServices = ref([])
+const activeTab = ref('website')
 const showResults = ref(false)
 const loading = ref(false)
 const errorMessage = ref('')
+const quotationsLoaded = ref(false)
 
-// Saved contractors (stored in the user's account)
-const savedContractors = ref([])
-const savingUen = ref('')
-const saveError = ref('')
-
-onMounted(async () => {
-  if (!auth.user) return
-  try {
-    const response = await axios.get(SAVED_API)
-    savedContractors.value = response.data
-  } catch (error) {
-    console.log(error.message)
-  }
-})
-
-// Services shown in the questionnaire
 const services = [
   { code: 'CR06', name: 'Interior Design & Renovation' },
   { code: 'ME05', name: 'Electrical Works' },
@@ -45,105 +34,251 @@ const services = [
   { code: 'CR18', name: 'Doors' }
 ]
 
-// Fetch contractors based on selected services
+// ============================================================
+// FILTER WEBSITE CONTRACTORS
+// ============================================================
+
+const selectedServiceNames = computed(() =>
+  services
+    .filter(service => selectedServices.value.includes(service.code))
+    .map(service => service.name)
+)
+
+const matchingWebsiteContractors = computed(() =>
+  websiteContractors.value.filter(contractor =>
+    contractor.services?.some(service => {
+      const name = typeof service === 'string'
+        ? service
+        : service.name || service.code
+
+      return selectedServices.value.includes(name) ||
+        selectedServiceNames.value.some(
+          selected => selected.toLowerCase() === String(name).toLowerCase()
+        )
+    })
+  )
+)
+
+const displayedContractors = computed(() =>
+  activeTab.value === 'website'
+    ? matchingWebsiteContractors.value
+    : apiContractors.value
+)
+
+// ============================================================
+// FETCH WEBSITE CONTRACTORS
+// ============================================================
+
+async function getWebsiteContractors() {
+  const response = await axios.get(CONTRACTORS_API)
+
+  websiteContractors.value = Array.isArray(response.data)
+    ? response.data
+    : response.data.contractors || []
+}
+
+// ============================================================
+// FETCH EXISTING QUOTATION REQUESTS
+// ============================================================
+
+async function getQuotationRequests() {
+  quotationsLoaded.value = false
+
+  const response = await axios.get(QUOTATIONS_API)
+
+  quotationRequests.value = Array.isArray(response.data)
+    ? response.data
+    : response.data.requests || []
+
+  quotationsLoaded.value = true
+}
+
+// ============================================================
+// CHECK IF CONTRACTOR HAS A PENDING REQUEST
+// ============================================================
+
+function getId(value) {
+  if (!value) return ''
+
+  return String(value.$oid || value)
+}
+
+function hasPendingRequest(contractorId) {
+  return quotationRequests.value.some(request =>
+    getId(request.contractorId) === getId(contractorId) &&
+    request.status === 'pending'
+  )
+}
+
+// ============================================================
+// FETCH GOVERNMENT DATASET CONTRACTORS
+// ============================================================
+
+async function getApiContractors() {
+  const response = await axios.get(DATA_GOV_API, {
+    params: {
+      resource_id: 'd_dcda79be4aded5f9e769b8e23ff69b47',
+      filters: JSON.stringify({
+        workhead: selectedServices.value
+      }),
+      limit: 100
+    }
+  })
+
+  const companies = {}
+
+  for (const contractor of response.data.result.records) {
+    const uen = contractor.uen_no
+
+    if (!companies[uen]) {
+      companies[uen] = {
+        ...contractor,
+        registrations: []
+      }
+    }
+
+    if (!companies[uen].registrations.some(
+      registration => registration.workhead === contractor.workhead
+    )) {
+      companies[uen].registrations.push({
+        workhead: contractor.workhead,
+        grade: contractor.grade,
+        expiry_date: contractor.expiry_date
+      })
+    }
+  }
+
+  apiContractors.value = Object.values(companies)
+}
+
+// ============================================================
+// FIND MATCHING CONTRACTORS
+// ============================================================
+
 async function getContractors() {
   loading.value = true
   errorMessage.value = ''
   showResults.value = false
-  contractors.value = []
 
-  try {
-    const response = await axios.get(
-      'https://data.gov.sg/api/action/datastore_search',
-      {
-        params: {
-          resource_id: 'd_dcda79be4aded5f9e769b8e23ff69b47',
-          filters: JSON.stringify({
-            workhead: selectedServices.value
-          }),
-          limit: 100
-        }
-      }
-    )
+  websiteContractors.value = []
+  apiContractors.value = []
+  quotationRequests.value = []
+  quotationsLoaded.value = false
 
-    // Group contractors with the same UEN
-    const companies = {}
+  const results = await Promise.allSettled([
+    getWebsiteContractors(),
+    getApiContractors(),
+    getQuotationRequests()
+  ])
 
-    for (const contractor of response.data.result.records) {
-      const uen = contractor.uen_no
+  const websiteFailed = results[0].status === 'rejected'
+  const apiFailed = results[1].status === 'rejected'
+  const quotationsFailed = results[2].status === 'rejected'
 
-      if (!companies[uen]) {
-        companies[uen] = {
-          ...contractor,
-          registrations: []
-        }
-      }
-
-      // Store each registered service, grade and expiry date
-      if (!companies[uen].registrations.some(r => r.workhead === contractor.workhead)) {
-        companies[uen].registrations.push({
-          workhead: contractor.workhead,
-          grade: contractor.grade,
-          expiry_date: contractor.expiry_date
-        })
-      }
-    }
-
-    contractors.value = Object.values(companies)
+  if (websiteFailed && apiFailed) {
+    errorMessage.value = 'Unable to retrieve contractors.'
+  } else {
     showResults.value = true
 
-  } catch (error) {
-    errorMessage.value = error.message
-  } finally {
-    loading.value = false
+    if (websiteFailed) {
+      activeTab.value = 'api'
+      errorMessage.value = 'Website contractors could not be loaded.'
+    } else if (apiFailed) {
+      activeTab.value = 'website'
+      errorMessage.value = 'Government contractors could not be loaded.'
+    }
   }
+
+  if (quotationsFailed) {
+    console.error(
+      'Unable to retrieve quotation requests:',
+      results[2].reason
+    )
+
+    const message =
+      'Unable to check existing quotation requests. ' +
+      'Quotation requests are temporarily disabled.'
+
+    errorMessage.value = errorMessage.value
+      ? `${errorMessage.value} ${message}`
+      : message
+  }
+
+  loading.value = false
 }
 
-// Save contractor to the user's account (log in first if needed)
-async function saveContractor(contractor) {
-  if (!auth.user) {
-    router.push({ path: '/login', query: { redirect: '/Contractors' } })
-    return
-  }
-  if (savedContractors.value.some(c => c.uen_no === contractor.uen_no)) {
+function clearSelection() {
+  selectedServices.value = []
+  showResults.value = false
+  errorMessage.value = ''
+
+  websiteContractors.value = []
+  apiContractors.value = []
+  quotationRequests.value = []
+  quotationsLoaded.value = false
+}
+
+function getServiceName(service) {
+  const value = typeof service === 'string'
+    ? service
+    : service.name || service.code
+
+  return services.find(item => item.code === value)?.name || value
+}
+
+// ============================================================
+// REQUEST QUOTATION
+// ============================================================
+
+async function requestQuotation(contractor) {
+  errorMessage.value = ''
+
+  // Recheck MongoDB before navigating to the request form.
+  // This avoids relying only on the previously loaded results.
+  try {
+    await getQuotationRequests()
+  } catch (error) {
+    console.error(error)
+
+    errorMessage.value =
+      'Unable to verify existing requests. Please try again.'
+
     return
   }
 
-  savingUen.value = contractor.uen_no
-  saveError.value = ''
-  try {
-    const response = await axios.post(SAVED_API, {
-      ...contractor,
-      savedId: `api-${contractor.uen_no}`,
-      source: 'api'
-    })
-    savedContractors.value.push(response.data)
-  } catch (error) {
-    if (error.response?.status === 409) {
-      savedContractors.value.push(contractor)
-    } else {
-      saveError.value = error.response?.data?.error || 'Unable to save contractor'
-    }
-  } finally {
-    savingUen.value = ''
+  if (hasPendingRequest(contractor._id)) {
+    return
   }
+
+  router.push({
+    path: '/QuotationRequest',
+    query: {
+      contractorId: contractor._id,
+      services: selectedServices.value.join(',')
+    }
+  })
 }
 </script>
 
 <template>
   <div class="container py-5">
 
-    <!-- PAGE HEADER -->
+    <!-- HEADER -->
     <div class="mb-5">
-      <span class="badge bg-success-subtle text-success-emphasis rounded-pill px-3 py-2 mb-3">HDB EcoHome Services</span>
+      <span
+        class="badge bg-success-subtle text-success-emphasis rounded-pill px-3 py-2 mb-3"
+      >
+        HDB EcoHome Services
+      </span>
 
       <h1 class="fw-bold mb-3">
-        Find Your Perfect <span class="text-success">Renovation Contractor</span>
+        Find Your Perfect
+        <span class="text-success">Renovation Contractor</span>
       </h1>
 
       <p class="text-muted fs-5">
         Planning a home renovation? Select the services you need,
-        and we'll help you find matching registered contractors.
+        and we'll help you find matching contractors.
       </p>
     </div>
 
@@ -151,183 +286,409 @@ async function saveContractor(contractor) {
     <div class="card border-0 shadow-sm rounded-4 mb-5">
       <div class="card-body p-4 p-md-5">
 
-        <div class="mb-4">
-          <h3 class="fw-bold mb-2">What are you planning to renovate?</h3>
-          <p class="text-muted mb-0">Select one or more services to get started.</p>
-        </div>
+        <h3 class="fw-bold mb-2">
+          What are you planning to renovate?
+        </h3>
 
-        <!-- SERVICE CHECKBOXES -->
+        <p class="text-muted mb-4">
+          Select one or more services to get started.
+        </p>
+
         <div class="row g-3">
-          <div v-for="service in services" :key="service.code" class="col-md-6 col-lg-4">
-
+          <div
+            v-for="service in services"
+            :key="service.code"
+            class="col-md-6 col-lg-4"
+          >
             <label
               class="d-flex align-items-center gap-3 border rounded-3 p-3 h-100 service-option"
-              :class="selectedServices.includes(service.code) ? 'border-success bg-success-subtle' : ''"
-              :for="service.code"
+              :class="selectedServices.includes(service.code)
+                ? 'border-success bg-success-subtle'
+                : ''"
             >
-              <input class="form-check-input mt-0" type="checkbox" :id="service.code" :value="service.code" v-model="selectedServices" @change="showResults = false" />
-              <span class="fw-medium">{{ service.name }}</span>
-            </label>
+              <input
+                type="checkbox"
+                class="form-check-input mt-0"
+                :value="service.code"
+                v-model="selectedServices"
+                @change="showResults = false"
+              />
 
+              <span class="fw-medium">
+                {{ service.name }}
+              </span>
+            </label>
           </div>
         </div>
 
-        <!-- SELECTED SERVICES COUNT -->
-        <div class="mt-4 mb-3">
-          <span class="text-muted small">{{ selectedServices.length }} service(s) selected</span>
-        </div>
+        <p class="text-muted small mt-4 mb-3">
+          {{ selectedServices.length }} service(s) selected
+        </p>
 
-        <!-- ACTION BUTTONS -->
         <div class="d-flex flex-wrap gap-2">
-          <button class="btn btn-success px-4 py-2 fw-semibold" :disabled="selectedServices.length === 0 || loading" @click="getContractors">Find Matching Contractors →</button>
-          <button class="btn btn-outline-secondary px-4 py-2" :disabled="loading" @click="selectedServices = []; showResults = false">Clear Selection</button>
-          <RouterLink to="/SavedContractors" class="btn btn-outline-success px-4 py-2 fw-semibold">
-  View Saved Contractors →
-</RouterLink>
+
+          <button
+            class="btn btn-success px-4 py-2 fw-semibold"
+            :disabled="selectedServices.length === 0 || loading"
+            @click="getContractors"
+          >
+            Find Matching Contractors →
+          </button>
+
+          <button
+            class="btn btn-outline-secondary px-4 py-2"
+            :disabled="loading"
+            @click="clearSelection"
+          >
+            Clear Selection
+          </button>
+
+          <RouterLink
+            to="/MyQuotations"
+            class="btn btn-outline-success px-4 py-2 fw-semibold"
+          >
+            My Quotations →
+          </RouterLink>
+
         </div>
-
       </div>
-    </div>
-
-    <div v-if="saveError" class="alert alert-danger rounded-3" role="alert">
-      {{ saveError }}
     </div>
 
     <!-- LOADING -->
     <div v-if="loading" class="text-center py-5">
-      <div class="spinner-border text-success mb-3" role="status"></div>
-      <p class="text-muted">Finding renovation contractors...</p>
-    </div>
+      <div class="spinner-border text-success mb-3"></div>
 
-    <!-- ERROR -->
-    <div v-else-if="errorMessage" class="alert alert-danger rounded-3">
-      {{ errorMessage }}
+      <p class="text-muted">
+        Finding renovation contractors...
+      </p>
     </div>
 
     <!-- RESULTS -->
     <div v-else-if="showResults">
 
-      <!-- RESULTS HEADER -->
       <div class="mb-4">
-        <span class="badge bg-success-subtle text-success-emphasis rounded-pill px-3 py-2 mb-2">Your Results</span>
-        <h2 class="fw-bold mb-2">Matching Contractors</h2>
-        <p class="text-muted">Here are contractors whose registered services match your renovation needs.</p>
+        <span
+          class="badge bg-success-subtle text-success-emphasis rounded-pill px-3 py-2 mb-2"
+        >
+          Your Results
+        </span>
+
+        <h2 class="fw-bold">Matching Contractors</h2>
+
+        <p class="text-muted">
+          Browse contractors from our website or the government dataset.
+        </p>
       </div>
 
-      <!-- NO RESULTS -->
-      <div v-if="contractors.length === 0" class="alert alert-light border rounded-3">
-        No matching contractors found. Try selecting different renovation services.
+      <!-- TABS -->
+      <div class="contractor-tabs mb-4">
+
+        <button
+          class="contractor-tab"
+          :class="{ active: activeTab === 'website' }"
+          @click="activeTab = 'website'"
+        >
+          Website-Registered Contractors
+
+          <span class="tab-count">
+            {{ matchingWebsiteContractors.length }}
+          </span>
+        </button>
+
+        <button
+          class="contractor-tab"
+          :class="{ active: activeTab === 'api' }"
+          @click="activeTab = 'api'"
+        >
+          Government Dataset Contractors
+
+          <span class="tab-count">
+            {{ apiContractors.length }}
+          </span>
+        </button>
+
       </div>
 
-      <!-- CONTRACTOR CARDS -->
-      <div class="row g-4">
-        <div v-for="contractor in contractors" :key="contractor.uen_no" class="col-md-6 col-lg-4">
+      <div v-if="errorMessage" class="alert alert-warning">
+        {{ errorMessage }}
+      </div>
 
-          <div class="card h-100 border-0 shadow-sm rounded-4 contractor-card">
+      <div
+        v-if="displayedContractors.length === 0"
+        class="alert alert-light border"
+      >
+        No matching contractors found in this category.
+        Try selecting different renovation services.
+      </div>
+
+      <!-- WEBSITE CONTRACTORS -->
+      <div v-if="activeTab === 'website'" class="row g-4">
+
+        <div
+          v-for="contractor in matchingWebsiteContractors"
+          :key="contractor._id"
+          class="col-md-6 col-lg-4"
+        >
+          <div
+            class="card h-100 border-0 shadow-sm rounded-4 contractor-card"
+          >
 
             <div class="card-body p-4">
 
-              <!-- COMPANY NAME -->
-              <div class="mb-3">
-                <span class="badge bg-success-subtle text-success-emphasis mb-3">
-                  {{ contractor.registrations.length }} Matching Service(s)
+              <span
+                class="badge bg-success-subtle text-success-emphasis mb-3"
+              >
+                Website-Registered
+              </span>
+
+              <h5 class="fw-bold">
+                {{ contractor.companyName }}
+              </h5>
+
+              <p class="text-muted small">
+                {{ contractor.location }}
+              </p>
+
+              <hr />
+
+              <p class="small text-muted mb-2">
+                Renovation Services
+              </p>
+
+              <div class="d-flex flex-wrap gap-2 mb-3">
+                <span
+                  v-for="service in contractor.services || []"
+                  :key="typeof service === 'string'
+                    ? service
+                    : service.code || service.name"
+                  class="badge bg-success-subtle text-success-emphasis"
+                >
+                  {{ getServiceName(service) }}
                 </span>
-
-                <h5 class="fw-bold mb-2">{{ contractor.company_name }}</h5>
-                <p class="small text-muted mb-0">UEN: {{ contractor.uen_no }}</p>
               </div>
 
-              <hr class="text-muted" />
+              <p class="small text-muted mb-1">
+                About Contractor
+              </p>
 
-              <!-- RENOVATION SERVICES -->
-              <div class="mb-3">
-                <p class="small text-muted mb-2">Renovation Services</p>
+              <p>
+                {{ contractor.description }}
+              </p>
 
-                <div v-for="registration in contractor.registrations" :key="registration.workhead" class="mb-2">
-                  <span class="badge bg-success-subtle text-success-emphasis me-2">{{ registration.workhead }}</span>
-                  <span class="fw-semibold">{{ workheads[registration.workhead] || registration.workhead }}</span>
-                </div>
-              </div>
+              <p class="small text-muted mb-1">
+                Contact Number
+              </p>
 
-              <!-- ADDRESS -->
-              <div class="mb-3">
-                <p class="small text-muted mb-1">Address</p>
-                <p class="mb-0">
-                  {{ contractor.building_no }} {{ contractor.street_name }}<br />
-                  {{ contractor.unit_no }}<br />
-                  Singapore {{ contractor.postal_code }}
-                </p>
-              </div>
-
-              <!-- CONTACT -->
-              <div class="mb-3">
-                <p class="small text-muted mb-1">Contact Number</p>
-                <p class="fw-semibold mb-0">{{ contractor.tel_no || 'Not available' }}</p>
-              </div>
-
-              <!-- REGISTRATION -->
-              <div class="bg-light rounded-3 p-3">
-
-                <div v-for="registration in contractor.registrations" :key="registration.workhead" class="mb-2">
-
-                  <p class="fw-semibold small mb-1">{{ registration.workhead }}</p>
-
-                  <div class="d-flex justify-content-between">
-                    <span class="text-muted small">Registration Grade</span>
-                    <span class="fw-semibold small">{{ registration.grade }}</span>
-                  </div>
-
-                  <div class="d-flex justify-content-between">
-                    <span class="text-muted small">Expiry Date</span>
-                    <span class="fw-semibold small">{{ registration.expiry_date }}</span>
-                  </div>
-
-                </div>
-
-              </div>
+              <p class="fw-semibold">
+                {{ contractor.contactNumber || 'Not available' }}
+              </p>
 
             </div>
 
-            <!-- CARD FOOTER -->
+            <!-- ACTIONS -->
             <div class="card-footer bg-white border-0 px-4 pb-4">
 
-              <div class="d-flex gap-2">
+              <button
+                class="btn w-100 fw-semibold mb-2"
+                :class="
+                  hasPendingRequest(contractor._id)
+                    ? 'btn-secondary'
+                    : 'btn-success'
+                "
+                :disabled="
+                  !quotationsLoaded ||
+                  hasPendingRequest(contractor._id)
+                "
+                @click="requestQuotation(contractor)"
+              >
+                {{
+                  !quotationsLoaded
+                    ? 'Quotation Unavailable'
+                    : hasPendingRequest(contractor._id)
+                      ? 'Quotation Pending'
+                      : 'Request Quotation →'
+                }}
+              </button>
 
-                <button
-                  class="btn btn-success flex-fill fw-semibold"
-                  :disabled="savingUen === contractor.uen_no || savedContractors.some(c => c.uen_no === contractor.uen_no)"
-                  @click="saveContractor(contractor)"
-                >
-                  {{ savedContractors.some(c => c.uen_no === contractor.uen_no) ? '✓ Saved' : '♡ Save Contractor' }}
-                </button>
+              <a
+                v-if="contractor.contactNumber"
+                :href="'tel:' + contractor.contactNumber"
+                class="btn btn-outline-success w-100 fw-semibold"
+              >
+                Contact →
+              </a>
 
-                <a
-                  v-if="contractor.tel_no && !['na', 'n/a'].includes(String(contractor.tel_no).toLowerCase())"
-                  :href="'tel:' + contractor.tel_no"
-                  class="btn btn-outline-success flex-fill fw-semibold"
-                >Contact →</a>
-
-                <button v-else class="btn btn-outline-secondary flex-fill" disabled>Contact Unavailable</button>
-
-              </div>
+              <button
+                v-else
+                class="btn btn-outline-secondary w-100"
+                disabled
+              >
+                Contact Unavailable
+              </button>
 
             </div>
 
           </div>
-
         </div>
+
+      </div>
+
+      <!-- GOVERNMENT CONTRACTORS -->
+      <div v-else class="row g-4">
+
+        <div
+          v-for="contractor in apiContractors"
+          :key="contractor.uen_no"
+          class="col-md-6 col-lg-4"
+        >
+          <div
+            class="card h-100 border-0 shadow-sm rounded-4 contractor-card"
+          >
+
+            <div class="card-body p-4">
+
+              <span
+                class="badge bg-success-subtle text-success-emphasis mb-3"
+              >
+                {{ contractor.registrations.length }} Matching Service(s)
+              </span>
+
+              <h5 class="fw-bold">
+                {{ contractor.company_name }}
+              </h5>
+
+              <p class="small text-muted">
+                UEN: {{ contractor.uen_no }}
+              </p>
+
+              <hr />
+
+              <p class="small text-muted mb-2">
+                Renovation Services
+              </p>
+
+              <div
+                v-for="registration in contractor.registrations"
+                :key="registration.workhead"
+                class="mb-2"
+              >
+                <span
+                  class="badge bg-success-subtle text-success-emphasis me-2"
+                >
+                  {{ registration.workhead }}
+                </span>
+
+                <span class="fw-semibold">
+                  {{ workheads[registration.workhead] || registration.workhead }}
+                </span>
+              </div>
+
+              <div class="mt-3">
+                <p class="small text-muted mb-1">
+                  Address
+                </p>
+
+                <p>
+                  {{ contractor.building_no }}
+                  {{ contractor.street_name }}
+                  <br />
+                  {{ contractor.unit_no }}
+                  <br />
+                  Singapore {{ contractor.postal_code }}
+                </p>
+              </div>
+
+              <p class="small text-muted mb-1">
+                Contact Number
+              </p>
+
+              <p class="fw-semibold">
+                {{ contractor.tel_no || 'Not available' }}
+              </p>
+
+              <div class="bg-light rounded-3 p-3">
+
+                <div
+                  v-for="registration in contractor.registrations"
+                  :key="registration.workhead"
+                  class="mb-3"
+                >
+                  <p class="fw-semibold small mb-1">
+                    {{ registration.workhead }}
+                  </p>
+
+                  <div class="d-flex justify-content-between small">
+                    <span class="text-muted">
+                      Registration Grade
+                    </span>
+
+                    <strong>
+                      {{ registration.grade }}
+                    </strong>
+                  </div>
+
+                  <div class="d-flex justify-content-between small">
+                    <span class="text-muted">
+                      Expiry Date
+                    </span>
+
+                    <strong>
+                      {{ registration.expiry_date }}
+                    </strong>
+                  </div>
+                </div>
+
+              </div>
+
+            </div>
+
+            <!-- ACTIONS -->
+            <div class="card-footer bg-white border-0 px-4 pb-4">
+
+              <a
+                v-if="contractor.tel_no &&
+                  !['na', 'n/a'].includes(
+                    String(contractor.tel_no).toLowerCase()
+                  )"
+                :href="'tel:' + contractor.tel_no"
+                class="btn btn-outline-success w-100 fw-semibold"
+              >
+                Contact →
+              </a>
+
+              <button
+                v-else
+                class="btn btn-outline-secondary w-100"
+                disabled
+              >
+                Contact Unavailable
+              </button>
+
+            </div>
+
+          </div>
+        </div>
+
       </div>
 
       <!-- DISCLAIMER -->
       <div class="mt-5 p-3 bg-light rounded-3">
+
         <p class="small text-muted mb-0">
-          <strong>Note:</strong> Contractor information is sourced from data.gov.sg.
-          Results show up to 100 matching registration records, grouped by company.
-          Please verify current registration and HDB renovation requirements
-          before engaging a contractor.
+          <strong>Note:</strong>
+          Website-registered contractors are user-submitted listings.
+          Government dataset contractors are retrieved from data.gov.sg.
+          Results include up to 100 matching registration records,
+          grouped by company. Please independently verify contractor
+          credentials and applicable HDB renovation requirements.
         </p>
+
       </div>
 
+    </div>
+
+    <div v-else-if="errorMessage" class="alert alert-danger">
+      {{ errorMessage }}
     </div>
 
   </div>
@@ -351,5 +712,60 @@ async function saveContractor(contractor) {
 .contractor-card:hover {
   transform: translateY(-4px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1) !important;
+}
+
+.contractor-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  border-bottom: 1px solid #dee2e6;
+  padding-bottom: 12px;
+}
+
+.contractor-tab {
+  background: white;
+  border: 1px solid #dee2e6;
+  border-radius: 10px;
+  padding: 12px 20px;
+  font-weight: 600;
+  color: #6c757d;
+  cursor: pointer;
+}
+
+.contractor-tab:hover {
+  border-color: #198754;
+  color: #198754;
+}
+
+.contractor-tab.active {
+  background: #198754;
+  border-color: #198754;
+  color: white;
+}
+
+.tab-count {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 20px;
+  background: #e9ecef;
+  color: #495057;
+  font-size: 12px;
+}
+
+.contractor-tab.active .tab-count {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+}
+
+@media (max-width: 576px) {
+  .contractor-tabs {
+    flex-direction: column;
+  }
+
+  .contractor-tab {
+    width: 100%;
+    text-align: center;
+  }
 }
 </style>
