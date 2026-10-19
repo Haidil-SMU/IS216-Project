@@ -43,3 +43,5 @@ __screenshots__/
 *.timestamp-*-*.mjs
 test-results/
 playwright-report/
+# Singpass private keys
+server/keys/
