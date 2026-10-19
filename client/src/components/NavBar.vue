@@ -1,9 +1,13 @@
 <script setup>
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { useAuthStore } from '@/stores/auth'
+import { useAuthStore, homeFor } from '@/stores/auth'
 
 const auth = useAuthStore()
 const router = useRouter()
+
+// First letter or digit of the name (company names can start with "#" or "(").
+const initial = computed(() => (auth.user?.name.match(/[A-Za-z0-9]/)?.[0] || '?').toUpperCase())
 
 async function logout() {
   try {
@@ -18,7 +22,7 @@ async function logout() {
   <nav class="navbar navbar-expand-lg navbar-dark bg-success">
     <div class="container">
 
-      <RouterLink class="navbar-brand fw-bold" to="/">
+      <RouterLink class="navbar-brand fw-bold" :to="homeFor(auth.user)">
         🏠 HDB EcoHome
       </RouterLink>
 
@@ -34,29 +38,32 @@ async function logout() {
       <div class="collapse navbar-collapse" id="navbar">
         <div class="navbar-nav ms-auto align-items-lg-center">
 
-          <RouterLink class="nav-link" to="/">
-            Home
+          <!-- Contractors only have their dashboard; every other page is for homeowners -->
+          <RouterLink v-if="auth.isContractor" class="nav-link" to="/ContractorDashboard">
+            Dashboard
           </RouterLink>
 
-          <RouterLink class="nav-link" to="/Simulator">
-            My HDB
-          </RouterLink>
+          <template v-else>
+            <RouterLink class="nav-link" to="/">
+              Home
+            </RouterLink>
 
-          <RouterLink class="nav-link" to="/EnergyPlanner/">
-            Energy Planner
-          </RouterLink>
+            <RouterLink class="nav-link" to="/Simulator">
+              My HDB
+            </RouterLink>
 
-          <RouterLink class="nav-link" to="/Contractors">
-            Find Contractors
-          </RouterLink>
-<!-- this is temporary, will move to only contractor's account once caleb has implemented auth -->
-          <RouterLink class="nav-link" to="/ContractorDashboard">
-            Contractor Dashboard
-          </RouterLink>
+            <RouterLink class="nav-link" to="/EnergyPlanner/">
+              Energy Planner
+            </RouterLink>
 
-          <RouterLink class="nav-link" to="/3d">
-            3D Spatial
-          </RouterLink>
+            <RouterLink class="nav-link" to="/Contractors">
+              Find Contractors
+            </RouterLink>
+
+            <RouterLink class="nav-link" to="/3d">
+              3D Spatial
+            </RouterLink>
+          </template>
 
           <!-- Account -->
           <div v-if="auth.user" class="nav-item dropdown ms-lg-3">
@@ -66,23 +73,32 @@ async function logout() {
               data-bs-toggle="dropdown"
               aria-expanded="false"
             >
-              <span class="avatar" aria-hidden="true">{{ auth.user.name.charAt(0).toUpperCase() }}</span>
+              <span class="avatar" aria-hidden="true">{{ initial }}</span>
               {{ auth.user.name }}
             </button>
             <ul class="dropdown-menu dropdown-menu-end shadow-sm">
-              <li class="px-3 py-2 small text-secondary">
-                <div v-if="auth.user.email">{{ auth.user.email }}</div>
-                <span v-if="auth.user.singpass" class="badge badge-singpass mt-1">
-                  ✓ Singpass verified
-                </span>
-              </li>
-              <li><hr class="dropdown-divider" /></li>
-              <li>
-                <RouterLink class="dropdown-item" to="/EnergyPlanner/">My households &amp; plans</RouterLink>
-              </li>
-              <li>
-                <RouterLink class="dropdown-item" to="/MyQuotations">My quotations</RouterLink>
-              </li>
+              <template v-if="auth.user.email || auth.user.singpass">
+                <li class="px-3 py-2 small text-secondary">
+                  <div v-if="auth.user.email">{{ auth.user.email }}</div>
+                  <span v-if="auth.user.singpass" class="badge badge-singpass mt-1">
+                    ✓ Singpass verified
+                  </span>
+                </li>
+                <li><hr class="dropdown-divider" /></li>
+              </template>
+              <template v-if="auth.isContractor">
+                <li>
+                  <RouterLink class="dropdown-item" to="/ContractorDashboard">Quotation requests</RouterLink>
+                </li>
+              </template>
+              <template v-else>
+                <li>
+                  <RouterLink class="dropdown-item" to="/EnergyPlanner/">My households &amp; plans</RouterLink>
+                </li>
+                <li>
+                  <RouterLink class="dropdown-item" to="/MyQuotations">My quotations</RouterLink>
+                </li>
+              </template>
               <li><hr class="dropdown-divider" /></li>
               <li>
                 <button class="dropdown-item text-danger" type="button" @click="logout">Log out</button>

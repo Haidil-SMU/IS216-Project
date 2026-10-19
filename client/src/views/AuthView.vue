@@ -2,7 +2,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useAuthStore, safeRedirect } from '@/stores/auth'
+import { useAuthStore, safeRedirect, homeFor } from '@/stores/auth'
 
 const props = defineProps({
   mode: { type: String, default: 'login' },
@@ -19,20 +19,78 @@ const submitted = ref(false)
 const showPassword = ref(false)
 const busy = ref(false)
 const celebrate = ref(false)
-const error = ref(
-  route.query.error === 'singpass'
-    ? "Singpass login didn't go through. Please try again, or use your email instead."
-    : '',
-)
+const ERRORS = {
+  singpass: "Singpass login didn't go through. Please try again, or use your email instead.",
+  corppass: "Corppass login didn't go through. Please try again.",
+}
+const error = ref(ERRORS[route.query.error] || '')
 
 const redirect = computed(() => safeRedirect(route.query.redirect))
 const singpassHref = computed(() => auth.singpassUrl(redirect.value, 'login'))
+const corppassHref = computed(() => auth.corppassUrl(redirect.value))
 
-// Switching tabs keeps what the user typed and the ?redirect= target.
+// ------------------------------------------------------------
+// Who are you? Homeowners use email/Singpass, contractors use Corppass.
+// The choice lives in the URL (?as=contractor) and is remembered on this device.
+// ------------------------------------------------------------
+const ROLE_KEY = 'ecohome.authRole'
+function readSavedRole() {
+  try {
+    return localStorage.getItem(ROLE_KEY) === 'contractor' ? 'contractor' : 'client'
+  } catch {
+    return 'client'
+  }
+}
+const savedRole = readSavedRole()
+const role = computed(() => {
+  if (route.query.as === 'contractor') return 'contractor'
+  if (route.query.as === 'homeowner') return 'client'
+  if (route.query.error === 'corppass') return 'contractor'
+  return savedRole
+})
+const isContractor = computed(() => role.value === 'contractor')
+const roleAnnouncement = ref('')
+
+function setRole(next) {
+  if (next === role.value) return
+  try {
+    localStorage.setItem(ROLE_KEY, next)
+  } catch {
+    // Remembering the choice is only a convenience.
+  }
+  error.value = ''
+  submitted.value = false
+  roleAnnouncement.value = next === 'contractor' ? 'Contractor log in selected' : 'Homeowner log in selected'
+  router.replace({
+    // Contractors only log in (a first Corppass login creates their account).
+    path: next === 'contractor' ? '/login' : route.path,
+    query: { ...route.query, as: next === 'contractor' ? 'contractor' : 'homeowner', error: undefined },
+  })
+}
+
+// Arrow keys move between the two options, like any radio group.
+function onRoleKey(event) {
+  if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return
+  event.preventDefault()
+  const next = isContractor.value ? 'client' : 'contractor'
+  setRole(next)
+  const tiles = event.currentTarget.querySelectorAll('[role="radio"]')
+  tiles[next === 'contractor' ? 1 : 0]?.focus()
+}
+
+// Switching tabs keeps what the user typed, the role and the ?redirect= target.
 function switchMode(mode) {
   if (mode === props.mode) return
-  router.replace({ path: '/' + mode, query: { redirect: route.query.redirect } })
+  router.replace({ path: '/' + mode, query: { ...route.query, error: undefined } })
 }
+// There is no contractor sign-up page: /signup?as=contractor goes to the login.
+watch(
+  [isContractor, isSignup],
+  ([contractor, signup]) => {
+    if (contractor && signup) router.replace({ path: '/login', query: route.query })
+  },
+  { immediate: true },
+)
 watch(
   () => props.mode,
   () => {
@@ -131,9 +189,17 @@ const progress = computed(() => {
   }
   return done / fields.length
 })
-const litCount = computed(() =>
-  celebrate.value ? windows.length : Math.round(4 + progress.value * (windows.length * 0.8)),
-)
+const litCount = computed(() => {
+  if (celebrate.value) return windows.length
+  // Contractors: the block is "under renovation", about half lit.
+  if (isContractor.value) return Math.round(windows.length * 0.45)
+  return Math.round(4 + progress.value * (windows.length * 0.8))
+})
+
+// Corppass is a full-page redirect; light up the block on the way out.
+function startCorppass() {
+  celebrate.value = true
+}
 
 // ------------------------------------------------------------
 // Submit
@@ -146,16 +212,17 @@ async function submit() {
   busy.value = true
   try {
     const f = form.value
+    let user
     if (isSignup.value) {
-      await auth.signup({ name: f.name.trim(), email: f.email.trim(), password: f.password, remember: f.remember })
+      user = await auth.signup({ name: f.name.trim(), email: f.email.trim(), password: f.password, remember: f.remember })
     } else {
-      await auth.login({ email: f.email.trim(), password: f.password, remember: f.remember })
+      user = await auth.login({ email: f.email.trim(), password: f.password, remember: f.remember })
     }
     // Light up the whole block, then head inside.
     celebrate.value = true
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
     await new Promise((resolve) => setTimeout(resolve, reduceMotion ? 0 : 900))
-    router.replace(redirect.value || (isSignup.value ? '/EnergyPlanner/' : '/'))
+    router.replace(redirect.value || (isSignup.value ? '/EnergyPlanner/' : homeFor(user)))
   } catch (err) {
     error.value = err.response?.data?.error || 'Something went wrong. Please try again.'
     busy.value = false
@@ -164,7 +231,10 @@ async function submit() {
 </script>
 
 <template>
-  <div class="auth-page" :class="[isSignup ? 'is-signup' : 'is-login', { celebrate }]">
+  <div
+    class="auth-page"
+    :class="[isSignup ? 'is-signup' : 'is-login', isContractor ? 'is-contractor' : 'is-homeowner', { celebrate }]"
+  >
     <!-- Illustration: an HDB estate whose windows light up as the form fills in -->
     <section class="auth-scene" aria-hidden="true">
       <div class="sky sky-night"></div>
@@ -231,6 +301,41 @@ async function submit() {
           />
         </g>
 
+        <!-- Contractor mode: scaffolding and a tower crane appear -->
+        <g class="scaffold">
+          <rect class="pole" x="404" y="150" width="4" height="290" />
+          <rect class="pole" x="424" y="150" width="4" height="290" />
+          <rect class="pole" x="176" y="200" width="4" height="240" />
+          <rect class="pole" x="194" y="200" width="4" height="240" />
+          <g class="planks">
+            <rect v-for="n in 8" :key="'r' + n" x="400" :y="146 + n * 36" width="32" height="5" />
+            <rect v-for="n in 6" :key="'l' + n" x="172" :y="196 + n * 40" width="30" height="5" />
+          </g>
+          <g class="braces">
+            <line v-for="n in 7" :key="'b' + n" x1="408" :y1="151 + n * 36" x2="424" :y2="151 + (n + 1) * 36" />
+          </g>
+        </g>
+        <!-- kept within x 250-505 so it stays visible when the scene is cropped -->
+        <g class="crane">
+          <rect class="crane-mast" x="452" y="62" width="12" height="378" />
+          <line
+            v-for="n in 18"
+            :key="'m' + n"
+            class="crane-lattice"
+            x1="452"
+            :y1="62 + (n - 1) * 21"
+            x2="464"
+            :y2="62 + n * 21"
+          />
+          <rect class="crane-jib" x="250" y="54" width="254" height="9" />
+          <rect class="crane-cab" x="445" y="40" width="26" height="22" rx="3" />
+          <rect class="crane-weight" x="478" y="63" width="24" height="18" />
+          <g class="crane-load">
+            <line class="crane-cable" x1="360" y1="63" x2="360" y2="98" />
+            <rect class="crane-box" x="344" y="98" width="32" height="18" rx="2" />
+          </g>
+        </g>
+
         <!-- ground and trees -->
         <rect class="ground" x="0" y="440" width="600" height="60" />
         <rect class="path" x="268" y="440" width="64" height="60" />
@@ -245,7 +350,12 @@ async function submit() {
 
       <div class="scene-copy">
         <Transition name="fade-up" mode="out-in">
-          <div v-if="isSignup" key="signup">
+          <div v-if="isContractor" key="contractor">
+            <p class="eyebrow"><span class="hard-hat" aria-hidden="true">⛑️</span> For renovation contractors</p>
+            <h2>Grow your renovation business.</h2>
+            <p>Get quotation requests from HDB homeowners and reply with AI-assisted quotes.</p>
+          </div>
+          <div v-else-if="isSignup" key="signup">
             <p class="eyebrow">Join HDB EcoHome</p>
             <h2>Light up a greener home.</h2>
             <p>Save your household, compare energy plans and see where every kWh goes.</p>
@@ -256,19 +366,66 @@ async function submit() {
             <p>Your households, plans and saved contractors are right where you left them.</p>
           </div>
         </Transition>
-        <ul class="perks">
+        <ul v-if="isContractor" class="perks">
+          <li>📥 Quotation requests from homeowners</li>
+          <li>🤖 AI quotation drafts from your price list</li>
+          <li>✓ UEN verified by Corppass</li>
+        </ul>
+        <ul v-else class="perks">
           <li>⚡ Monthly kWh estimates</li>
           <li>🪪 Myinfo household autofill</li>
           <li>💾 Saved to your account</li>
         </ul>
       </div>
-      <p class="scene-hint">{{ celebrate ? 'Welcome home ✨' : 'Fill in the form to light up the block' }}</p>
+      <p class="scene-hint">
+        {{
+          celebrate
+            ? isContractor ? 'On our way to Corppass…' : 'Welcome home ✨'
+            : isContractor ? 'Your next project is one login away' : 'Fill in the form to light up the block'
+        }}
+      </p>
     </section>
 
     <!-- Form -->
     <section class="auth-panel">
       <div class="auth-card">
-        <div class="mode-switch" role="tablist" aria-label="Log in or sign up">
+        <!-- Who are you? -->
+        <div class="role-switch" role="radiogroup" aria-label="I am a" @keydown="onRoleKey">
+          <span class="role-pill" aria-hidden="true"></span>
+          <button
+            type="button"
+            role="radio"
+            class="role-tile"
+            :class="{ active: !isContractor }"
+            :aria-checked="!isContractor"
+            :tabindex="isContractor ? -1 : 0"
+            @click="setRole('client')"
+          >
+            <span class="role-icon" aria-hidden="true">🏠</span>
+            <span class="role-text">
+              <strong>Homeowner</strong>
+              <small>Plan &amp; save energy at home</small>
+            </span>
+          </button>
+          <button
+            type="button"
+            role="radio"
+            class="role-tile"
+            :class="{ active: isContractor }"
+            :aria-checked="isContractor"
+            :tabindex="isContractor ? 0 : -1"
+            @click="setRole('contractor')"
+          >
+            <span class="role-icon" aria-hidden="true">🛠️</span>
+            <span class="role-text">
+              <strong>Contractor</strong>
+              <small>Get renovation requests</small>
+            </span>
+          </button>
+        </div>
+        <p class="visually-hidden" aria-live="polite">{{ roleAnnouncement }}</p>
+
+        <div v-if="!isContractor" class="mode-switch" role="tablist" aria-label="Log in or sign up">
           <span class="mode-pill" aria-hidden="true"></span>
           <button
             type="button"
@@ -290,15 +447,32 @@ async function submit() {
           </button>
         </div>
 
-        <h1 class="auth-title">{{ isSignup ? 'Create your account' : 'Log in to EcoHome' }}</h1>
+        <h1 class="auth-title">
+          <template v-if="isContractor">Contractor log in</template>
+          <template v-else>{{ isSignup ? 'Create your account' : 'Log in to EcoHome' }}</template>
+        </h1>
         <p class="auth-subtitle">
-          {{ isSignup ? 'It takes less than a minute.' : 'Good to see you again.' }}
+          <template v-if="isContractor">Your quotation requests are waiting.</template>
+          <template v-else>{{ isSignup ? 'It takes less than a minute.' : 'Good to see you again.' }}</template>
         </p>
 
         <div aria-live="assertive">
           <div v-if="error" class="alert alert-danger py-2 small" role="alert">{{ error }}</div>
         </div>
 
+        <Transition name="role-swap" mode="out-in">
+        <!-- Contractors: Corppass only (it verifies the company's UEN) -->
+        <div v-if="isContractor" key="contractor" class="contractor-panel">
+          <a class="btn-corppass w-100" :href="corppassHref" @click="startCorppass">
+            <span class="cp-icon" aria-hidden="true">🏢</span>
+            <span>Log in with</span>
+            <span class="cp-wordmark">Corppass</span>
+          </a>
+          <p class="singpass-note">First time here? Logging in with Corppass creates your business account.</p>
+        </div>
+
+        <!-- Homeowners: email + password, or Singpass -->
+        <div v-else key="homeowner">
         <!-- Singpass is offered for logging in only; sign-up uses email -->
         <template v-if="!isSignup">
           <a class="btn-singpass w-100" :href="singpassHref">
@@ -435,8 +609,10 @@ async function submit() {
             </button>
           </fieldset>
         </form>
+        </div>
+        </Transition>
 
-        <p class="switch-text">
+        <p v-if="!isContractor" class="switch-text">
           <template v-if="isSignup">
             Already have an account?
             <button type="button" class="link-button" @click="switchMode('login')">Log in</button>

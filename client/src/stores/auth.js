@@ -9,10 +9,16 @@ export function safeRedirect(value) {
   return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') ? value : ''
 }
 
+// Where each kind of account lands after logging in.
+export function homeFor(user) {
+  return user?.role === 'contractor' ? '/ContractorDashboard' : '/'
+}
+
 export const useAuthStore = defineStore('auth', () => {
   const user = ref(null)
   const ready = ref(false)
   const loggedIn = computed(() => user.value !== null)
+  const isContractor = computed(() => user.value?.role === 'contractor')
   let pending = null
 
   // GET /auth/me once per page load; the session cookie does the rest.
@@ -64,7 +70,26 @@ export const useAuthStore = defineStore('auth', () => {
     return API_URL + '/auth/singpass/login?' + params
   }
 
-  return { user, ready, loggedIn, fetchMe, login, signup, logout, clear, singpassUrl }
+  // Corppass (contractors) is also a full-page redirect handled by the server.
+  function corppassUrl(returnTo = '') {
+    const params = new URLSearchParams()
+    if (safeRedirect(returnTo)) params.set('returnTo', returnTo)
+    return API_URL + '/auth/corppass/login' + (params.size ? '?' + params : '')
+  }
+
+  return {
+    user,
+    ready,
+    loggedIn,
+    isContractor,
+    fetchMe,
+    login,
+    signup,
+    logout,
+    clear,
+    singpassUrl,
+    corppassUrl,
+  }
 })
 
 // If the session expires while a page is open, send the user to log in again.

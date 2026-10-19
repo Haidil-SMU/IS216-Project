@@ -45,7 +45,7 @@ const rooms = computed(() => {
 const householdPlans = computed(() => {
   const result = []
   for (const saved of plans.value) {
-    if (saved.userId === userId.value) result.push(saved)
+    if (saved.householdId === userId.value) result.push(saved)
   }
   return result
 })
@@ -189,7 +189,7 @@ async function savePlan(copy = false) {
     await saveHousehold()
     const data = {
       name: plan.value.name,
-      userId: userId.value,
+      householdId: userId.value,
       profile: profile.value,
       days: plan.value.days,
       tariff: plan.value.tariff,

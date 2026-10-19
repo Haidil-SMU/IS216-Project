@@ -40,12 +40,19 @@ async function verifyPassword(password, stored) {
 // Used when the email does not exist, so a wrong email takes as long as a wrong password.
 const DUMMY_HASH = hashPassword(randomBytes(16).toString('hex'));
 
+// Accounts are homeowners ('client') unless they are Corppass contractors.
+function roleOf(user) {
+  return user.role === 'contractor' ? 'contractor' : 'client';
+}
+
 // Only these fields ever leave the server.
 function publicUser(user) {
   return {
     id: user._id.toString(),
     name: user.name,
     email: user.email || null,
+    role: roleOf(user),
+    uen: user.corppass?.uen || null,
     singpass: Boolean(user.singpass),
     hasPassword: Boolean(user.passwordHash),
   };
@@ -58,6 +65,7 @@ function startSession(req, user, { remember = false, keep = {} } = {}) {
     req.session.regenerate((error) => {
       if (error) return reject(error);
       req.session.userId = user._id.toString();
+      req.session.role = roleOf(user);
       Object.assign(req.session, keep);
       // "Remember me" keeps the cookie for 30 days, otherwise it ends with the browser.
       if (remember) req.session.cookie.maxAge = THIRTY_DAYS;
@@ -65,6 +73,17 @@ function startSession(req, user, { remember = false, keep = {} } = {}) {
       req.session.save((saveError) => (saveError ? reject(saveError) : resolve()));
     });
   });
+}
+
+// Contractors are shown by their business profile's company name once it exists.
+// (Looked up here rather than via contractor.js, which itself depends on this file.)
+async function displayName(user) {
+  if (roleOf(user) !== 'contractor') return user.name;
+  const id = user._id.toString();
+  const profile = await getDb()
+    .collection('contractors')
+    .findOne({ userId: { $in: [id, user._id] } }, { projection: { companyName: 1 } });
+  return profile?.companyName || user.name;
 }
 
 async function currentUser(req) {
@@ -80,6 +99,23 @@ function requireAuth(req, res, next) {
   }
   next();
 }
+
+// Homeowner-only and contractor-only routes. Older sessions without a role are homeowners.
+function requireRole(role) {
+  return (req, res, next) => {
+    if (!req.session || !req.session.userId) {
+      return res.status(401).json({ error: 'Please log in to continue.' });
+    }
+    if ((req.session.role || 'client') !== role) {
+      return res.status(403).json({
+        error: role === 'contractor' ? 'This is for contractor accounts.' : 'This is for homeowner accounts.',
+      });
+    }
+    next();
+  };
+}
+const requireClient = requireRole('client');
+const requireContractor = requireRole('contractor');
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -167,7 +203,16 @@ router.post('/logout', (req, res, next) => {
 router.get('/me', async (req, res) => {
   const user = await currentUser(req);
   if (!user) return res.status(401).json({ error: 'Not logged in.' });
-  res.json({ user: publicUser(user) });
+  res.json({ user: { ...publicUser(user), name: await displayName(user) } });
 });
 
-module.exports = { router, requireAuth, startSession, publicUser, currentUser, THIRTY_DAYS };
+module.exports = {
+  router,
+  requireAuth,
+  requireClient,
+  requireContractor,
+  startSession,
+  publicUser,
+  currentUser,
+  THIRTY_DAYS,
+};

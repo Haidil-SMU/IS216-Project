@@ -1,7 +1,7 @@
 // Turns a Singpass Myinfo person record into Energy Planner household details.
 // Only the derived fields are kept; the raw Myinfo record is never stored.
 const express = require('express');
-const { requireAuth } = require('./auth');
+const { requireClient } = require('./auth');
 
 // Myinfo HDB type codes -> planner flat types (hdb_rooms.json).
 const HDB_TYPES = {
@@ -85,13 +85,13 @@ function toHousehold(person = {}) {
 const router = express.Router();
 
 // GET: the household details retrieved at the last Singpass login, if any.
-router.get('/draft', requireAuth, (req, res) => {
+router.get('/draft', requireClient, (req, res) => {
   if (!req.session.myinfoDraft) return res.sendStatus(204);
   res.json(req.session.myinfoDraft);
 });
 
 // DELETE: the user dismissed the Myinfo details.
-router.delete('/draft', requireAuth, (req, res) => {
+router.delete('/draft', requireClient, (req, res) => {
   delete req.session.myinfoDraft;
   res.sendStatus(204);
 });

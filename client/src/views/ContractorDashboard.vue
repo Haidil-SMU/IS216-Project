@@ -1,19 +1,121 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import axios from 'axios'
+import { useAuthStore } from '@/stores/auth'
 
 const API = '/api'
+const auth = useAuthStore()
 
-const contractors = ref([])
 const requests = ref([])
-const selectedContractorId = ref('')
+
+// The logged-in contractor's business profile (set up after Corppass sign-up).
+const profile = ref(null)
+const needsSetup = ref(false)
+const serviceOptions = ref([])
+const editingProfile = ref(false)
+const savingProfile = ref(false)
+const profileError = ref('')
+const profileNotice = ref('')
+const profileTouched = ref(false)
+const uenLookup = ref(null)
+const profileForm = ref({
+  companyName: '',
+  location: '',
+  services: [],
+  description: '',
+  contactNumber: ''
+})
 
 const loading = ref(true)
 const errorMessage = ref('')
 const savingId = ref('')
 
 function getCurrentContractorId() {
-  return selectedContractorId.value
+  return profile.value ? getId(profile.value) : ''
+}
+
+// Same rules as the server (server/contractor.js).
+const profileErrors = computed(() => {
+  const f = profileForm.value
+  const result = {}
+  const name = f.companyName.trim()
+  if (name.length < 2 || name.length > 100) result.companyName = 'Enter your company name (2 to 100 characters).'
+  if (!f.location.trim() || f.location.trim().length > 60) result.location = 'Enter your location or service area.'
+  if (!f.services.length) result.services = 'Choose at least one renovation service.'
+  const about = f.description.trim()
+  if (about.length < 20 || about.length > 500) result.description = 'Describe your company in 20 to 500 characters.'
+  if (!/^[689]\d{7}$/.test(f.contactNumber.replace(/\s+/g, ''))) {
+    result.contactNumber = 'Enter an 8-digit Singapore number.'
+  }
+  return result
+})
+
+function profileFieldError(field) {
+  return profileTouched.value ? profileErrors.value[field] : ''
+}
+
+function fillProfileForm(source) {
+  profileForm.value = {
+    companyName: source?.companyName || '',
+    location: source?.location || '',
+    services: [...(source?.services || [])],
+    description: source?.description || '',
+    contactNumber: source?.contactNumber || ''
+  }
+  profileTouched.value = false
+  profileError.value = ''
+}
+
+// Corppass gives us the UEN but not the company name: suggest it (and services)
+// from BCA's register of contractors. Anything the user typed is left alone.
+async function suggestFromRegister() {
+  uenLookup.value = { loading: true }
+  try {
+    const { data } = await axios.get(`${API}/contractor/uen-lookup`)
+    uenLookup.value = data
+    if (data.found) {
+      if (!profileForm.value.companyName) profileForm.value.companyName = data.companyName
+      if (!profileForm.value.services.length) profileForm.value.services = [...data.services]
+    }
+  } catch {
+    uenLookup.value = { found: false, unavailable: true }
+  }
+}
+
+function startEditProfile() {
+  fillProfileForm(profile.value)
+  profileNotice.value = ''
+  editingProfile.value = true
+}
+
+// POST on first set-up, PUT when editing.
+async function saveProfile() {
+  profileTouched.value = true
+  profileError.value = ''
+  if (Object.keys(profileErrors.value).length) return
+
+  savingProfile.value = true
+  try {
+    const response = await axios({
+      method: needsSetup.value ? 'post' : 'put',
+      url: `${API}/contractor/profile`,
+      data: profileForm.value
+    })
+    const firstTime = needsSetup.value
+    profile.value = response.data.profile
+    // The account name is now the company name; refresh the navbar.
+    auth.fetchMe(true)
+    needsSetup.value = false
+    editingProfile.value = false
+    profileNotice.value = firstTime
+      ? "You're now listed in Find Contractors. Homeowners can request quotations from you."
+      : 'Profile saved.'
+    if (firstTime) await loadData()
+  } catch (error) {
+    profileError.value = error.response?.data?.error || 'Unable to save your profile.'
+  } finally {
+    savingProfile.value = false
+  }
 }
 
 function normalizeId(value) {
@@ -70,14 +172,21 @@ async function loadData() {
   errorMessage.value = ''
 
   try {
-    const [contractorRes, requestRes] = await Promise.all([
-      axios.get(`${API}/contractors`),
+    const [profileRes, requestRes] = await Promise.all([
+      axios.get(`${API}/contractor/profile`),
       axios.get(`${API}/quotation-requests`)
     ])
 
-    contractors.value = Array.isArray(contractorRes.data)
-      ? contractorRes.data
-      : contractorRes.data.contractors || []
+    serviceOptions.value = profileRes.data.services || []
+    if (profileRes.data.needsSetup) {
+      needsSetup.value = true
+      profile.value = null
+      fillProfileForm(null)
+      suggestFromRegister()
+    } else {
+      needsSetup.value = false
+      profile.value = profileRes.data.profile
+    }
 
     const data = Array.isArray(requestRes.data)
       ? requestRes.data
@@ -92,15 +201,6 @@ async function loadData() {
       aiDraft: null
     }))
 
-    if (
-      !contractors.value.some(
-        contractor => getId(contractor) === selectedContractorId.value
-      )
-    ) {
-      selectedContractorId.value = contractors.value.length
-        ? getId(contractors.value[0])
-        : ''
-    }
 
   } catch (error) {
     console.error(error)
@@ -438,28 +538,215 @@ onMounted(loadData)
       </p>
     </div>
 
-    <!-- CONTRACTOR SELECTOR -->
-    <div class="card border-0 shadow-sm rounded-4 mb-4">
-      <div class="card-body p-4">
+    <!-- BUSINESS PROFILE: set up after Corppass sign-up, then shown as a card -->
+    <div v-if="profileNotice" class="alert alert-success" role="status">
+      {{ profileNotice }}
+    </div>
 
-        <label class="form-label fw-semibold">
-          Viewing as Contractor
-        </label>
-
-        <select v-model="selectedContractorId" class="form-select">
-          <option
-            v-for="contractor in contractors"
-            :key="getId(contractor)"
-            :value="getId(contractor)"
-          >
-            {{ contractor.companyName }}
-          </option>
-        </select>
-
-        <p class="small text-muted mt-2 mb-0">
-          Temporary selector for testing. Authentication will replace this.
+    <div
+      v-if="!loading && (needsSetup || editingProfile)"
+      class="card border-0 shadow-sm rounded-4 mb-4"
+    >
+      <div class="card-body p-4 p-md-5">
+        <span class="badge bg-warning-subtle text-warning-emphasis mb-2">
+          {{ needsSetup ? 'Step 2 of 2' : 'Edit profile' }}
+        </span>
+        <h2 class="h4 fw-bold mb-1">
+          {{ needsSetup ? 'Set up your business profile' : 'Edit your business profile' }}
+        </h2>
+        <p class="text-muted mb-4">
+          This is the card homeowners see in <strong>Find Contractors</strong>. Every field is required.
         </p>
 
+        <div class="row g-4">
+          <!-- FORM -->
+          <form class="col-lg-7" novalidate @submit.prevent="saveProfile">
+            <fieldset :disabled="savingProfile">
+              <legend class="visually-hidden">Business profile</legend>
+
+              <div class="mb-3">
+                <label class="form-label fw-semibold small mb-1">UEN</label>
+                <div class="d-flex align-items-center gap-2">
+                  <input class="form-control" :value="auth.user?.uen" readonly />
+                  <span class="badge bg-success-subtle text-success-emphasis text-nowrap">
+                    ✓ Verified by Corppass
+                  </span>
+                </div>
+                <p v-if="needsSetup && uenLookup" class="small mt-1 mb-0" role="status">
+                  <span v-if="uenLookup.loading" class="text-muted">
+                    Looking up your UEN in BCA's register of contractors…
+                  </span>
+                  <span v-else-if="uenLookup.found" class="text-success">
+                    ✓ Found in BCA's register of contractors. Company name<template v-if="uenLookup.services?.length">
+                    and matching services</template> filled in; you can edit them.
+                  </span>
+                  <span v-else-if="uenLookup.unavailable" class="text-muted">
+                    Couldn't reach BCA's register right now. Please type your company name.
+                  </span>
+                  <span v-else class="text-muted">
+                    This UEN isn't in BCA's register of contractors. Please type your company name.
+                  </span>
+                </p>
+              </div>
+
+              <div class="mb-3">
+                <label for="cp-name" class="form-label fw-semibold small mb-1">Company name</label>
+                <input
+                  id="cp-name"
+                  v-model="profileForm.companyName"
+                  class="form-control"
+                  :class="{ 'is-invalid': profileFieldError('companyName') }"
+                  maxlength="100"
+                  placeholder="e.g. Sarah Home Solutions"
+                />
+                <div class="invalid-feedback">{{ profileFieldError('companyName') }}</div>
+              </div>
+
+              <div class="mb-3">
+                <label for="cp-location" class="form-label fw-semibold small mb-1">Location / service area</label>
+                <input
+                  id="cp-location"
+                  v-model="profileForm.location"
+                  class="form-control"
+                  :class="{ 'is-invalid': profileFieldError('location') }"
+                  maxlength="60"
+                  placeholder="e.g. Woodlands"
+                />
+                <div class="invalid-feedback">{{ profileFieldError('location') }}</div>
+              </div>
+
+              <fieldset class="mb-3">
+                <legend class="form-label fw-semibold small mb-1">Renovation services</legend>
+                <div class="d-flex flex-wrap gap-2">
+                  <template v-for="service in serviceOptions" :key="service">
+                    <input
+                      :id="'cp-service-' + service"
+                      v-model="profileForm.services"
+                      class="btn-check"
+                      type="checkbox"
+                      :value="service"
+                    />
+                    <label class="btn btn-sm btn-outline-success rounded-pill" :for="'cp-service-' + service">
+                      {{ service }}
+                    </label>
+                  </template>
+                </div>
+                <div v-if="profileFieldError('services')" class="small text-danger mt-1">
+                  {{ profileFieldError('services') }}
+                </div>
+              </fieldset>
+
+              <div class="mb-3">
+                <label for="cp-about" class="form-label fw-semibold small mb-1">About your company</label>
+                <textarea
+                  id="cp-about"
+                  v-model="profileForm.description"
+                  class="form-control"
+                  :class="{ 'is-invalid': profileFieldError('description') }"
+                  rows="3"
+                  maxlength="500"
+                  placeholder="What you specialise in, experience, warranties…"
+                ></textarea>
+                <div class="d-flex justify-content-between">
+                  <div class="invalid-feedback d-block">{{ profileFieldError('description') }}</div>
+                  <small class="text-muted">{{ profileForm.description.trim().length }}/500</small>
+                </div>
+              </div>
+
+              <div class="mb-4">
+                <label for="cp-phone" class="form-label fw-semibold small mb-1">Contact number</label>
+                <input
+                  id="cp-phone"
+                  v-model="profileForm.contactNumber"
+                  class="form-control"
+                  :class="{ 'is-invalid': profileFieldError('contactNumber') }"
+                  inputmode="tel"
+                  maxlength="9"
+                  placeholder="e.g. 92345678"
+                />
+                <div class="invalid-feedback">{{ profileFieldError('contactNumber') }}</div>
+              </div>
+
+              <div v-if="profileError" class="alert alert-danger py-2 small" role="alert">
+                {{ profileError }}
+              </div>
+
+              <div class="d-flex gap-2">
+                <button class="btn btn-success fw-semibold px-4" type="submit">
+                  <span v-if="savingProfile" class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                  {{ needsSetup ? 'Save and get listed' : 'Save profile' }}
+                </button>
+                <button
+                  v-if="!needsSetup"
+                  class="btn btn-outline-secondary"
+                  type="button"
+                  @click="editingProfile = false"
+                >
+                  Cancel
+                </button>
+              </div>
+            </fieldset>
+          </form>
+
+          <!-- LIVE PREVIEW: same card as Find Contractors -->
+          <div class="col-lg-5">
+            <p class="small text-muted fw-semibold mb-2">Preview: what homeowners see</p>
+            <div class="card h-100 border-0 shadow-sm rounded-4 contractor-card preview-card">
+              <div class="card-body p-4">
+                <span class="badge bg-success-subtle text-success-emphasis mb-3">Website-Registered</span>
+                <h5 class="fw-bold">{{ profileForm.companyName || 'Your company name' }}</h5>
+                <p class="text-muted small">{{ profileForm.location || 'Your location' }}</p>
+                <hr />
+                <p class="small text-muted mb-2">Renovation Services</p>
+                <div class="d-flex flex-wrap gap-2 mb-3">
+                  <span
+                    v-for="service in profileForm.services"
+                    :key="service"
+                    class="badge bg-success-subtle text-success-emphasis"
+                  >
+                    {{ service }}
+                  </span>
+                  <span v-if="!profileForm.services.length" class="small text-muted">No services chosen yet</span>
+                </div>
+                <p class="small text-muted mb-1">About Contractor</p>
+                <p>{{ profileForm.description || 'Tell homeowners about your company.' }}</p>
+                <p class="small text-muted mb-1">Contact Number</p>
+                <p class="fw-semibold">{{ profileForm.contactNumber || 'Not available' }}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div
+      v-else-if="!loading && profile"
+      class="card border-0 shadow-sm rounded-4 mb-4"
+    >
+      <div class="card-body p-4 d-flex flex-wrap gap-3 align-items-start justify-content-between">
+        <div>
+          <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
+            <h2 class="h5 fw-bold mb-0">{{ profile.companyName }}</h2>
+            <span class="badge bg-success-subtle text-success-emphasis">
+              ✓ UEN {{ profile.uenNo }} · Corppass verified
+            </span>
+          </div>
+          <p class="text-muted small mb-2">
+            📍 {{ profile.location }} · 📞 {{ profile.contactNumber }}
+          </p>
+          <div class="d-flex flex-wrap gap-2">
+            <span
+              v-for="service in profile.services"
+              :key="service"
+              class="badge bg-success-subtle text-success-emphasis"
+            >
+              {{ service }}
+            </span>
+          </div>
+        </div>
+        <button class="btn btn-outline-success btn-sm fw-semibold" type="button" @click="startEditProfile">
+          Edit profile
+        </button>
       </div>
     </div>
 
@@ -474,7 +761,7 @@ onMounted(loadData)
       <p class="text-muted mt-2">Loading requests...</p>
     </div>
 
-    <template v-else>
+    <template v-else-if="!needsSetup">
 
       <!-- SUMMARY -->
       <div class="row g-3 mb-4">

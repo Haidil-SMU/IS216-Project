@@ -10,6 +10,8 @@ const { connectDb, getClient, getDb, DB_NAME } = require('./db');
 const auth = require('./auth');
 const singpass = require('./singpass');
 const myinfo = require('./myinfo');
+const corppass = require('./corppass');
+const contractor = require('./contractor');
 
 const PORT = process.env.PORT || 8000;
 const SCENARIO_FILE = path.join(__dirname, 'gameScenarios.json');
@@ -94,12 +96,15 @@ app.use('/api', (req, res, next) => {
 });
 
 // ============================================================
-// Authentication: email + password, Singpass and Myinfo
+// Authentication: email + password and Singpass/Myinfo (homeowners),
+// Corppass (contractors)
 // ============================================================
 
 app.use('/api/auth/singpass', singpass.router);
 app.use('/api/auth', auth.router);
 app.use('/api/myinfo', myinfo.router);
+app.use('/api/auth/corppass', corppass.router);
+app.use('/api/contractor', contractor.router);
 
 // ============================================================
 // GET
@@ -110,6 +115,21 @@ app.get('/api', (req, res) => {
     res.status(200).json(loadGameData());
 });
 
+// Contractor routes act for the logged-in contractor's own profile only:
+// the contractorId always comes from their account, never from the browser.
+async function ownContractorProfile(req, res, next) {
+    const profile = await contractor.findProfile(req);
+    if (!profile) {
+        return res.status(403).json({ error: 'Please set up your business profile first.' });
+    }
+    const ownId = profile._id.toString();
+    if (req.body?.contractorId && String(req.body.contractorId) !== ownId) {
+        return res.status(403).json({ error: 'You can only work on your own quotation requests.' });
+    }
+    req.body.contractorId = ownId;
+    next();
+}
+
 // ============================================================
 // GET - Retrieve contractors from MongoDB
 // ============================================================
@@ -118,10 +138,12 @@ app.get('/api/contractors', async (req, res) => {
     try {
         const db = getDb();
 
-        const contractors = await db
+        // Only complete profiles are listed, and account ids stay private.
+        const contractors = (await db
             .collection('contractors')
-            .find({})
-            .toArray();
+            .find({}, { projection: { userId: 0 } })
+            .toArray())
+            .filter(contractor.isComplete);
 
         res.status(200).json(contractors);
 
@@ -137,7 +159,7 @@ app.get('/api/contractors', async (req, res) => {
 // POST - SUBMIT QUOTATION REQUEST
 // ============================================================
 
-app.post('/api/quotation-requests', async (req, res) => {
+app.post('/api/quotation-requests', auth.requireClient, async (req, res) => {
   try {
     const {
       contractorId,
@@ -190,6 +212,8 @@ app.post('/api/quotation-requests', async (req, res) => {
     const quotationRequest = {
       contractorId: new ObjectId(contractorId),
 
+      userId: new ObjectId(req.session.userId),
+
       householdId: householdId || null,
 
       household: {
@@ -240,9 +264,22 @@ app.get('/api/quotation-requests', async (req, res) => {
   try {
     const db = getDb();
 
+    // Homeowners see their own requests, contractors see requests sent to them,
+    // and visitors (e.g. on Find Contractors) see none.
+    let filter;
+    if (!req.session.userId) {
+      return res.status(200).json([]);
+    } else if (req.session.role === 'contractor') {
+      const profile = await contractor.findProfile(req);
+      if (!profile) return res.status(200).json([]);
+      filter = { contractorId: profile._id };
+    } else {
+      filter = { userId: new ObjectId(req.session.userId) };
+    }
+
     const requests = await db
       .collection('quotationRequests')
-      .find({})
+      .find(filter)
       .sort({ createdAt: -1 })
       .toArray();
 
@@ -260,7 +297,7 @@ app.get('/api/quotation-requests', async (req, res) => {
 // PUT - UPDATE PENDING QUOTATION REQUEST
 // ============================================================
 
-app.put('/api/quotation-requests/:requestId', async (req, res) => {
+app.put('/api/quotation-requests/:requestId', auth.requireClient, async (req, res) => {
   try {
     const { requestId } = req.params
 
@@ -308,6 +345,7 @@ app.put('/api/quotation-requests/:requestId', async (req, res) => {
         {
           _id: new ObjectId(requestId),
           contractorId: new ObjectId(contractorId),
+          userId: new ObjectId(req.session.userId),
           status: 'pending'
         },
         {
@@ -349,7 +387,7 @@ app.put('/api/quotation-requests/:requestId', async (req, res) => {
   }
 })
 // Contractor responds to a quotation request
-app.patch('/api/quotation-requests/:requestId/respond', async (req, res) => {
+app.patch('/api/quotation-requests/:requestId/respond', auth.requireContractor, ownContractorProfile, async (req, res) => {
   try {
     const { requestId } = req.params
     const { contractorId, status, quotation } = req.body
@@ -442,7 +480,7 @@ const upload = multer({
   }
 })
 
-app.post('/api/extract-pdf', (req, res) => {
+app.post('/api/extract-pdf', auth.requireContractor, (req, res) => {
   upload.single('file')(req, res, async error => {
     if (error) {
       return res.status(400).json({
@@ -485,7 +523,7 @@ app.post('/api/extract-pdf', (req, res) => {
 // POST - GENERATE AI QUOTATION DRAFT FROM PDF TEXT
 // ============================================================
 
-app.post('/api/generate-quotation', async (req, res) => {
+app.post('/api/generate-quotation', auth.requireContractor, ownContractorProfile, async (req, res) => {
   try {
     const { requestId, contractorId, pdfText } = req.body
 
@@ -749,19 +787,23 @@ function readJson(filename) {
 }
 
 // Hide MongoDB's own fields from the Vue page.
-const HIDDEN = { projection: { _id: 0, ownerId: 0 } };
+const HIDDEN = { projection: { _id: 0, userId: 0 } };
+
+// Households and plans belong to the logged-in homeowner: userId is their users._id.
+const ownedBy = (req) => ({ userId: new ObjectId(req.session.userId) });
 
 // Never let the request body choose its own id or owner.
 function cleanBody(body) {
-  const { _id, ownerId, id, ...rest } = body;
+  const { _id, ownerId, userId, id, ...rest } = body;
   return rest;
 }
 
+// A plan belongs to one of the homeowner's households (householdId).
 function validPlan(body) {
   return (
     body &&
     body.name &&
-    body.userId &&
+    body.householdId &&
     Array.isArray(body.items) &&
     body.estimate &&
     body.profile
@@ -769,44 +811,42 @@ function validPlan(body) {
 }
 
 // GET: return the catalogue plus this account's households and plans.
-app.get("/api/planner", auth.requireAuth, async (req, res) => {
+app.get("/api/planner", auth.requireClient, async (req, res) => {
   const catalogue = readJson("appliances.json");
   for (const appliance of catalogue.appliances) {
     appliance.type = appliance.type || appliance.name;
     appliance.location = appliance.location || "Not specified";
   }
-  const ownerId = req.session.userId;
   res.json({
     appliances: catalogue.appliances,
     flatTypes: readJson("hdb_rooms.json").flatTypes,
-    users: await getDb().collection("households").find({ ownerId }, HIDDEN).toArray(),
-    plans: await getDb().collection("plans").find({ ownerId }, HIDDEN).toArray(),
+    users: await getDb().collection("households").find(ownedBy(req), HIDDEN).toArray(),
+    plans: await getDb().collection("plans").find(ownedBy(req), HIDDEN).toArray(),
   });
 });
 
 // POST: add a new household for this account.
-app.post("/api/users", auth.requireAuth, async (req, res) => {
+app.post("/api/users", auth.requireClient, async (req, res) => {
   if (!req.body || !req.body.name) {
     return res.status(400).json({ error: "Household name is required." });
   }
   const user = { ...cleanBody(req.body), id: randomUUID() };
   await getDb()
     .collection("households")
-    .insertOne({ ...user, ownerId: req.session.userId });
+    .insertOne({ ...user, ...ownedBy(req) });
   delete req.session.myinfoDraft;
   res.status(201).json(user);
 });
 
 // PUT: replace this account's household matching the ID in the URL.
-app.put("/api/users/:id", auth.requireAuth, async (req, res) => {
+app.put("/api/users/:id", auth.requireClient, async (req, res) => {
   if (!req.body || !req.body.name) {
     return res.status(400).json({ error: "Household name is required." });
   }
-  const ownerId = req.session.userId;
   const user = { ...cleanBody(req.body), id: req.params.id };
   const result = await getDb()
     .collection("households")
-    .replaceOne({ ownerId, id: req.params.id }, { ...user, ownerId });
+    .replaceOne({ ...ownedBy(req), id: req.params.id }, { ...user, ...ownedBy(req) });
   if (result.matchedCount === 0) {
     return res.status(404).json({ error: "Household not found." });
   }
@@ -815,27 +855,26 @@ app.put("/api/users/:id", auth.requireAuth, async (req, res) => {
 });
 
 // POST: save a plan and the estimate calculated in EnergyPlanner.vue.
-app.post("/api/plans", auth.requireAuth, async (req, res) => {
+app.post("/api/plans", auth.requireClient, async (req, res) => {
   if (!validPlan(req.body)) {
     return res.status(400).json({ error: "Plan details are required." });
   }
   const plan = { ...cleanBody(req.body), id: randomUUID() };
   await getDb()
     .collection("plans")
-    .insertOne({ ...plan, ownerId: req.session.userId });
+    .insertOne({ ...plan, ...ownedBy(req) });
   res.status(201).json(plan);
 });
 
 // PUT: update one of this account's plans.
-app.put("/api/plans/:id", auth.requireAuth, async (req, res) => {
+app.put("/api/plans/:id", auth.requireClient, async (req, res) => {
   if (!validPlan(req.body)) {
     return res.status(400).json({ error: "Plan details are required." });
   }
-  const ownerId = req.session.userId;
   const plan = { ...cleanBody(req.body), id: req.params.id };
   const result = await getDb()
     .collection("plans")
-    .replaceOne({ ownerId, id: req.params.id }, { ...plan, ownerId });
+    .replaceOne({ ...ownedBy(req), id: req.params.id }, { ...plan, ...ownedBy(req) });
   if (result.matchedCount === 0) {
     return res.status(404).json({ error: "Plan not found." });
   }
@@ -843,10 +882,10 @@ app.put("/api/plans/:id", auth.requireAuth, async (req, res) => {
 });
 
 // DELETE: remove one of this account's plans.
-app.delete("/api/plans/:id", auth.requireAuth, async (req, res) => {
+app.delete("/api/plans/:id", auth.requireClient, async (req, res) => {
   const result = await getDb()
     .collection("plans")
-    .deleteOne({ ownerId: req.session.userId, id: req.params.id });
+    .deleteOne({ ...ownedBy(req), id: req.params.id });
   if (result.deletedCount === 0) {
     return res.status(404).json({ error: "Plan not found." });
   }

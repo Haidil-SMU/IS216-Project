@@ -684,3 +684,303 @@
     transition: none !important;
   }
 }
+
+/* ------------------------------------------------------------
+   Who are you? Homeowner / Contractor switch
+   ------------------------------------------------------------ */
+.auth-page.is-contractor {
+  --stripe: #f59f00; /* safety amber */
+  --amber: #f59f00;
+  --amber-dark: #8a5300;
+}
+
+.role-switch {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin-bottom: 14px;
+  padding: 6px;
+  border-radius: 18px;
+  background: #eef4f0;
+  transition: background-color 0.4s ease;
+}
+
+.is-contractor .role-switch {
+  background: #fff4e0;
+}
+
+.role-pill {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: calc(50% - 6px);
+  height: calc(100% - 12px);
+  border: 2px solid var(--green);
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 6px 16px rgba(19, 38, 29, 0.12);
+  transition:
+    transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-color 0.4s ease;
+}
+
+.is-contractor .role-pill {
+  border-color: var(--amber);
+  transform: translateX(100%);
+}
+
+.role-tile {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 64px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+  transition: color 0.3s ease;
+}
+
+.role-tile.active {
+  color: var(--ink);
+}
+
+.role-tile:focus-visible {
+  outline: 3px solid rgba(25, 135, 84, 0.45);
+  outline-offset: 2px;
+}
+
+.is-contractor .role-tile:focus-visible {
+  outline-color: rgba(245, 159, 0, 0.6);
+}
+
+.role-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: rgba(19, 38, 29, 0.06);
+  font-size: 1.3rem;
+  transition:
+    transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1),
+    background-color 0.3s ease;
+}
+
+.role-tile.active .role-icon {
+  background: #e3f4ea;
+  transform: translateY(-2px) scale(1.08);
+}
+
+.is-contractor .role-tile.active .role-icon {
+  background: #ffe8bf;
+}
+
+.role-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.2;
+}
+
+.role-text strong {
+  font-size: 0.95rem;
+}
+
+.role-text small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.is-contractor .mode-switch {
+  background: #fdf1dc;
+}
+
+.is-contractor .mode-switch button.active {
+  color: var(--amber-dark);
+}
+
+/* Contractor panel: Corppass only */
+.contractor-intro {
+  margin-bottom: 16px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.btn-corppass {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-height: 50px;
+  padding: 0.6rem 1.25rem;
+  border-radius: 12px;
+  background: #1b2a4a;
+  color: #fff;
+  font-weight: 600;
+  text-decoration: none;
+  transition:
+    background-color 0.2s ease,
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.btn-corppass:hover,
+.btn-corppass:focus-visible {
+  background: #0f1a33;
+  color: #fff;
+  box-shadow: 0 8px 20px rgba(27, 42, 74, 0.3);
+  transform: translateY(-1px);
+}
+
+.btn-corppass:focus-visible {
+  outline: 3px solid rgba(27, 42, 74, 0.4);
+  outline-offset: 2px;
+}
+
+.cp-wordmark {
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.role-swap-enter-active,
+.role-swap-leave-active {
+  transition:
+    opacity 0.28s ease,
+    transform 0.28s ease;
+}
+
+.role-swap-enter-from {
+  opacity: 0;
+  transform: translateX(16px);
+}
+
+.role-swap-leave-to {
+  opacity: 0;
+  transform: translateX(-16px);
+}
+
+/* Scaffolding and crane (contractor mode) */
+.scaffold,
+.crane {
+  opacity: 0;
+  transition:
+    transform 0.9s cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 0.6s ease;
+}
+
+.scaffold {
+  transform: translateY(300px);
+}
+
+.crane {
+  transform: rotate(-30deg);
+  transform-origin: 458px 62px;
+}
+
+.is-contractor .scaffold,
+.is-contractor .crane {
+  opacity: 1;
+  transform: none;
+}
+
+.scaffold .pole {
+  fill: #9aa5ad;
+}
+
+.scaffold .planks rect {
+  fill: #d9a441;
+}
+
+.scaffold .braces line {
+  stroke: #9aa5ad;
+  stroke-width: 2;
+}
+
+.crane-mast,
+.crane-jib {
+  fill: #f2b705;
+}
+
+.crane-lattice {
+  stroke: #b78900;
+  stroke-width: 2;
+}
+
+.crane-cab {
+  fill: #e8590c;
+}
+
+.crane-weight {
+  fill: #495057;
+}
+
+.crane-cable {
+  stroke: #343a40;
+  stroke-width: 2;
+}
+
+.crane-box {
+  fill: #e8590c;
+}
+
+.crane-load {
+  transform-origin: 360px 63px;
+  animation: dangle 3.2s ease-in-out infinite;
+}
+
+.hard-hat {
+  display: inline-block;
+  animation: bob 2.4s ease-in-out infinite;
+}
+
+@keyframes dangle {
+  0%,
+  100% {
+    transform: rotate(-4deg);
+  }
+  50% {
+    transform: rotate(4deg);
+  }
+}
+
+@keyframes bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2px);
+  }
+}
+
+@media (max-width: 575.98px) {
+  .role-tile {
+    justify-content: center;
+    min-height: 52px;
+    padding: 8px;
+  }
+
+  .role-text small {
+    display: none;
+  }
+
+  .role-icon {
+    width: 32px;
+    height: 32px;
+    font-size: 1.1rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .crane-load,
+  .hard-hat {
+    animation: none;
+  }
+}

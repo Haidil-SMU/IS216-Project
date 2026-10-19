@@ -2,14 +2,13 @@
 // PAR -> authorize -> token (PKCE, private_key_jwt, DPoP) -> userinfo (encrypted Myinfo data).
 // Locally this runs against MockPass; point the SINGPASS_* settings at Singpass to go live.
 const express = require('express');
-const fs = require('fs');
-const path = require('path');
 const { ObjectId } = require('mongodb');
 const client = require('openid-client');
 const jose = require('jose');
 const { getDb } = require('./db');
 const { startSession } = require('./auth');
 const { toHousehold, personName } = require('./myinfo');
+const { loadKeys, getOidcConfig, safeReturnTo } = require('./oidc');
 
 const DISCOVERY_URL =
   process.env.SINGPASS_DISCOVERY_URL ||
@@ -20,63 +19,8 @@ const REDIRECT_URI =
 const SCOPES =
   process.env.SINGPASS_SCOPES ||
   'openid user.identity name hdbtype housingtype regadd marital childrenbirthrecords';
-const KEYS_FILE =
-  process.env.SINGPASS_KEYS_FILE || path.join(__dirname, 'keys', 'singpass-jwks.json');
 
-// ------------------------------------------------------------
-// Keys and Singpass configuration (loaded once, retried on failure)
-// ------------------------------------------------------------
-
-let keysPromise;
-function loadKeys() {
-  keysPromise ??= (async () => {
-    if (!fs.existsSync(KEYS_FILE)) {
-      throw new Error(`Singpass keys not found at ${KEYS_FILE}. Run "pnpm keys" in server/.`);
-    }
-    const { keys } = JSON.parse(fs.readFileSync(KEYS_FILE, 'utf8'));
-    const sigJwk = keys.find((key) => key.use === 'sig');
-    const encJwk = keys.find((key) => key.use === 'enc');
-    if (!sigJwk || !encJwk) throw new Error('Singpass key file needs a "sig" and an "enc" key.');
-    const publicJwk = ({ d, ...rest }) => rest;
-    return {
-      sig: { key: await jose.importJWK(sigJwk, 'ES256'), kid: sigJwk.kid },
-      enc: { key: await jose.importJWK(encJwk, encJwk.alg), kid: encJwk.kid, alg: encJwk.alg },
-      publicJwks: { keys: [publicJwk(sigJwk), publicJwk(encJwk)] },
-    };
-  })().catch((error) => {
-    keysPromise = undefined;
-    throw error;
-  });
-  return keysPromise;
-}
-
-let configPromise;
-function getConfig() {
-  configPromise ??= (async () => {
-    const keys = await loadKeys();
-    const url = new URL(DISCOVERY_URL);
-    const config = await client.discovery(
-      url,
-      CLIENT_ID,
-      { id_token_signed_response_alg: 'ES256' },
-      client.PrivateKeyJwt(keys.sig),
-      // MockPass runs on plain http; real Singpass is always https.
-      url.protocol === 'http:' ? { execute: [client.allowInsecureRequests] } : undefined,
-    );
-    // Singpass encrypts the ID token for us, and we check its signature.
-    client.enableDecryptingResponses(config, ['A256GCM', 'A256CBC-HS512'], keys.enc);
-    client.enableNonRepudiationChecks(config);
-    return {
-      config,
-      keys,
-      remoteJwks: jose.createRemoteJWKSet(new URL(config.serverMetadata().jwks_uri)),
-    };
-  })().catch((error) => {
-    configPromise = undefined;
-    throw error;
-  });
-  return configPromise;
-}
+const getConfig = () => getOidcConfig({ discoveryUrl: DISCOVERY_URL, clientId: CLIENT_ID });
 
 // The DPoP key pair must survive the trip to Singpass and back, so it is kept
 // in the session as JWKs.
@@ -94,13 +38,6 @@ async function dpopHandle(config, { publicJwk, privateJwk }) {
     privateKey: await jose.importJWK(privateJwk, 'ES256'),
   };
   return client.getDPoPHandle(config, keyPair);
-}
-
-// Only allow redirects back into this site ("/path", never "//other-site").
-function safeReturnTo(value) {
-  return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//')
-    ? value
-    : '';
 }
 
 // Myinfo arrives as a signed JWT inside an encrypted JWE.
@@ -133,8 +70,8 @@ async function readMyinfo({ config, keys, remoteJwks }, accessToken, dpop, expec
 
 const router = express.Router();
 
-// GET: our public keys. Singpass uses them to check our client assertion and to
-// encrypt the ID token and Myinfo data for us.
+// GET: our public keys. Singpass and Corppass use them to check our client
+// assertion and to encrypt the ID token and Myinfo data for us.
 router.get('/jwks', async (req, res) => {
   const { publicJwks } = await loadKeys();
   res.json(publicJwks);
@@ -245,7 +182,7 @@ router.get('/callback', async (req, res) => {
     // Offer the Myinfo household when it was asked for, or when the account has none yet.
     const hasHousehold = await getDb()
       .collection('households')
-      .countDocuments({ ownerId: user._id.toString() }, { limit: 1 });
+      .countDocuments({ userId: user._id }, { limit: 1 });
     const offerDraft = flow.mode === 'myinfo' || !hasHousehold;
 
     await startSession(req, user, {
