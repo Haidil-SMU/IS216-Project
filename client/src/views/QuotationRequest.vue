@@ -360,12 +360,12 @@ onMounted(getData)
 
         <p>{{ successMessage }}</p>
 
-        <button
-          class="btn btn-success mt-3"
-          @click="router.push('/SavedContractors')"
-        >
-          View Saved Contractors
-        </button>
+<button
+  class="btn btn-success mt-3"
+  @click="router.push('/MyQuotations')"
+>
+  View My Quotations →
+</button>
       </div>
     </div>
 

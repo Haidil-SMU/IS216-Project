@@ -33,6 +33,10 @@
           <RouterLink class="nav-link" to="/Contractors">
             Find Contractors
           </RouterLink>
+<!-- this is temporary, will move to only contractor's account once caleb has implemented auth -->
+          <RouterLink class="nav-link" to="/ContractorDashboard">
+            Contractor Dashboard
+          </RouterLink>
 
           <RouterLink class="nav-link" to="/3d">
             3D Spatial
