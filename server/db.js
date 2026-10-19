@@ -13,10 +13,23 @@ async function connectDb() {
   await client.connect();
   db = client.db(DB_NAME);
 
-  // Emails and Singpass accounts must be unique, but only when they exist.
-  await db.collection('users').createIndex(
+  // Emails and Singpass accounts must be unique, but only when they exist
+  // (Singpass-only accounts have no email). Replace an older non-partial
+  // email index, which would allow only one account without an email.
+  const users = db.collection('users');
+  // A brand-new database has no users collection (and so no indexes) yet.
+  const existingIndexes = await users.indexes().catch((error) => {
+    if (error.codeName === 'NamespaceNotFound') return [];
+    throw error;
+  });
+  const oldEmailIndex = existingIndexes.find((index) => index.name === 'email_1');
+  if (oldEmailIndex && !oldEmailIndex.partialFilterExpression) {
+    await users.dropIndex('email_1');
+    console.log('Replaced users.email_1 with a partial unique index.');
+  }
+  await users.createIndex(
     { email: 1 },
-    { unique: true, partialFilterExpression: { email: { $type: 'string' } } },
+    { name: 'email_1', unique: true, partialFilterExpression: { email: { $type: 'string' } } },
   );
   await db.collection('users').createIndex(
     { 'singpass.uuid': 1 },

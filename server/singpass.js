@@ -226,10 +226,14 @@ router.get('/callback', async (req, res) => {
       user = await users.findOne({ _id: currentId });
     } else if (linked) {
       user = linked;
-      await users.updateOne({ _id: user._id }, { $set: { lastLoginAt: now } });
+      const update = { lastLoginAt: now };
+      // Replace the placeholder name once Myinfo provides a real one.
+      if (user.name === 'Singpass user' && personName(person)) update.name = personName(person);
+      await users.updateOne({ _id: user._id }, { $set: update });
     } else {
       user = {
         name: personName(person) || 'Singpass user',
+        role: 'client',
         singpass: { uuid, linkedAt: now },
         createdAt: now,
         lastLoginAt: now,

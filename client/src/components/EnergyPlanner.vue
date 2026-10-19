@@ -100,6 +100,13 @@ async function loadMyinfoDraft() {
   const response = await axios.get(API_URL + '/myinfo/draft')
   if (response.status !== 200 || !response.data) return
   const draft = response.data
+  // Singpass worked, but this account returned no Myinfo details to fill in.
+  if (!draft.myinfo?.fields?.length) {
+    await axios.delete(API_URL + '/myinfo/draft')
+    error.value =
+      'Singpass did not return any Myinfo details for this account, so please fill in your household yourself.'
+    return
+  }
   userId.value = ''
   profile.value = {
     ...profile.value,

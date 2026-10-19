@@ -460,6 +460,10 @@
 }
 
 /* Password rating styled like Singapore's energy label */
+.rating-wrap {
+  margin-bottom: 1rem;
+}
+
 .energy-label {
   display: flex;
   align-items: center;

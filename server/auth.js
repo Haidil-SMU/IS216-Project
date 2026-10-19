@@ -10,6 +10,18 @@ const scryptAsync = promisify(scrypt);
 const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// At least 8 characters with an uppercase letter, a lowercase letter, a number and a symbol.
+function strongPassword(password) {
+  return (
+    password.length >= 8 &&
+    password.length <= 128 &&
+    /[A-Z]/.test(password) &&
+    /[a-z]/.test(password) &&
+    /\d/.test(password) &&
+    /[^A-Za-z0-9\s]/.test(password)
+  );
+}
+
 // Passwords are stored as "scrypt$salt$hash" (both base64).
 async function hashPassword(password) {
   const salt = randomBytes(16);
@@ -91,10 +103,11 @@ router.post('/signup', authLimiter, async (req, res) => {
   if (!EMAIL_PATTERN.test(email) || email.length > 254) {
     return res.status(400).json({ error: 'Please enter a valid email address.' });
   }
-  if (password.length < 8 || password.length > 128 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) {
-    return res
-      .status(400)
-      .json({ error: 'Password must be at least 8 characters with a letter and a number.' });
+  if (!strongPassword(password)) {
+    return res.status(400).json({
+      error:
+        'Password must be at least 8 characters with an uppercase letter, a lowercase letter, a number and a symbol.',
+    });
   }
 
   const users = getDb().collection('users');
@@ -103,6 +116,7 @@ router.post('/signup', authLimiter, async (req, res) => {
     name,
     email,
     passwordHash: await hashPassword(password),
+    role: 'client',
     createdAt: now,
     lastLoginAt: now,
   };

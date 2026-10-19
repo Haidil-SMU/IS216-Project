@@ -64,8 +64,9 @@ const errors = computed(() => {
   if (isSignup.value && !f.name.trim()) result.name = 'Please enter your name.'
   if (!EMAIL_PATTERN.test(f.email.trim())) result.email = 'Please enter a valid email address.'
   if (isSignup.value) {
-    if (f.password.length < 8 || !/[A-Za-z]/.test(f.password) || !/\d/.test(f.password)) {
-      result.password = 'Use at least 8 characters with a letter and a number.'
+    const p = f.password
+    if (p.length < 8 || !/[A-Z]/.test(p) || !/[a-z]/.test(p) || !/\d/.test(p) || !/[^A-Za-z0-9\s]/.test(p)) {
+      result.password = 'Use at least 8 characters with an uppercase letter, a lowercase letter, a number and a symbol.'
     }
     if (!f.confirm || f.confirm !== f.password) result.confirm = 'Passwords do not match.'
   } else if (!f.password) {
@@ -298,13 +299,16 @@ async function submit() {
           <div v-if="error" class="alert alert-danger py-2 small" role="alert">{{ error }}</div>
         </div>
 
-        <a class="btn-singpass w-100" :href="singpassHref">
-          <span>{{ isSignup ? 'Sign up with' : 'Log in with' }}</span>
-          <span class="sp-wordmark">singpass</span>
-        </a>
-        <p class="singpass-note">We'll fill in your household details from Myinfo.</p>
+        <!-- Singpass is offered for logging in only; sign-up uses email -->
+        <template v-if="!isSignup">
+          <a class="btn-singpass w-100" :href="singpassHref">
+            <span>Log in with</span>
+            <span class="sp-wordmark">singpass</span>
+          </a>
+          <p class="singpass-note">We'll fill in your household details from Myinfo.</p>
 
-        <div class="divider"><span>or use email</span></div>
+          <div class="divider"><span>or use email</span></div>
+        </template>
 
         <form novalidate @submit.prevent="submit">
           <fieldset :disabled="busy">
@@ -382,19 +386,24 @@ async function submit() {
 
             <Transition name="field">
               <div v-if="isSignup" class="field">
-                <!-- Password strength, styled like Singapore's energy label ticks -->
-                <div class="energy-label" :data-score="strength">
-                  <span class="energy-label-title">Password rating</span>
-                  <span class="ticks" aria-hidden="true">
-                    <span v-for="n in 5" :key="n" class="tick" :class="{ on: n <= strength }">✓</span>
-                  </span>
-                  <span class="energy-label-text">{{ STRENGTH_LABELS[strength] || 'Not rated' }}</span>
-                </div>
+                <!-- Password strength, styled like Singapore's energy label ticks.
+                     Only shown once the user starts typing a password. -->
+                <Transition name="field">
+                  <div v-if="form.password" class="rating-wrap">
+                    <div class="energy-label" :data-score="strength">
+                      <span class="energy-label-title">Password rating</span>
+                      <span class="ticks" aria-hidden="true">
+                        <span v-for="n in 5" :key="n" class="tick" :class="{ on: n <= strength }">✓</span>
+                      </span>
+                      <span class="energy-label-text">{{ STRENGTH_LABELS[strength] }}</span>
+                    </div>
+                  </div>
+                </Transition>
                 <span class="visually-hidden" aria-live="polite">
-                  Password strength: {{ STRENGTH_LABELS[strength] || 'not rated' }}
+                  {{ form.password ? 'Password strength: ' + STRENGTH_LABELS[strength] : '' }}
                 </span>
 
-                <div class="form-floating mt-3">
+                <div class="form-floating">
                   <input
                     id="auth-confirm"
                     v-model="form.confirm"

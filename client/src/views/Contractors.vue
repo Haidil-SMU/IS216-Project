@@ -1,7 +1,13 @@
 <script setup>
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import axios from 'axios'
 import workheads from '@/data/workheads.json'
+import { useAuthStore } from '@/stores/auth'
+
+const SAVED_API = '/api/saved-contractors'
+const auth = useAuthStore()
+const router = useRouter()
 
 // Data
 const contractors = ref([])
@@ -10,8 +16,20 @@ const showResults = ref(false)
 const loading = ref(false)
 const errorMessage = ref('')
 
-// Saved contractors
-const savedContractors = ref(JSON.parse(localStorage.getItem('savedContractors') || '[]'))
+// Saved contractors (stored in the user's account)
+const savedContractors = ref([])
+const savingUen = ref('')
+const saveError = ref('')
+
+onMounted(async () => {
+  if (!auth.user) return
+  try {
+    const response = await axios.get(SAVED_API)
+    savedContractors.value = response.data
+  } catch (error) {
+    console.log(error.message)
+  }
+})
 
 // Services shown in the questionnaire
 const services = [
@@ -81,14 +99,34 @@ async function getContractors() {
   }
 }
 
-// Save contractor to localStorage
-function saveContractor(contractor) {
+// Save contractor to the user's account (log in first if needed)
+async function saveContractor(contractor) {
+  if (!auth.user) {
+    router.push({ path: '/login', query: { redirect: '/Contractors' } })
+    return
+  }
   if (savedContractors.value.some(c => c.uen_no === contractor.uen_no)) {
     return
   }
 
-  savedContractors.value.push(contractor)
-  localStorage.setItem('savedContractors', JSON.stringify(savedContractors.value))
+  savingUen.value = contractor.uen_no
+  saveError.value = ''
+  try {
+    const response = await axios.post(SAVED_API, {
+      ...contractor,
+      savedId: `api-${contractor.uen_no}`,
+      source: 'api'
+    })
+    savedContractors.value.push(response.data)
+  } catch (error) {
+    if (error.response?.status === 409) {
+      savedContractors.value.push(contractor)
+    } else {
+      saveError.value = error.response?.data?.error || 'Unable to save contractor'
+    }
+  } finally {
+    savingUen.value = ''
+  }
 }
 </script>
 
@@ -149,6 +187,10 @@ function saveContractor(contractor) {
         </div>
 
       </div>
+    </div>
+
+    <div v-if="saveError" class="alert alert-danger rounded-3" role="alert">
+      {{ saveError }}
     </div>
 
     <!-- LOADING -->
@@ -253,7 +295,7 @@ function saveContractor(contractor) {
 
                 <button
                   class="btn btn-success flex-fill fw-semibold"
-                  :disabled="savedContractors.some(c => c.uen_no === contractor.uen_no)"
+                  :disabled="savingUen === contractor.uen_no || savedContractors.some(c => c.uen_no === contractor.uen_no)"
                   @click="saveContractor(contractor)"
                 >
                   {{ savedContractors.some(c => c.uen_no === contractor.uen_no) ? '✓ Saved' : '♡ Save Contractor' }}

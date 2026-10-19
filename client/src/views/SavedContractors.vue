@@ -1,16 +1,73 @@
 <script setup>
-import { ref,computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import axios from 'axios'
 import workheads from '@/data/workheads.json'
 
-// Load saved contractors from localStorage
-const savedContractors = ref(JSON.parse(localStorage.getItem('savedContractors') || '[]'))
+const SAVED_API = '/api/saved-contractors'
 
-// Load saved quotations from localStorage
-const quotations = ref(JSON.parse(localStorage.getItem('contractorQuotations') || '{}'))
+// Saved contractors, quotations and notes are stored in the user's account.
+const savedContractors = ref([])
+const quotations = ref({})
+const descriptions = ref({})
+const loading = ref(true)
+const loadError = ref('')
+const saveNotice = ref('')
+const saving = ref(false)
 
-// Load quotation descriptions from localStorage
-const descriptions = ref(JSON.parse(localStorage.getItem('quotationDescriptions') || '{}'))
+function savedIdOf(contractor) {
+  return contractor.savedId || `api-${contractor.uen_no}`
+}
+
+// One-time move of contractors saved in this browser (before accounts) into the account.
+async function importFromBrowser() {
+  let local
+  try {
+    local = JSON.parse(localStorage.getItem('savedContractors') || '[]')
+  } catch {
+    local = []
+  }
+  if (!Array.isArray(local) || local.length === 0) return
+
+  const localQuotes = JSON.parse(localStorage.getItem('contractorQuotations') || '{}')
+  const localNotes = JSON.parse(localStorage.getItem('quotationDescriptions') || '{}')
+  for (const contractor of local) {
+    try {
+      await axios.post(SAVED_API, {
+        ...contractor,
+        savedId: savedIdOf(contractor),
+        source: 'api',
+        quotation: localQuotes[contractor.uen_no] || {},
+        description: localNotes[contractor.uen_no] || '',
+      })
+    } catch (error) {
+      if (error.response?.status !== 409) throw error
+    }
+  }
+  localStorage.removeItem('savedContractors')
+  localStorage.removeItem('contractorQuotations')
+  localStorage.removeItem('quotationDescriptions')
+}
+
+async function loadSaved() {
+  loading.value = true
+  loadError.value = ''
+  try {
+    await importFromBrowser()
+    const response = await axios.get(SAVED_API)
+    savedContractors.value = response.data
+    quotations.value = {}
+    descriptions.value = {}
+    for (const contractor of savedContractors.value) {
+      quotations.value[contractor.uen_no] = { ...(contractor.quotation || {}) }
+      descriptions.value[contractor.uen_no] = contractor.description || ''
+    }
+  } catch (error) {
+    console.log(error.message)
+    loadError.value = 'Unable to load your saved contractors. Check that the server is running.'
+  }
+  loading.value = false
+}
+onMounted(loadSaved)
 
 const requiredServices = computed(() => {
     const services = new Set();
@@ -31,31 +88,43 @@ const requiredServices = computed(() => {
     return [...services];
 });
 
-for (const contractor of savedContractors.value) {
-  if (!quotations.value[contractor.uen_no]) {
-    quotations.value[contractor.uen_no] = {}
-  }
-
-  if (!descriptions.value[contractor.uen_no]) {
-    descriptions.value[contractor.uen_no] = ''
-  }
-}
-
 // AI results
 const aiAnalysis = ref('')
 const aiLoading = ref(false)
 const aiError = ref('')
 
-// Remove a saved contractor
-function removeContractor(uen) {
-  savedContractors.value = savedContractors.value.filter(c => c.uen_no !== uen)
-  localStorage.setItem('savedContractors', JSON.stringify(savedContractors.value))
+// Remove a saved contractor from the account
+async function removeContractor(uen) {
+  const contractor = savedContractors.value.find(c => c.uen_no === uen)
+  if (!contractor) return
+  try {
+    await axios.delete(`${SAVED_API}/${encodeURIComponent(savedIdOf(contractor))}`)
+    savedContractors.value = savedContractors.value.filter(c => c.uen_no !== uen)
+  } catch (error) {
+    loadError.value = error.response?.data?.error || 'Unable to remove contractor'
+  }
 }
 
-// Save quotations
-function saveQuotations() {
-  localStorage.setItem('contractorQuotations', JSON.stringify(quotations.value))
-  localStorage.setItem('quotationDescriptions', JSON.stringify(descriptions.value))
+// Save every contractor's quotation prices and notes to the account
+async function saveQuotations() {
+  saving.value = true
+  saveNotice.value = ''
+  loadError.value = ''
+  try {
+    await Promise.all(
+      savedContractors.value.map(contractor =>
+        axios.put(`${SAVED_API}/${encodeURIComponent(savedIdOf(contractor))}`, {
+          quotation: quotations.value[contractor.uen_no],
+          description: descriptions.value[contractor.uen_no]
+        })
+      )
+    )
+    saveNotice.value = 'Quotations saved to your account.'
+  } catch (error) {
+    loadError.value = error.response?.data?.error || 'Unable to save quotations'
+  } finally {
+    saving.value = false
+  }
 }
 
 // Calculate total quotation for a contractor
@@ -75,7 +144,7 @@ async function analyzeQuotations() {
   aiError.value = ''
   aiAnalysis.value = ''
 
-  saveQuotations()
+  await saveQuotations()
 
   try {
     const contractors = savedContractors.value.map(contractor => ({
@@ -131,8 +200,17 @@ async function analyzeQuotations() {
       <p class="text-muted">{{ savedContractors.length }} contractor(s) saved</p>
     </div>
 
+    <div v-if="loadError" class="alert alert-danger rounded-3" role="alert">{{ loadError }}</div>
+    <div v-if="saveNotice" class="alert alert-success rounded-3" role="status">{{ saveNotice }}</div>
+
+    <!-- LOADING -->
+    <div v-if="loading" class="text-center py-5">
+      <div class="spinner-border text-success mb-3" role="status"></div>
+      <p class="text-muted">Loading your saved contractors...</p>
+    </div>
+
     <!-- NO SAVED CONTRACTORS -->
-    <div v-if="savedContractors.length === 0" class="card border-0 shadow-sm rounded-4">
+    <div v-else-if="savedContractors.length === 0" class="card border-0 shadow-sm rounded-4">
       <div class="card-body text-center p-5">
         <h5 class="fw-bold mb-3">No Saved Contractors Yet</h5>
         <p class="text-muted">Start exploring renovation contractors and save the ones you're interested in.</p>
@@ -254,8 +332,8 @@ async function analyzeQuotations() {
               </div>
 
               <!-- SAVE BUTTON -->
-              <button class="btn btn-success w-100 fw-semibold mb-3" @click="saveQuotations">
-                Save Quotations
+              <button class="btn btn-success w-100 fw-semibold mb-3" :disabled="saving" @click="saveQuotations">
+                {{ saving ? 'Saving...' : 'Save Quotations' }}
               </button>
 
               <!-- DISPLAY QUOTATIONS -->

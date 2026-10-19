@@ -9,6 +9,7 @@ const { connectDb, getClient, getDb, DB_NAME } = require('./db');
 const auth = require('./auth');
 const singpass = require('./singpass');
 const myinfo = require('./myinfo');
+const savedContractors = require('./savedContractors');
 
 const PORT = process.env.PORT || 8000;
 const SCENARIO_FILE = path.join(__dirname, 'gameScenarios.json');
@@ -99,6 +100,7 @@ app.use('/api', (req, res, next) => {
 app.use('/api/auth/singpass', singpass.router);
 app.use('/api/auth', auth.router);
 app.use('/api/myinfo', myinfo.router);
+app.use('/api/saved-contractors', savedContractors.router);
 
 // ============================================================
 // GET

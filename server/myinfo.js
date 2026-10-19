@@ -65,7 +65,10 @@ function toHousehold(person = {}) {
   const flatType = flatTypeOf(person);
   const address = formatAddress(person.regadd);
 
-  const fields = ['occupants'];
+  // Occupants only count as "from Myinfo" when there was family data to estimate from.
+  const hasFamilyData =
+    (person.marital && !person.marital.unavailable) || Array.isArray(person.childrenbirthrecords);
+  const fields = hasFamilyData ? ['occupants'] : [];
   if (fullName) fields.push('name');
   if (flatType) fields.push('flatType');
   if (address) fields.push('address');
