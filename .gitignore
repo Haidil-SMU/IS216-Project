@@ -45,3 +45,4 @@ test-results/
 playwright-report/
 # Singpass private keys
 server/keys/
+*.agents
