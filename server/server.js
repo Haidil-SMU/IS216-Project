@@ -798,6 +798,14 @@ function cleanBody(body) {
   return rest;
 }
 
+// The shared households collection (also used by 3D Spatial) validates that
+// every household has a string flatTypeId, so store the flat type under both names.
+function householdBody(req, id) {
+  const household = { ...cleanBody(req.body), id };
+  if (typeof household.flatType === "string") household.flatTypeId = household.flatType;
+  return household;
+}
+
 // A plan belongs to one of the homeowner's households (householdId).
 function validPlan(body) {
   return (
@@ -830,7 +838,7 @@ app.post("/api/users", auth.requireClient, async (req, res) => {
   if (!req.body || !req.body.name) {
     return res.status(400).json({ error: "Household name is required." });
   }
-  const user = { ...cleanBody(req.body), id: randomUUID() };
+  const user = householdBody(req, randomUUID());
   await getDb()
     .collection("households")
     .insertOne({ ...user, ...ownedBy(req) });
@@ -843,7 +851,7 @@ app.put("/api/users/:id", auth.requireClient, async (req, res) => {
   if (!req.body || !req.body.name) {
     return res.status(400).json({ error: "Household name is required." });
   }
-  const user = { ...cleanBody(req.body), id: req.params.id };
+  const user = householdBody(req, req.params.id);
   const result = await getDb()
     .collection("households")
     .replaceOne({ ...ownedBy(req), id: req.params.id }, { ...user, ...ownedBy(req) });
