@@ -5,7 +5,7 @@ import axios from 'axios'
 import NavBar from './NavBar.vue'
 import dummyHousehold from '../data/dummyHousehold.json'
 
-const API_URL = 'http://127.0.0.1:8000/api'
+const API_URL = '/api'
 const TEMPERATURE_URL = "https://api-open.data.gov.sg/v2/real-time/api/air-temperature"
 const RAINFALL_URL = "https://api-open.data.gov.sg/v2/real-time/api/rainfall"
 const PSI_URL = "https://api-open.data.gov.sg/v2/real-time/api/psi"

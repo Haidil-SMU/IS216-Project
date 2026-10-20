@@ -6,9 +6,9 @@ import axios from 'axios'
 const route = useRoute()
 const router = useRouter()
 
-const CONTRACTORS_API = 'http://localhost:8000/api/contractors'
-const PLANNER_API = 'http://localhost:8000/api/planner'
-const QUOTATION_API = 'http://localhost:8000/api/quotation-requests'
+const CONTRACTORS_API = '/api/contractors'
+const PLANNER_API = '/api/planner'
+const QUOTATION_API = '/api/quotation-requests'
 
 const contractorId = String(route.query.contractorId || '')
 const requestId = String(route.query.requestId || '')

@@ -6,8 +6,8 @@ import workheads from '@/data/workheads.json'
 
 const router = useRouter()
 
-const CONTRACTORS_API = 'http://localhost:8000/api/contractors'
-const QUOTATIONS_API = 'http://localhost:8000/api/quotation-requests'
+const CONTRACTORS_API = '/api/contractors'
+const QUOTATIONS_API = '/api/quotation-requests'
 const DATA_GOV_API = 'https://data.gov.sg/api/action/datastore_search'
 
 const websiteContractors = ref([])

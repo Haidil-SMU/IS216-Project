@@ -5,7 +5,7 @@ import axios from 'axios'
 
 const router = useRouter()
 
-const API = 'http://localhost:8000/api'
+const API = '/api'
 
 // ============================================================
 // STATE
