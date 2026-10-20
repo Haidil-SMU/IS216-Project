@@ -20,7 +20,7 @@ async function logout() {
 
 <template>
   <nav class="navbar navbar-expand-lg navbar-dark bg-success">
-    <div class="container">
+    <div class="container-fluid px-3 px-lg-4">
 
       <RouterLink class="navbar-brand fw-bold" :to="homeFor(auth.user)">
         🏠 HDB EcoHome

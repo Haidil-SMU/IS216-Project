@@ -1,6 +1,6 @@
 <style src="../assets/auth.css"></style>
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore, safeRedirect, homeFor } from '@/stores/auth'
 
@@ -17,8 +17,13 @@ const form = ref({ name: '', email: '', password: '', confirm: '', remember: tru
 const touched = ref({})
 const submitted = ref(false)
 const showPassword = ref(false)
+const showConfirm = ref(false)
+const capsLock = ref(false)
 const busy = ref(false)
+const success = ref(false)
 const celebrate = ref(false)
+// 'singpass' or 'corppass' while the browser is on its way to the login service.
+const redirecting = ref('')
 const ERRORS = {
   singpass: "Singpass login didn't go through. Please try again, or use your email instead.",
   corppass: "Corppass login didn't go through. Please try again.",
@@ -49,6 +54,22 @@ const role = computed(() => {
   return savedRole
 })
 const isContractor = computed(() => role.value === 'contractor')
+
+const heading = computed(() => {
+  if (isContractor.value)
+    return { title: 'Contractor log in', subtitle: "Use your company's Corppass to manage quotation requests." }
+  if (isSignup.value) return { title: 'Create your account', subtitle: 'Free for HDB households. Takes under a minute.' }
+  return { title: 'Log in to EcoHome', subtitle: 'Welcome back. Choose how you would like to log in.' }
+})
+
+// Headline above the card.
+const hero = computed(() => {
+  if (isContractor.value)
+    return { key: 'contractor', eyebrow: 'For renovation contractors', title: 'Quotation requests from HDB homeowners.' }
+  if (isSignup.value) return { key: 'signup', eyebrow: 'HDB EcoHome', title: 'Plan a home that uses less energy.' }
+  return { key: 'login', eyebrow: 'HDB EcoHome', title: 'Welcome home.' }
+})
+
 const roleAnnouncement = ref('')
 
 function setRole(next) {
@@ -104,17 +125,16 @@ watch(
 // ------------------------------------------------------------
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
-const strength = computed(() => {
+const passwordRules = computed(() => {
   const p = form.value.password
-  let score = 0
-  if (p.length >= 8) score++
-  if (p.length >= 12) score++
-  if (/[a-z]/.test(p) && /[A-Z]/.test(p)) score++
-  if (/\d/.test(p)) score++
-  if (/[^A-Za-z0-9]/.test(p)) score++
-  return p ? Math.max(score, 1) : 0
+  return [
+    { label: '8+ characters', met: p.length >= 8 },
+    { label: 'Upper & lower', met: /[A-Z]/.test(p) && /[a-z]/.test(p) },
+    { label: 'Number', met: /\d/.test(p) },
+    { label: 'Symbol', met: /[^A-Za-z0-9\s]/.test(p) },
+  ]
 })
-const STRENGTH_LABELS = ['', 'Very weak', 'Weak', 'Fair', 'Strong', 'Excellent']
+const rulesMet = computed(() => passwordRules.value.filter((rule) => rule.met).length)
 
 const errors = computed(() => {
   const f = form.value
@@ -122,8 +142,7 @@ const errors = computed(() => {
   if (isSignup.value && !f.name.trim()) result.name = 'Please enter your name.'
   if (!EMAIL_PATTERN.test(f.email.trim())) result.email = 'Please enter a valid email address.'
   if (isSignup.value) {
-    const p = f.password
-    if (p.length < 8 || !/[A-Z]/.test(p) || !/[a-z]/.test(p) || !/\d/.test(p) || !/[^A-Za-z0-9\s]/.test(p)) {
+    if (rulesMet.value < passwordRules.value.length) {
       result.password = 'Use at least 8 characters with an uppercase letter, a lowercase letter, a number and a symbol.'
     }
     if (!f.confirm || f.confirm !== f.password) result.confirm = 'Passwords do not match.'
@@ -137,13 +156,36 @@ function showError(field) {
   return (submitted.value || touched.value[field]) && errors.value[field]
 }
 
+// Mark a field as done (green tick) once it holds a valid value.
+function isValid(field) {
+  return Boolean(form.value[field]) && !errors.value[field]
+}
+
+function onPasswordKey(event) {
+  capsLock.value = Boolean(event.getModifierState?.('CapsLock'))
+}
+
 // ------------------------------------------------------------
 // The HDB block: windows light up as the form is completed.
 // ------------------------------------------------------------
-function grid(x0, y0, cols, rows, dx, dy, w, h) {
+// The estate is drawn on a 1200 x 420 canvas: one cluster of blocks on each side,
+// with the open space in the middle sitting behind the card.
+const GROUND = 392
+const BLOCKS = [
+  { x: 30, top: 196, w: 124, cols: 3, rows: 7, stripe: 'left' },
+  { x: 176, top: 92, w: 220, cols: 5, rows: 9, main: true, no: '128' },
+  { x: 804, top: 118, w: 220, cols: 5, rows: 8, main: true, no: '130' },
+  { x: 1046, top: 172, w: 130, cols: 3, rows: 7, stripe: 'right' },
+]
+const blocks = BLOCKS.map((b) => ({ ...b, bottom: b.main ? GROUND - 40 : GROUND }))
+
+function blockWindows(b) {
+  const [dx, w, h] = b.main ? [36, 24, 13] : [38, 22, 12]
+  const x0 = b.x + (b.w - ((b.cols - 1) * dx + w)) / 2
+  const y0 = b.top + (b.main ? 12 : 14)
   const cells = []
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) cells.push({ x: x0 + c * dx, y: y0 + r * dy, w, h })
+  for (let r = 0; r < b.rows; r++) {
+    for (let c = 0; c < b.cols; c++) cells.push({ x: x0 + c * dx, y: y0 + r * 27, w, h })
   }
   return cells
 }
@@ -155,11 +197,7 @@ function seededRandom(seed) {
   }
 }
 const windows = (() => {
-  const cells = [
-    ...grid(218, 150, 5, 9, 36, 28, 24, 14), // main block
-    ...grid(52, 238, 3, 7, 38, 28, 22, 13), // left block
-    ...grid(446, 208, 3, 8, 40, 28, 22, 13), // right block
-  ]
+  const cells = blocks.flatMap(blockWindows)
   // Fisher-Yates shuffle of the lighting order.
   const random = seededRandom(7)
   const order = cells.map((_, i) => i)
@@ -171,13 +209,18 @@ const windows = (() => {
 })()
 const stars = (() => {
   const random = seededRandom(42)
-  return Array.from({ length: 28 }, () => ({
-    x: Math.round(random() * 600),
-    y: Math.round(random() * 150),
-    r: (random() * 1.2 + 0.4).toFixed(1),
+  return Array.from({ length: 44 }, () => ({
+    x: Math.round(random() * 1200),
+    y: Math.round(random() * 170),
+    r: (random() * 0.9 + 0.4).toFixed(1),
     d: (random() * 4).toFixed(1),
   }))
 })()
+const SKYLINE = [
+  [-420, 250, 160], [-240, 214, 120], [-100, 236, 110], [400, 262, 70], [480, 232, 60],
+  [560, 250, 90], [670, 226, 70], [740, 258, 60], [1190, 232, 110], [1320, 206, 130], [1470, 248, 160],
+]
+const TREES = [12, 164, 420, 452, 512, 548, 652, 688, 748, 786, 1036, 1190]
 
 const progress = computed(() => {
   const fields = isSignup.value ? ['name', 'email', 'password', 'confirm'] : ['email', 'password']
@@ -195,11 +238,46 @@ const litCount = computed(() => {
   if (isContractor.value) return Math.round(windows.length * 0.45)
   return Math.round(4 + progress.value * (windows.length * 0.8))
 })
+const sceneCaption = computed(() => {
+  if (redirecting.value) return `Taking you to ${redirecting.value === 'corppass' ? 'Corppass' : 'Singpass'}…`
+  if (celebrate.value) return 'Welcome home'
+  if (isContractor.value) return 'Block under renovation'
+  return `${litCount.value} of ${windows.length} homes lit`
+})
 
-// Corppass is a full-page redirect; light up the block on the way out.
-function startCorppass() {
+// ------------------------------------------------------------
+// Night or day, from the visitor's clock. Singapore's sunrise and sunset stay
+// close to 7am and 7pm all year. ?sky=day or ?sky=night previews either one.
+// ------------------------------------------------------------
+const now = ref(new Date())
+let clock
+const isNight = computed(() => {
+  if (route.query.sky === 'day') return false
+  if (route.query.sky === 'night') return true
+  const hour = now.value.getHours()
+  return hour < 7 || hour >= 19
+})
+
+// Singpass and Corppass are full-page redirects; light up the block on the way out.
+function startRedirect(service) {
+  redirecting.value = service
   celebrate.value = true
 }
+// Coming back with the browser's Back button restores this page from cache.
+function onPageShow(event) {
+  if (!event.persisted) return
+  redirecting.value = ''
+  celebrate.value = false
+}
+onMounted(() => {
+  window.addEventListener('pageshow', onPageShow)
+  // Re-check every minute so the sky changes if the page is left open.
+  clock = setInterval(() => (now.value = new Date()), 60_000)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('pageshow', onPageShow)
+  clearInterval(clock)
+})
 
 // ------------------------------------------------------------
 // Submit
@@ -219,6 +297,7 @@ async function submit() {
       user = await auth.login({ email: f.email.trim(), password: f.password, remember: f.remember })
     }
     // Light up the whole block, then head inside.
+    success.value = true
     celebrate.value = true
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
     await new Promise((resolve) => setTimeout(resolve, reduceMotion ? 0 : 900))
@@ -233,14 +312,42 @@ async function submit() {
 <template>
   <div
     class="auth-page"
-    :class="[isSignup ? 'is-signup' : 'is-login', isContractor ? 'is-contractor' : 'is-homeowner', { celebrate }]"
+    :class="[
+      isSignup ? 'is-signup' : 'is-login',
+      isContractor ? 'is-contractor' : 'is-homeowner',
+      isNight ? 'is-night' : 'is-day',
+      { celebrate },
+    ]"
   >
-    <!-- Illustration: an HDB estate whose windows light up as the form fills in -->
-    <section class="auth-scene" aria-hidden="true">
-      <div class="sky sky-night"></div>
-      <div class="sky sky-dawn"></div>
+    <!-- Backdrop: an HDB estate whose windows light up as the form fills in -->
+    <div class="auth-scene" aria-hidden="true">
+      <p class="scene-caption">
+        <span class="lamp"></span>
+        {{ sceneCaption }}
+      </p>
 
-      <svg class="scene-svg" viewBox="0 0 600 500" preserveAspectRatio="xMidYMax slice">
+      <!-- Sky: moon and shooting stars at night, sun and drifting clouds by day -->
+      <div class="sky-body"></div>
+      <div v-if="isNight" class="shooting-stars">
+        <span v-for="n in 3" :key="n" class="shooting-star"></span>
+      </div>
+      <div v-else class="clouds">
+        <svg v-for="n in 4" :key="n" class="cloud" viewBox="0 0 120 52">
+          <circle cx="36" cy="32" r="16" />
+          <circle cx="60" cy="24" r="22" />
+          <circle cx="86" cy="32" r="15" />
+          <rect x="20" y="30" width="82" height="18" rx="9" />
+        </svg>
+      </div>
+
+      <svg class="scene-svg" viewBox="0 0 1200 420" preserveAspectRatio="xMidYMax meet">
+        <defs>
+          <linearGradient id="facade" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="var(--facade-top)" />
+            <stop offset="1" stop-color="var(--facade-bottom)" />
+          </linearGradient>
+        </defs>
+
         <g class="stars">
           <circle
             v-for="(star, i) in stars"
@@ -251,38 +358,35 @@ async function submit() {
             :style="{ animationDelay: star.d + 's' }"
           />
         </g>
-        <defs>
-          <mask id="moon-cut">
-            <rect width="600" height="500" fill="white" />
-            <circle cx="512" cy="70" r="24" fill="black" />
-          </mask>
-        </defs>
-        <g class="moon"><circle cx="500" cy="78" r="26" mask="url(#moon-cut)" /></g>
-        <g class="sun"><circle class="sun-glow" cx="120" cy="120" r="70" /><circle cx="120" cy="120" r="34" /></g>
 
-        <!-- side blocks -->
-        <rect class="block block-far" x="36" y="222" width="138" height="218" rx="3" />
-        <rect class="block block-far" x="430" y="192" width="142" height="248" rx="3" />
-        <rect class="stripe" x="36" y="222" width="10" height="218" />
-        <rect class="stripe" x="562" y="192" width="10" height="248" />
+        <!-- distant skyline, wider than the frame so it never ends at the edges -->
+        <g class="skyline">
+          <rect v-for="([x, y, w], i) in SKYLINE" :key="i" :x="x" :y="y" :width="w" :height="GROUND - y" />
+        </g>
 
-        <!-- main block -->
-        <rect class="block" x="200" y="132" width="200" height="268" rx="4" />
-        <rect class="roof" x="194" y="124" width="212" height="12" rx="3" />
-        <rect class="tank" x="270" y="98" width="60" height="26" rx="3" />
-        <g class="solar">
-          <rect x="214" y="110" width="40" height="12" rx="2" />
-          <rect x="346" y="110" width="40" height="12" rx="2" />
-        </g>
-        <rect class="stripe" x="200" y="132" width="12" height="268" />
-        <rect class="stripe" x="388" y="132" width="12" height="268" />
-        <g class="ledges">
-          <rect v-for="f in 9" :key="f" x="200" :y="140 + f * 28" width="200" height="3" />
-        </g>
-        <!-- void deck -->
-        <rect class="void-deck" x="200" y="400" width="200" height="40" />
-        <g class="pillars">
-          <rect v-for="p in 5" :key="p" :x="206 + (p - 1) * 46" y="400" width="10" height="40" />
+        <g v-for="(b, i) in blocks" :key="i">
+          <rect class="block" :class="{ 'block-far': !b.main }" :x="b.x" :y="b.top" :width="b.w" :height="b.bottom - b.top" />
+          <template v-if="b.main">
+            <rect class="roof" :x="b.x - 6" :y="b.top - 8" :width="b.w + 12" height="10" rx="2" />
+            <rect class="tank" :x="b.x + b.w / 2 - 32" :y="b.top - 32" width="64" height="24" rx="2" />
+            <g class="solar">
+              <rect :x="b.x + 6" :y="b.top - 22" width="60" height="12" rx="1.5" />
+              <rect :x="b.x + b.w - 66" :y="b.top - 22" width="60" height="12" rx="1.5" />
+              <line v-for="o in [26, 46, b.w - 46, b.w - 26]" :key="o" :x1="b.x + o" :y1="b.top - 22" :x2="b.x + o" :y2="b.top - 10" />
+            </g>
+            <rect class="stripe" :x="b.x" :y="b.top" width="14" :height="b.bottom - b.top" />
+            <rect class="stripe" :x="b.x + b.w - 14" :y="b.top" width="14" :height="b.bottom - b.top" />
+            <text class="blk-no" :x="b.x + 7" :y="b.top + 20" text-anchor="middle" :transform="`rotate(-90 ${b.x + 7} ${b.top + 20})`" dy="3">{{ b.no }}</text>
+            <g class="ledges">
+              <rect v-for="f in b.rows" :key="f" :x="b.x + 14" :y="b.top + 6 + f * 27" :width="b.w - 28" height="2" />
+            </g>
+            <!-- void deck -->
+            <rect class="void-deck" :x="b.x" :y="b.bottom" :width="b.w" :height="GROUND - b.bottom" />
+            <g class="pillars">
+              <rect v-for="p in 5" :key="p" :x="b.x + 8 + (p - 1) * 49" :y="b.bottom" width="10" :height="GROUND - b.bottom" />
+            </g>
+          </template>
+          <rect v-else class="stripe" :x="b.stripe === 'left' ? b.x : b.x + b.w - 8" :y="b.top" width="8" :height="b.bottom - b.top" />
         </g>
 
         <!-- windows -->
@@ -296,99 +400,81 @@ async function submit() {
             :y="win.y"
             :width="win.w"
             :height="win.h"
-            rx="2"
+            rx="1.5"
             :style="{ '--rank': win.rank }"
           />
         </g>
 
         <!-- Contractor mode: scaffolding and a tower crane appear -->
         <g class="scaffold">
-          <rect class="pole" x="404" y="150" width="4" height="290" />
-          <rect class="pole" x="424" y="150" width="4" height="290" />
-          <rect class="pole" x="176" y="200" width="4" height="240" />
-          <rect class="pole" x="194" y="200" width="4" height="240" />
+          <rect class="pole" x="400" y="110" width="3" height="282" />
+          <rect class="pole" x="416" y="110" width="3" height="282" />
+          <rect class="pole" x="782" y="136" width="3" height="256" />
+          <rect class="pole" x="798" y="136" width="3" height="256" />
           <g class="planks">
-            <rect v-for="n in 8" :key="'r' + n" x="400" :y="146 + n * 36" width="32" height="5" />
-            <rect v-for="n in 6" :key="'l' + n" x="172" :y="196 + n * 40" width="30" height="5" />
+            <rect v-for="n in 8" :key="'l' + n" x="396" :y="104 + n * 34" width="27" height="4" />
+            <rect v-for="n in 7" :key="'r' + n" x="778" :y="130 + n * 34" width="27" height="4" />
           </g>
           <g class="braces">
-            <line v-for="n in 7" :key="'b' + n" x1="408" :y1="151 + n * 36" x2="424" :y2="151 + (n + 1) * 36" />
+            <line v-for="n in 7" :key="'b' + n" x1="403" :y1="108 + n * 34" x2="416" :y2="108 + (n + 1) * 34" />
           </g>
         </g>
-        <!-- kept within x 250-505 so it stays visible when the scene is cropped -->
         <g class="crane">
-          <rect class="crane-mast" x="452" y="62" width="12" height="378" />
+          <rect class="crane-mast" x="1030" y="40" width="11" height="352" />
           <line
-            v-for="n in 18"
+            v-for="n in 17"
             :key="'m' + n"
             class="crane-lattice"
-            x1="452"
-            :y1="62 + (n - 1) * 21"
-            x2="464"
-            :y2="62 + n * 21"
+            x1="1030"
+            :y1="40 + (n - 1) * 21"
+            x2="1041"
+            :y2="40 + n * 21"
           />
-          <rect class="crane-jib" x="250" y="54" width="254" height="9" />
-          <rect class="crane-cab" x="445" y="40" width="26" height="22" rx="3" />
-          <rect class="crane-weight" x="478" y="63" width="24" height="18" />
+          <rect class="crane-jib" x="826" y="32" width="262" height="8" />
+          <rect class="crane-cab" x="1023" y="18" width="25" height="14" rx="2" />
+          <rect class="crane-weight" x="1062" y="40" width="24" height="16" />
           <g class="crane-load">
-            <line class="crane-cable" x1="360" y1="63" x2="360" y2="98" />
-            <rect class="crane-box" x="344" y="98" width="32" height="18" rx="2" />
+            <line class="crane-cable" x1="900" y1="40" x2="900" y2="48" />
+            <rect class="crane-box" x="884" y="48" width="32" height="10" rx="1.5" />
           </g>
         </g>
 
         <!-- ground and trees -->
-        <rect class="ground" x="0" y="440" width="600" height="60" />
-        <rect class="path" x="268" y="440" width="64" height="60" />
+        <rect class="ground" x="-1000" :y="GROUND" width="3200" height="400" />
+        <rect class="path" x="570" :y="GROUND" width="60" height="28" />
         <g class="trees">
-          <g v-for="(x, i) in [24, 150, 186, 420, 456, 586]" :key="i" :transform="`translate(${x} 0)`">
-            <rect class="trunk" x="-3" y="420" width="6" height="22" />
-            <circle class="leaf" cx="0" cy="410" r="20" />
-            <circle class="leaf leaf-light" cx="-7" cy="402" r="10" />
+          <g v-for="(x, i) in TREES" :key="i" :transform="`translate(${x} 0)`">
+            <rect class="trunk" x="-2.5" y="372" width="5" height="22" />
+            <ellipse class="leaf" cx="0" cy="366" rx="22" ry="14" />
+            <ellipse class="leaf leaf-light" cx="-6" cy="360" rx="11" ry="7" />
           </g>
         </g>
       </svg>
+    </div>
 
-      <div class="scene-copy">
-        <Transition name="fade-up" mode="out-in">
-          <div v-if="isContractor" key="contractor">
-            <p class="eyebrow"><span class="hard-hat" aria-hidden="true">⛑️</span> For renovation contractors</p>
-            <h2>Grow your renovation business.</h2>
-            <p>Get quotation requests from HDB homeowners and reply with AI-assisted quotes.</p>
-          </div>
-          <div v-else-if="isSignup" key="signup">
-            <p class="eyebrow">Join HDB EcoHome</p>
-            <h2>Light up a greener home.</h2>
-            <p>Save your household, compare energy plans and see where every kWh goes.</p>
-          </div>
-          <div v-else key="login">
-            <p class="eyebrow">Welcome back</p>
-            <h2>The lights are on. You're home.</h2>
-            <p>Your households, plans and saved contractors are right where you left them.</p>
-          </div>
-        </Transition>
-        <ul v-if="isContractor" class="perks">
-          <li>📥 Quotation requests from homeowners</li>
-          <li>🤖 AI quotation drafts from your price list</li>
-          <li>✓ UEN verified by Corppass</li>
-        </ul>
-        <ul v-else class="perks">
-          <li>⚡ Monthly kWh estimates</li>
-          <li>🪪 Myinfo household autofill</li>
-          <li>💾 Saved to your account</li>
-        </ul>
+    <p class="eyebrow">
+      <span class="eyebrow-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 10.5 12 3l9 7.5V21H3z" />
+          <path d="M12 21v-5c0-2.5 2-4.5 4.5-4.5" />
+        </svg>
+      </span>
+      {{ hero.eyebrow }}
+    </p>
+
+    <Transition name="fade-up" mode="out-in">
+      <div :key="hero.key" class="auth-hero">
+        <h2 class="hero-title">{{ hero.title }}</h2>
       </div>
-      <p class="scene-hint">
-        {{
-          celebrate
-            ? isContractor ? 'On our way to Corppass…' : 'Welcome home ✨'
-            : isContractor ? 'Your next project is one login away' : 'Fill in the form to light up the block'
-        }}
-      </p>
-    </section>
+    </Transition>
 
-    <!-- Form -->
-    <section class="auth-panel">
-      <div class="auth-card">
+    <!-- Form card -->
+    <section class="auth-card">
+        <header class="auth-head">
+          <h1 class="auth-title">{{ heading.title }}</h1>
+          <p class="auth-subtitle">{{ heading.subtitle }}</p>
+        </header>
+
         <!-- Who are you? -->
         <div class="role-switch" role="radiogroup" aria-label="I am a" @keydown="onRoleKey">
           <span class="role-pill" aria-hidden="true"></span>
@@ -401,11 +487,12 @@ async function submit() {
             :tabindex="isContractor ? -1 : 0"
             @click="setRole('client')"
           >
-            <span class="role-icon" aria-hidden="true">🏠</span>
-            <span class="role-text">
-              <strong>Homeowner</strong>
-              <small>Plan &amp; save energy at home</small>
-            </span>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 10.5 12 3l9 7.5" />
+              <path d="M5 9.5V21h14V9.5" />
+              <path d="M10 21v-6h4v6" />
+            </svg>
+            Homeowner
           </button>
           <button
             type="button"
@@ -416,200 +503,279 @@ async function submit() {
             :tabindex="isContractor ? 0 : -1"
             @click="setRole('contractor')"
           >
-            <span class="role-icon" aria-hidden="true">🛠️</span>
-            <span class="role-text">
-              <strong>Contractor</strong>
-              <small>Get renovation requests</small>
-            </span>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="7" width="18" height="13" rx="2" />
+              <path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" />
+              <path d="M3 13h18" />
+            </svg>
+            Contractor
           </button>
         </div>
         <p class="visually-hidden" aria-live="polite">{{ roleAnnouncement }}</p>
 
-        <div v-if="!isContractor" class="mode-switch" role="tablist" aria-label="Log in or sign up">
-          <span class="mode-pill" aria-hidden="true"></span>
-          <button
-            type="button"
-            role="tab"
-            :aria-selected="!isSignup"
-            :class="{ active: !isSignup }"
-            @click="switchMode('login')"
-          >
-            Log in
-          </button>
-          <button
-            type="button"
-            role="tab"
-            :aria-selected="isSignup"
-            :class="{ active: isSignup }"
-            @click="switchMode('signup')"
-          >
-            Sign up
-          </button>
-        </div>
-
-        <h1 class="auth-title">
-          <template v-if="isContractor">Contractor log in</template>
-          <template v-else>{{ isSignup ? 'Create your account' : 'Log in to EcoHome' }}</template>
-        </h1>
-        <p class="auth-subtitle">
-          <template v-if="isContractor">Your quotation requests are waiting.</template>
-          <template v-else>{{ isSignup ? 'It takes less than a minute.' : 'Good to see you again.' }}</template>
-        </p>
-
         <div aria-live="assertive">
-          <div v-if="error" class="alert alert-danger py-2 small" role="alert">{{ error }}</div>
+          <div v-if="error" class="notice-error" role="alert">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M12 8v5M12 16.5v.01" />
+            </svg>
+            <span>{{ error }}</span>
+          </div>
         </div>
 
         <Transition name="role-swap" mode="out-in">
-        <!-- Contractors: Corppass only (it verifies the company's UEN) -->
-        <div v-if="isContractor" key="contractor" class="contractor-panel">
-          <a class="btn-corppass w-100" :href="corppassHref" @click="startCorppass">
-            <span class="cp-icon" aria-hidden="true">🏢</span>
-            <span>Log in with</span>
-            <span class="cp-wordmark">Corppass</span>
-          </a>
-          <p class="singpass-note">First time here? Logging in with Corppass creates your business account.</p>
-        </div>
+          <!-- Contractors: Corppass only (it verifies the company's UEN) -->
+          <div v-if="isContractor" key="contractor" class="contractor-panel">
+            <a
+              class="btn-corppass w-100"
+              :class="{ 'is-redirecting': redirecting === 'corppass' }"
+              :href="corppassHref"
+              :aria-busy="redirecting === 'corppass'"
+              @click="startRedirect('corppass')"
+            >
+              <span v-if="redirecting === 'corppass'" class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+              <svg v-else class="cp-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="4" y="3" width="16" height="18" rx="1" />
+                <path d="M9 7h1M14 7h1M9 11h1M14 11h1M9 15h1M14 15h1M10 21v-3h4v3" />
+              </svg>
+              <template v-if="redirecting === 'corppass'">Opening Corppass…</template>
+              <template v-else>
+                <span>Log in with</span>
+                <span class="cp-wordmark">Corppass</span>
+              </template>
+            </a>
 
-        <!-- Homeowners: email + password, or Singpass -->
-        <div v-else key="homeowner">
-        <!-- Singpass is offered for logging in only; sign-up uses email -->
-        <template v-if="!isSignup">
-          <a class="btn-singpass w-100" :href="singpassHref">
-            <span>Log in with</span>
-            <span class="sp-wordmark">singpass</span>
-          </a>
-          <p class="singpass-note">We'll fill in your household details from Myinfo.</p>
+            <ol class="steps">
+              <li>
+                <strong>Log in with your company's Corppass</strong>
+                <span>Use the account your business already has.</span>
+              </li>
+              <li>
+                <strong>We check your company's UEN</strong>
+                <span>Homeowners see that you are a registered business.</span>
+              </li>
+              <li>
+                <strong>Open your dashboard</strong>
+                <span>Your first login creates your business account.</span>
+              </li>
+            </ol>
+          </div>
 
-          <div class="divider"><span>or use email</span></div>
-        </template>
+          <!-- Homeowners: email + password, or Singpass -->
+          <div v-else key="homeowner">
+            <!-- Singpass is offered for logging in only; sign-up uses email -->
+            <template v-if="!isSignup">
+              <a
+                class="btn-singpass w-100"
+                :class="{ 'is-redirecting': redirecting === 'singpass' }"
+                :href="singpassHref"
+                :aria-busy="redirecting === 'singpass'"
+                @click="startRedirect('singpass')"
+              >
+                <span v-if="redirecting === 'singpass'" class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+                <template v-if="redirecting === 'singpass'">Opening Singpass…</template>
+                <template v-else>
+                  <span>Log in with</span>
+                  <span class="sp-wordmark">singpass</span>
+                </template>
+              </a>
+              <p class="sso-note">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 3 4 6v6c0 4.5 3.4 8.2 8 9 4.6-.8 8-4.5 8-9V6z" />
+                  <path d="m9 12 2 2 4-4" />
+                </svg>
+                We'll fill in your household details from Myinfo.
+              </p>
 
-        <form novalidate @submit.prevent="submit">
-          <fieldset :disabled="busy">
-            <legend class="visually-hidden">{{ isSignup ? 'Sign up' : 'Log in' }} with email</legend>
+              <div class="divider"><span>or log in with email</span></div>
+            </template>
 
-            <Transition name="field">
-              <div v-if="isSignup" class="field">
-                <div class="form-floating">
-                  <input
-                    id="auth-name"
-                    v-model="form.name"
-                    class="form-control"
-                    :class="{ 'is-invalid': showError('name') }"
-                    type="text"
-                    placeholder="Your name"
-                    autocomplete="name"
-                    maxlength="60"
-                    :aria-describedby="showError('name') ? 'auth-name-error' : undefined"
-                    @blur="touched.name = true"
-                  />
-                  <label for="auth-name">Your name</label>
-                </div>
-                <div v-if="showError('name')" id="auth-name-error" class="field-error">{{ errors.name }}</div>
-              </div>
-            </Transition>
+            <form novalidate @submit.prevent="submit">
+              <fieldset :disabled="busy">
+                <legend class="visually-hidden">{{ isSignup ? 'Sign up' : 'Log in' }} with email</legend>
 
-            <div class="field">
-              <div class="form-floating">
-                <input
-                  id="auth-email"
-                  v-model="form.email"
-                  class="form-control"
-                  :class="{ 'is-invalid': showError('email') }"
-                  type="email"
-                  placeholder="name@example.com"
-                  autocomplete="email"
-                  inputmode="email"
-                  :aria-describedby="showError('email') ? 'auth-email-error' : undefined"
-                  @blur="touched.email = true"
-                />
-                <label for="auth-email">Email address</label>
-              </div>
-              <div v-if="showError('email')" id="auth-email-error" class="field-error">{{ errors.email }}</div>
-            </div>
-
-            <div class="field">
-              <div class="form-floating password-wrap">
-                <input
-                  id="auth-password"
-                  v-model="form.password"
-                  class="form-control"
-                  :class="{ 'is-invalid': showError('password') }"
-                  :type="showPassword ? 'text' : 'password'"
-                  placeholder="Password"
-                  :autocomplete="isSignup ? 'new-password' : 'current-password'"
-                  maxlength="128"
-                  :aria-describedby="showError('password') ? 'auth-password-error' : undefined"
-                  @blur="touched.password = true"
-                />
-                <label for="auth-password">Password</label>
-                <button
-                  type="button"
-                  class="peek"
-                  :aria-pressed="showPassword"
-                  :aria-label="showPassword ? 'Hide password' : 'Show password'"
-                  @click="showPassword = !showPassword"
-                >
-                  {{ showPassword ? 'Hide' : 'Show' }}
-                </button>
-              </div>
-              <div v-if="showError('password')" id="auth-password-error" class="field-error">
-                {{ errors.password }}
-              </div>
-            </div>
-
-            <Transition name="field">
-              <div v-if="isSignup" class="field">
-                <!-- Password strength, styled like Singapore's energy label ticks.
-                     Only shown once the user starts typing a password. -->
-                <Transition name="field">
-                  <div v-if="form.password" class="rating-wrap">
-                    <div class="energy-label" :data-score="strength">
-                      <span class="energy-label-title">Password rating</span>
-                      <span class="ticks" aria-hidden="true">
-                        <span v-for="n in 5" :key="n" class="tick" :class="{ on: n <= strength }">✓</span>
-                      </span>
-                      <span class="energy-label-text">{{ STRENGTH_LABELS[strength] }}</span>
+                <div :class="{ 'field-row': isSignup }">
+                  <Transition name="field">
+                    <div v-if="isSignup" class="field">
+                      <label class="field-label" for="auth-name">Full name</label>
+                      <div class="input-wrap" :class="{ valid: isValid('name') }">
+                        <input
+                          id="auth-name"
+                          v-model="form.name"
+                          class="input"
+                          :class="{ 'is-invalid': showError('name') }"
+                          type="text"
+                          placeholder="Tan Wei Ming"
+                          autocomplete="name"
+                          maxlength="60"
+                          :aria-invalid="Boolean(showError('name'))"
+                          :aria-describedby="showError('name') ? 'auth-name-error' : undefined"
+                          @blur="touched.name = true"
+                        />
+                        <svg class="input-tick" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>
+                      </div>
+                      <p v-if="showError('name')" id="auth-name-error" class="field-error">{{ errors.name }}</p>
                     </div>
+                  </Transition>
+
+                  <div class="field">
+                    <label class="field-label" for="auth-email">Email address</label>
+                    <div class="input-wrap" :class="{ valid: isValid('email') }">
+                      <input
+                        id="auth-email"
+                        v-model="form.email"
+                        class="input"
+                        :class="{ 'is-invalid': showError('email') }"
+                        type="email"
+                        placeholder="you@email.com"
+                        autocomplete="email"
+                        inputmode="email"
+                        :aria-invalid="Boolean(showError('email'))"
+                        :aria-describedby="showError('email') ? 'auth-email-error' : undefined"
+                        @blur="touched.email = true"
+                      />
+                      <svg class="input-tick" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>
+                    </div>
+                    <p v-if="showError('email')" id="auth-email-error" class="field-error">{{ errors.email }}</p>
                   </div>
-                </Transition>
-                <span class="visually-hidden" aria-live="polite">
-                  {{ form.password ? 'Password strength: ' + STRENGTH_LABELS[strength] : '' }}
-                </span>
-
-                <div class="form-floating">
-                  <input
-                    id="auth-confirm"
-                    v-model="form.confirm"
-                    class="form-control"
-                    :class="{ 'is-invalid': showError('confirm') }"
-                    :type="showPassword ? 'text' : 'password'"
-                    placeholder="Confirm password"
-                    autocomplete="new-password"
-                    maxlength="128"
-                    :aria-describedby="showError('confirm') ? 'auth-confirm-error' : undefined"
-                    @blur="touched.confirm = true"
-                  />
-                  <label for="auth-confirm">Confirm password</label>
                 </div>
-                <div v-if="showError('confirm')" id="auth-confirm-error" class="field-error">
-                  {{ errors.confirm }}
+
+                <div :class="{ 'field-row': isSignup }">
+                  <div class="field">
+                    <label class="field-label" for="auth-password">Password</label>
+                    <div class="input-wrap has-peek">
+                      <input
+                        id="auth-password"
+                        v-model="form.password"
+                        class="input"
+                        :class="{ 'is-invalid': showError('password') }"
+                        :type="showPassword ? 'text' : 'password'"
+                        :placeholder="isSignup ? 'New password' : 'Enter your password'"
+                        :autocomplete="isSignup ? 'new-password' : 'current-password'"
+                        maxlength="128"
+                        :aria-invalid="Boolean(showError('password'))"
+                        :aria-describedby="
+                          [isSignup ? 'auth-password-rules' : '', showError('password') && !isSignup ? 'auth-password-error' : '']
+                            .filter(Boolean)
+                            .join(' ') || undefined
+                        "
+                        @blur="touched.password = true; capsLock = false"
+                        @keydown="onPasswordKey"
+                        @keyup="onPasswordKey"
+                      />
+                      <button
+                        type="button"
+                        class="peek"
+                        :aria-pressed="showPassword"
+                        :aria-label="showPassword ? 'Hide password' : 'Show password'"
+                        @click="showPassword = !showPassword"
+                      >
+                        <svg v-if="showPassword" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                          <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+                          <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+                          <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+                          <line x1="1" y1="1" x2="23" y2="23" />
+                        </svg>
+                        <svg v-else viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                          <circle cx="12" cy="12" r="3" />
+                        </svg>
+                      </button>
+                    </div>
+                    <p v-if="capsLock" class="field-hint caps" role="status">
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4 4 13h4v7h8v-7h4z" /></svg>
+                      Caps Lock is on
+                    </p>
+                    <p v-if="showError('password') && !isSignup" id="auth-password-error" class="field-error">
+                      {{ errors.password }}
+                    </p>
+
+                  </div>
+
+                  <Transition name="field">
+                    <div v-if="isSignup" class="field">
+                      <label class="field-label" for="auth-confirm">Confirm password</label>
+                      <div class="input-wrap has-peek" :class="{ valid: isValid('confirm') }">
+                        <input
+                          id="auth-confirm"
+                          v-model="form.confirm"
+                          class="input"
+                          :class="{ 'is-invalid': showError('confirm') }"
+                          :type="showConfirm ? 'text' : 'password'"
+                          placeholder="Repeat password"
+                          autocomplete="new-password"
+                          maxlength="128"
+                          :aria-invalid="Boolean(showError('confirm'))"
+                          :aria-describedby="showError('confirm') ? 'auth-confirm-error' : undefined"
+                          @blur="touched.confirm = true"
+                        />
+                        <svg class="input-tick" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>
+                        <button
+                          type="button"
+                          class="peek"
+                          :aria-pressed="showConfirm"
+                          :aria-label="showConfirm ? 'Hide confirm password' : 'Show confirm password'"
+                          @click="showConfirm = !showConfirm"
+                        >
+                          <svg v-if="showConfirm" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+                            <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+                            <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+                            <line x1="1" y1="1" x2="23" y2="23" />
+                          </svg>
+                          <svg v-else viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                            <circle cx="12" cy="12" r="3" />
+                          </svg>
+                        </button>
+                      </div>
+                      <p v-if="showError('confirm')" id="auth-confirm-error" class="field-error">
+                        {{ errors.confirm }}
+                      </p>
+                    </div>
+                  </Transition>
                 </div>
-              </div>
-            </Transition>
 
-            <div class="form-check remember">
-              <input id="auth-remember" v-model="form.remember" class="form-check-input" type="checkbox" />
-              <label class="form-check-label" for="auth-remember">Keep me logged in for 30 days</label>
-            </div>
+                <!-- Sign up: the server's password rules, ticked off live -->
+                <ul
+                  v-if="isSignup"
+                  id="auth-password-rules"
+                  class="rules"
+                  :class="{ 'show-missing': showError('password') }"
+                  :data-met="rulesMet"
+                  aria-label="Password requirements"
+                >
+                  <li v-for="rule in passwordRules" :key="rule.label" :class="{ met: rule.met }">
+                    <span class="rule-dot" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>
+                    </span>
+                    {{ rule.label }}
+                    <span class="visually-hidden">{{ rule.met ? '(done)' : '(not yet)' }}</span>
+                  </li>
+                </ul>
 
-            <button class="btn btn-success btn-submit w-100" type="submit">
-              <span v-if="busy" class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
-              {{ busy ? (isSignup ? 'Creating account…' : 'Logging in…') : isSignup ? 'Create account' : 'Log in' }}
-            </button>
-          </fieldset>
-        </form>
-        </div>
+                <div class="form-check remember">
+                  <input id="auth-remember" v-model="form.remember" class="form-check-input" type="checkbox" />
+                  <label class="form-check-label" for="auth-remember">Keep me logged in on this device</label>
+                </div>
+
+                <button class="btn-submit w-100" :class="{ 'is-success': success }" type="submit">
+                  <template v-if="success">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>
+                    {{ isSignup ? 'Account created' : 'Logged in' }}
+                  </template>
+                  <template v-else-if="busy">
+                    <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+                    {{ isSignup ? 'Creating account…' : 'Logging in…' }}
+                  </template>
+                  <template v-else>
+                    {{ isSignup ? 'Create account' : 'Log in' }}
+                    <svg class="submit-arrow" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+                  </template>
+                </button>
+              </fieldset>
+            </form>
+          </div>
         </Transition>
 
         <p v-if="!isContractor" class="switch-text">
@@ -622,7 +788,10 @@ async function submit() {
             <button type="button" class="link-button" @click="switchMode('signup')">Create an account</button>
           </template>
         </p>
-      </div>
+        <p v-else class="switch-text">
+          Not a contractor?
+          <button type="button" class="link-button" @click="setRole('client')">Log in as a homeowner</button>
+        </p>
     </section>
   </div>
 </template>
