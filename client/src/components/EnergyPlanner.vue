@@ -205,7 +205,7 @@ async function savePlan(copy = false) {
     plan.value.id = response.data.id
     if (!compareIds.value.includes(plan.value.id)) compareIds.value.push(plan.value.id)
     await getData()
-    notice.value = 'Plan saved to the server.'
+    notice.value = 'Your plan has been saved.'
   } catch (err) {
     console.log(err.message)
     error.value = 'Unable to save the plan.'
@@ -383,12 +383,14 @@ function estimate(plan, appliances) {
                       Not now
                     </button>
                   </div>
-                  <a v-else class="btn-singpass w-100 mb-1" :href="myinfoUrl">
-                    <span>Retrieve Myinfo with</span><span class="sp-wordmark">singpass</span>
-                  </a>
-                  <p v-if="!myinfoBanner" class="small text-secondary text-center mb-2">
-                    Fill in your household from your government records.
-                  </p>
+                  <template v-else-if="!profile.myinfo">
+                    <a class="btn-singpass w-100 mb-1" :href="myinfoUrl">
+                      <span>Retrieve Myinfo with</span><span class="sp-wordmark">singpass</span>
+                    </a>
+                    <p class="small text-secondary text-center mb-2">
+                      Fill in your household from your government records.
+                    </p>
+                  </template>
                   <label for="household" class="form-label mt-2">Saved household</label
                   ><select
                     id="household"
