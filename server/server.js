@@ -907,7 +907,7 @@ app.get('/api/dev/simulator', async (req, res) => {
     try {
         const db = getDb();
 
-        const householdId = '6ad87c2fc94ce19dabd47120';
+        const householdId = '6ad89eaa947d323d4c2b0ac0';
 
         const rooms = await db.collection('rooms')
             .find({

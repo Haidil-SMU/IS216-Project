@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
 
 // Temporary MongoDB test household. Login integration will be added later.
-const householdId = '6ad87c2fc94ce19dabd47120'
+const householdId = '6ad89eaa947d323d4c2b0ac0'
 
 const rooms = ref([])
 const selectedRoomId = ref('')
