@@ -120,6 +120,12 @@ async function logout() {
   </nav>
 </template>
 <style scoped>
+/* Keep the opened menu above page layers, e.g. the login page's pinned scene */
+.navbar {
+  position: relative;
+  z-index: 1030;
+}
+
 .nav-link.router-link-active {
   color: white !important;
   font-weight: bold;
