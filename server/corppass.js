@@ -7,7 +7,7 @@ const express = require('express');
 const client = require('openid-client');
 const { getDb } = require('./db');
 const { startSession } = require('./auth');
-const { getOidcConfig, safeReturnTo } = require('./oidc');
+const { getOidcConfig, safeReturnTo, loginErrorUrl } = require('./oidc');
 const { lookupUen, ownerFilter } = require('./contractor');
 
 const DISCOVERY_URL =
@@ -68,7 +68,7 @@ router.get('/login', async (req, res) => {
     res.redirect(authorizationUrl.href);
   } catch (error) {
     console.error('Corppass login error:', error.message);
-    res.redirect('/login?as=contractor&error=corppass');
+    res.redirect(loginErrorUrl({ as: 'contractor', error: 'corppass' }, returnTo));
   }
 });
 
@@ -143,7 +143,7 @@ router.get('/callback', async (req, res) => {
     res.redirect(flow.returnTo || '/ContractorDashboard');
   } catch (error) {
     console.error('Corppass callback error:', error.message);
-    res.redirect('/login?as=contractor&error=corppass');
+    res.redirect(loginErrorUrl({ as: 'contractor', error: 'corppass' }, flow?.returnTo));
   }
 });
 
