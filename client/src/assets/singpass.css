@@ -1,0 +1,57 @@
+/* Singpass button, shared by the login page and the Energy Planner.
+   When onboarding with Singpass for real, swap in the official button artwork
+   from the Singpass Developer Portal brand guidelines. */
+.btn-singpass {
+  --sp-red: #f4333d;
+  --sp-red-dark: #d0202a;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 48px;
+  padding: 0.6rem 1.25rem;
+  border: 0;
+  border-radius: 10px;
+  background: var(--sp-red);
+  color: #fff;
+  font-weight: 600;
+  text-decoration: none;
+  transition:
+    background-color 0.2s ease,
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.btn-singpass:hover,
+.btn-singpass:focus-visible {
+  background: var(--sp-red-dark);
+  color: #fff;
+  box-shadow: 0 8px 20px rgba(244, 51, 61, 0.28);
+  transform: translateY(-1px);
+}
+
+.btn-singpass:focus-visible {
+  outline: 3px solid rgba(244, 51, 61, 0.45);
+  outline-offset: 2px;
+}
+
+.btn-singpass .sp-wordmark {
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  text-transform: lowercase;
+}
+
+.badge-singpass {
+  background: #fdecee;
+  color: #b3141d;
+  font-weight: 600;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-singpass {
+    transition: none;
+  }
+  .btn-singpass:hover {
+    transform: none;
+  }
+}
