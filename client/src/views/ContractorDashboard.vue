@@ -877,10 +877,41 @@ onMounted(loadData)
               </p>
             </div>
 
+                 </div>
+
+        <!-- 3D SPATIAL LAYOUT PLACEHOLDER -->
+        <!-- TODO: Connect this to the customer's saved 3D floor plan.
+             The contractor should eventually be able to view the
+             submitted household's 3D layout in read-only mode.
+             Do not allow contractors to edit the customer's layout. -->
+        <div class="border rounded-3 p-3 mb-3 bg-light">
+          <div
+            class="d-flex flex-wrap justify-content-between align-items-center gap-3"
+          >
+            <div>
+              <p class="fw-semibold mb-1">Customer's 3D Property Layout</p>
+              <p class="small text-muted mb-0">
+                View the customer's room layout and appliance placements.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              class="btn btn-outline-success fw-semibold"
+      
+              title="3D layout integration coming soon"
+            >
+              View 3D Layout
+            </button>
           </div>
 
-          <!-- SERVICES -->
-          <p class="fw-semibold mb-1">Services Required</p>
+          <p class="small text-muted mt-2 mb-0">
+            3D layout viewing will be available soon.
+          </p>
+        </div>
+
+        <!-- SERVICES -->
+        <p class="fw-semibold mb-1">Services Required</p>
 
           <div class="d-flex flex-wrap gap-2 mb-3">
             <span
