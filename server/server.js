@@ -256,6 +256,8 @@ app.post('/api/quotation-requests', auth.requireClient, async (req, res) => {
   }
 });
 
+
+
 // ============================================================
 // GET - RETRIEVE QUOTATION REQUESTS
 // ============================================================
@@ -898,6 +900,116 @@ app.delete("/api/plans/:id", auth.requireClient, async (req, res) => {
     return res.status(404).json({ error: "Plan not found." });
   }
   res.sendStatus(204);
+});
+
+// GET - Retrieve simulator data from MongoDB
+app.get('/api/dev/simulator', async (req, res) => {
+    try {
+        const db = getDb();
+
+        const householdId = '6ad89eaa947d323d4c2b0ac0';
+
+        const rooms = await db.collection('rooms')
+            .find({
+                householdId: new ObjectId(householdId)
+            })
+            .sort({ order: 1 })
+            .toArray();
+
+        const items = await db.collection('catalogue_items')
+            .find({
+                category: {
+                    $in: ['kitchen', 'living', 'television', 'laundry', 'lights']
+                }
+            })
+            .toArray();
+
+        res.status(200).json({
+            rooms: rooms,
+            items: items
+        });
+
+    } catch (error) {
+        console.log(error);
+
+        res.status(500).json({
+            error: 'Unable to retrieve simulator data'
+        });
+    }
+});
+
+// GET - Retrieve rooms for a specific household
+app.get('/api/households/:householdId/rooms', auth.requireClient, async (req, res) => {
+    try {
+        const householdId = req.params.householdId;
+        const db = getDb();
+
+        // Find the household belonging to the logged-in user
+        const ids = [{ id: householdId }];
+
+        if (ObjectId.isValid(householdId)) {
+            ids.push({ _id: new ObjectId(householdId) });
+        }
+
+        const household = await db.collection('households').findOne({
+            userId: new ObjectId(req.session.userId),
+            $or: ids
+        });
+
+        if (!household) {
+            return res.status(404).json({
+                error: 'Household not found'
+            });
+        }
+
+        // Retrieve rooms belonging to this household
+        const householdIds = [household._id];
+
+        if (household.id) {
+            householdIds.push(household.id);
+        }
+
+        const rooms = await db.collection('rooms')
+            .find({ householdId: { $in: householdIds } })
+            .sort({ order: 1 })
+            .toArray();
+
+        res.status(200).json({ rooms });
+
+    } catch (error) {
+        console.log(error);
+        res.status(500).json({
+            error: 'Unable to retrieve rooms'
+        });
+    }
+});
+
+
+// GET - Retrieve electrical appliances from catalogue
+app.get('/api/catalogue-items', auth.requireClient, async (req, res) => {
+    try {
+        const db = getDb();
+
+        const categories = [
+            'kitchen',
+            'living',
+            'television',
+            'laundry',
+            'lights'
+        ];
+
+        const items = await db.collection('catalogue_items')
+            .find({ category: { $in: categories } })
+            .toArray();
+
+        res.status(200).json({ items });
+
+    } catch (error) {
+        console.log(error);
+        res.status(500).json({
+            error: 'Unable to retrieve appliances'
+        });
+    }
 });
 
 // One error handler for file or request errors across these routes.
