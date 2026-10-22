@@ -27,7 +27,7 @@ const props = defineProps({
   overlays: { type: Object, default: () => ({ sun: false, heat: true, air: true }) },
 })
 
-const emit = defineEmits(['no-space', 'removed', 'analysis', 'layout-changed'])
+const emit = defineEmits(['no-space', 'removed', 'analysis'])
 
 const host = ref(null)
 
@@ -161,8 +161,8 @@ function apply(item, pos) {
 function addItem(data) {
   const model = createAppliance3DModel(data.type, data.category)
   const spec = model.userData.spec
-  const item = { id: data.id, data, name: data.name, kwh: data.kwhYear || 0, spec, model, x: 0, z: 0, rotY: 0, wall: -1, t: 0 }
-  const spot = data.pos ?? findSpot(props.room, spec, others(item))
+  const item = { id: data.id, name: data.name, kwh: data.kwhYear || 0, spec, model, x: 0, z: 0, rotY: 0, wall: -1, t: 0 }
+  const spot = findSpot(props.room, spec, others(item))
   if (!spot) {
     const noCounter = spec.mode === 'top' && ![...items.values()].some((o) => o.spec.kind === 'counter')
     emit('no-space', data.id, noCounter ? 'Add a countertop first, then place this on it.' : 'No free space for that item. Remove something or make the room bigger.')
@@ -174,7 +174,6 @@ function addItem(data) {
   if (spec.mode === 'opening') buildRoom()
   select(item)
   scheduleRecs()
-  if (!data.pos) emit('layout-changed')
 }
 
 function removeItem(item) {
@@ -342,17 +341,7 @@ function applyRec(idx) {
   select(item)
   scheduleRecs()
 }
-
-function getPlacements() {
-  return [...items.values()].map((i) => ({
-    _id: String(i.id),
-    applianceTypeKey: i.data.type, category: i.data.category, tick: i.data.tick ?? null,
-    x: i.x, z: i.z, rotY: i.rotY, wall: i.wall, t: i.t,
-    onPlacementId: i.on != null ? String(i.on) : null, cu: i.cu ?? 0,
-  }))
-}
-
-defineExpose({ applyRec, getPlacements })
+defineExpose({ applyRec })
 onMounted(init)
 
 onBeforeUnmount(() => {

@@ -1,42 +1,156 @@
+<script setup>
+import { computed } from 'vue'
+import { useRouter } from 'vue-router'
+import { useAuthStore, homeFor } from '@/stores/auth'
+
+const auth = useAuthStore()
+const router = useRouter()
+
+// First letter or digit of the name (company names can start with "#" or "(").
+const initial = computed(() => (auth.user?.name.match(/[A-Za-z0-9]/)?.[0] || '?').toUpperCase())
+
+async function logout() {
+  try {
+    await auth.logout()
+  } finally {
+    router.push('/login')
+  }
+}
+</script>
+
 <template>
-  <nav class="navbar navbar-expand-lg eco-navbar">
-    <div class="container">
-      <RouterLink class="navbar-brand fw-bold" to="/">
-        <span class="brand-icon">⌂</span> HDB <span class="brand-green">EcoHome</span>
+  <nav class="navbar navbar-expand-lg navbar-dark bg-success">
+    <div class="container-fluid px-3 px-lg-4">
+
+      <RouterLink class="navbar-brand fw-bold" :to="homeFor(auth.user)">
+        🏠 HDB EcoHome
       </RouterLink>
 
-      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
+      <button
+        class="navbar-toggler"
+        type="button"
+        data-bs-toggle="collapse"
+        data-bs-target="#navbar"
+      >
         <span class="navbar-toggler-icon"></span>
       </button>
 
       <div class="collapse navbar-collapse" id="navbar">
-        <div class="navbar-nav ms-auto align-items-lg-center gap-lg-3">
-          <RouterLink class="nav-link" to="/">Home</RouterLink>
-          <RouterLink class="nav-link" to="/3d">Make Your 3D Home</RouterLink>
-          <RouterLink class="nav-link" to="/EnergyPlanner/">Energy Planner</RouterLink>
-          <RouterLink class="nav-link" to="/Simulator">Simulation</RouterLink>
-          <RouterLink class="nav-link" to="/Contractors">Find Contractors</RouterLink>
-          <!-- <RouterLink class="btn btn-success nav-cta" to="/3d">Explore EcoHome ↗</RouterLink> -->
+        <div class="navbar-nav ms-auto align-items-lg-center">
+
+          <!-- Contractors only have their dashboard; every other page is for homeowners -->
+          <RouterLink v-if="auth.isContractor" class="nav-link" to="/ContractorDashboard">
+            Dashboard
+          </RouterLink>
+
+          <template v-else>
+            <RouterLink class="nav-link" to="/">
+              Home
+            </RouterLink>
+
+            <RouterLink class="nav-link" to="/Simulator">
+              My HDB
+            </RouterLink>
+
+            <RouterLink class="nav-link" to="/EnergyPlanner/">
+              Energy Planner
+            </RouterLink>
+
+            <RouterLink class="nav-link" to="/Contractors">
+              Find Contractors
+            </RouterLink>
+
+            <RouterLink class="nav-link" to="/3d">
+              3D Spatial
+            </RouterLink>
+          </template>
+
+          <!-- Account -->
+          <div v-if="auth.user" class="nav-item dropdown ms-lg-3">
+            <button
+              class="btn nav-link dropdown-toggle account-toggle"
+              type="button"
+              data-bs-toggle="dropdown"
+              aria-expanded="false"
+            >
+              <span class="avatar" aria-hidden="true">{{ initial }}</span>
+              {{ auth.user.name }}
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+              <template v-if="auth.user.email || auth.user.singpass">
+                <li class="px-3 py-2 small text-secondary">
+                  <div v-if="auth.user.email">{{ auth.user.email }}</div>
+                  <span v-if="auth.user.singpass" class="badge badge-singpass mt-1">
+                    ✓ Singpass verified
+                  </span>
+                </li>
+                <li><hr class="dropdown-divider" /></li>
+              </template>
+              <template v-if="auth.isContractor">
+                <li>
+                  <RouterLink class="dropdown-item" to="/ContractorDashboard">Quotation requests</RouterLink>
+                </li>
+              </template>
+              <template v-else>
+                <li>
+                  <RouterLink class="dropdown-item" to="/EnergyPlanner/">My households &amp; plans</RouterLink>
+                </li>
+                <li>
+                  <RouterLink class="dropdown-item" to="/MyQuotations">My quotations</RouterLink>
+                </li>
+              </template>
+              <li><hr class="dropdown-divider" /></li>
+              <li>
+                <button class="dropdown-item text-danger" type="button" @click="logout">Log out</button>
+              </li>
+            </ul>
+          </div>
+
+          <div v-else-if="auth.ready" class="d-flex gap-2 ms-lg-3 py-2 py-lg-0">
+            <RouterLink class="btn btn-sm btn-outline-light" to="/login">Log in</RouterLink>
+            <RouterLink class="btn btn-sm btn-light text-success fw-semibold" to="/signup">
+              Sign up
+            </RouterLink>
+          </div>
+
         </div>
       </div>
+
     </div>
   </nav>
 </template>
-
 <style scoped>
-.eco-navbar {
-  background: white;
-  padding: 16px 0;
-  box-shadow: 0 2px 16px #102f2410;
+/* Keep the opened menu above page layers, e.g. the login page's pinned scene */
+.navbar {
   position: relative;
-  z-index: 10;
+  z-index: 1030;
 }
-.navbar-brand { color: #19352a; font-size: 22px; }
-.brand-green { color: #168b59; }
-.brand-icon { color: #168b59; font-size: 32px; vertical-align: -2px; }
-.nav-link { font-size: 14px; font-weight: 600; color: #485950; }
-.nav-link:hover, .router-link-exact-active.nav-link { color: #168b59; }
-.nav-cta { padding: 11px 18px; font-size: 13px; border-radius: 7px; font-weight: 600; }
-.navbar-toggler { border-color: #d5e2da; }
-.navbar-toggler-icon { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3E%3Cpath stroke='%2319352a' stroke-linecap='round' stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/%3E%3C/svg%3E"); }
+
+.nav-link.router-link-active {
+  color: white !important;
+  font-weight: bold;
+}
+
+.account-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: white;
+}
+
+.avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #ffd66b;
+  color: #145c32;
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+
+.dropdown-item.router-link-active {
+  color: var(--bs-success) !important;
+}
 </style>
