@@ -754,7 +754,7 @@ async function submit() {
                   </li>
                 </ul>
 
-                <div class="form-check remember">
+                <div class="form-check remember mb-4">
                   <input id="auth-remember" v-model="form.remember" class="form-check-input" type="checkbox" />
                   <label class="form-check-label" for="auth-remember">Keep me logged in on this device</label>
                 </div>
