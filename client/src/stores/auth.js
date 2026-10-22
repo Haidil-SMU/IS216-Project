@@ -14,11 +14,20 @@ export function homeFor(user) {
   return user?.role === 'contractor' ? '/ContractorDashboard' : '/'
 }
 
+// The login page for someone who wanted `redirect`; contractor pages open the Corppass login.
+export function loginLocation(redirect, role) {
+  const query = { redirect }
+  if (role === 'contractor') query.as = 'contractor'
+  return { path: '/login', query }
+}
+
 export const useAuthStore = defineStore('auth', () => {
   const user = ref(null)
   const ready = ref(false)
   const loggedIn = computed(() => user.value !== null)
   const isContractor = computed(() => user.value?.role === 'contractor')
+  // Login page to send the user to while the "please log in" popup is open, else null.
+  const loginPrompt = ref(null)
   let pending = null
 
   // GET /auth/me once per page load; the session cookie does the rest.
@@ -63,6 +72,14 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = null
   }
 
+  function promptLogin(location) {
+    loginPrompt.value = location
+  }
+
+  function closeLoginPrompt() {
+    loginPrompt.value = null
+  }
+
   // Singpass is a full-page redirect handled by the server.
   function singpassUrl(returnTo = '', mode = 'login') {
     const params = new URLSearchParams({ mode })
@@ -82,11 +99,14 @@ export const useAuthStore = defineStore('auth', () => {
     ready,
     loggedIn,
     isContractor,
+    loginPrompt,
     fetchMe,
     login,
     signup,
     logout,
     clear,
+    promptLogin,
+    closeLoginPrompt,
     singpassUrl,
     corppassUrl,
   }
@@ -100,7 +120,7 @@ export function installAuthInterceptor(router) {
       useAuthStore().clear()
       const current = router.currentRoute.value
       if (current.path !== '/login') {
-        router.push({ path: '/login', query: { redirect: current.fullPath } })
+        router.push(loginLocation(current.fullPath, current.meta.role))
       }
     }
     return Promise.reject(error)

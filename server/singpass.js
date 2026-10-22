@@ -8,7 +8,7 @@ const jose = require('jose');
 const { getDb } = require('./db');
 const { startSession } = require('./auth');
 const { toHousehold, personName } = require('./myinfo');
-const { loadKeys, getOidcConfig, safeReturnTo } = require('./oidc');
+const { loadKeys, getOidcConfig, safeReturnTo, loginErrorUrl } = require('./oidc');
 
 const DISCOVERY_URL =
   process.env.SINGPASS_DISCOVERY_URL ||
@@ -114,7 +114,9 @@ router.get('/login', async (req, res) => {
     res.redirect(authorizationUrl.href);
   } catch (error) {
     console.error('Singpass login error:', error.message);
-    res.redirect(mode === 'myinfo' ? '/EnergyPlanner/?error=myinfo' : '/login?error=singpass');
+    res.redirect(
+      mode === 'myinfo' ? '/EnergyPlanner/?error=myinfo' : loginErrorUrl({ error: 'singpass' }, returnTo),
+    );
   }
 });
 
@@ -122,7 +124,10 @@ router.get('/login', async (req, res) => {
 router.get('/callback', async (req, res) => {
   const flow = req.session.singpassFlow;
   delete req.session.singpassFlow;
-  const failUrl = flow?.mode === 'myinfo' ? '/EnergyPlanner/?error=myinfo' : '/login?error=singpass';
+  const failUrl =
+    flow?.mode === 'myinfo'
+      ? '/EnergyPlanner/?error=myinfo'
+      : loginErrorUrl({ error: 'singpass' }, flow?.returnTo);
 
   try {
     if (!flow) throw new Error('No Singpass login in progress for this session');
