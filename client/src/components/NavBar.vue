@@ -19,11 +19,11 @@ async function logout() {
 </script>
 
 <template>
-  <nav class="navbar navbar-expand-lg navbar-dark bg-success">
+  <nav class="navbar navbar-expand-lg eco-navbar">
     <div class="container-fluid px-3 px-lg-4">
 
       <RouterLink class="navbar-brand fw-bold" :to="homeFor(auth.user)">
-        🏠 HDB EcoHome
+        <span class="brand-icon" aria-hidden="true">⌂</span> HDB <span class="brand-green">EcoHome</span>
       </RouterLink>
 
       <button
@@ -36,7 +36,7 @@ async function logout() {
       </button>
 
       <div class="collapse navbar-collapse" id="navbar">
-        <div class="navbar-nav ms-auto align-items-lg-center">
+        <div class="navbar-nav ms-auto align-items-lg-center gap-lg-2">
 
           <!-- Contractors only have their dashboard; every other page is for homeowners -->
           <RouterLink v-if="auth.isContractor" class="nav-link" to="/ContractorDashboard">
@@ -107,8 +107,8 @@ async function logout() {
           </div>
 
           <div v-else-if="auth.ready" class="d-flex gap-2 ms-lg-3 py-2 py-lg-0">
-            <RouterLink class="btn btn-sm btn-outline-light" to="/login">Log in</RouterLink>
-            <RouterLink class="btn btn-sm btn-light text-success fw-semibold" to="/signup">
+            <RouterLink class="btn btn-sm btn-outline-success" to="/login">Log in</RouterLink>
+            <RouterLink class="btn btn-sm btn-success fw-semibold" to="/signup">
               Sign up
             </RouterLink>
           </div>
@@ -120,37 +120,76 @@ async function logout() {
   </nav>
 </template>
 <style scoped>
-/* Keep the opened menu above page layers, e.g. the login page's pinned scene */
-.navbar {
+/* Visual styling only. Auth, roles, logout and links are unchanged. */
+.eco-navbar {
+  background: #ffffff;
+  padding: 14px 0;
+  box-shadow: 0 2px 16px rgba(16, 47, 36, 0.08);
   position: relative;
   z-index: 1030;
 }
-
-.nav-link.router-link-active {
-  color: white !important;
-  font-weight: bold;
+.navbar-brand {
+  color: #19352a;
+  font-size: 22px;
+  white-space: nowrap;
 }
-
+.brand-icon {
+  color: #168b59;
+  font-size: 32px;
+  vertical-align: -2px;
+}
+.brand-green { color: #168b59; }
+.nav-link {
+  color: #485950;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 8px;
+  padding: 9px 10px;
+}
+.nav-link:hover,
+.nav-link.router-link-active {
+  color: #168b59 !important;
+  background: #eaf7ee;
+}
 .account-toggle {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  color: white;
+  color: #264c3b;
+  border: 1px solid #d6e9dd;
+  background: #f4faf6;
+  padding: 6px 10px;
 }
-
+.account-toggle:hover,
+.account-toggle:focus {
+  color: #168b59;
+  background: #eaf7ee;
+}
 .avatar {
   display: inline-grid;
   place-items: center;
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: #ffd66b;
+  background: #d8f2df;
   color: #145c32;
   font-weight: 700;
   font-size: 0.85rem;
 }
-
+.dropdown-menu {
+  border: 1px solid #dcebe1;
+  border-radius: 12px;
+}
 .dropdown-item.router-link-active {
-  color: var(--bs-success) !important;
+  color: #168b59 !important;
+  background: #eaf7ee;
+}
+.badge-singpass {
+  background: #e2f4e7;
+  color: #176c43;
+}
+.navbar-toggler { border-color: #d5e2da; }
+.navbar-toggler-icon {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3E%3Cpath stroke='%2319352a' stroke-linecap='round' stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/%3E%3C/svg%3E");
 }
 </style>
