@@ -818,6 +818,42 @@ function validPlan(body) {
   );
 }
 
+// GET - Retrieve simulator data from MongoDB
+app.get('/api/dev/simulator', async (req, res) => {
+    try {
+        const db = getDb();
+
+        const householdId = '6ad89eaa947d323d4c2b0ac0';
+
+        const rooms = await db.collection('rooms')
+            .find({
+                householdId: new ObjectId(householdId)
+            })
+            .sort({ order: 1 })
+            .toArray();
+
+        const items = await db.collection('catalogue_items')
+            .find({
+                category: {
+                    $in: ['kitchen', 'living', 'television', 'laundry', 'lights']
+                }
+            })
+            .toArray();
+
+        res.status(200).json({
+            rooms: rooms,
+            items: items
+        });
+
+    } catch (error) {
+        console.log(error);
+
+        res.status(500).json({
+            error: 'Unable to retrieve simulator data'
+        });
+    }
+});
+
 // GET: return the catalogue plus this account's households and plans.
 app.get("/api/planner", auth.requireClient, async (req, res) => {
   const catalogue = readJson("appliances.json");
