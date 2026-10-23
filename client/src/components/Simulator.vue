@@ -29,6 +29,7 @@ const toast = ref('')
 let timer = null
 let toastTimer = null
 
+//only electrical appliances allowed.
 const allowedCategories = ['kitchen', 'living', 'television', 'laundry', 'lights']
 
 function getCatalogueItem(key) {
