@@ -1,7 +1,7 @@
 // One shared MongoDB connection for the whole server.
 const { MongoClient } = require('mongodb');
 
-const DB_NAME = 'ecohome';
+const DB_NAME = 'ecohome'; //dont change this unless necessary
 let client;
 let db;
 

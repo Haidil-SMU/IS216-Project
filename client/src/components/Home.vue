@@ -7,6 +7,7 @@ const plannerPage = '/EnergyPlanner/'
 const simulatorPage = '/Simulator/'
 const contractorPage = '/Contractors/'
 
+//ensure that it starts from slide 0.
 const currentSlide = ref(0)
 
 const slides = [

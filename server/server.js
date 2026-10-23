@@ -17,6 +17,8 @@ const PORT = process.env.PORT || 8000;
 const SCENARIO_FILE = path.join(__dirname, 'gameScenarios.json');
 const APPLIANCE_FILE = path.join(__dirname, 'appliances.json');
 
+
+//loading of gameData
 function loadGameData() {
     try {
         const scenarioRaw = fs.readFileSync(SCENARIO_FILE, 'utf8');

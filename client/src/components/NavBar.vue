@@ -16,7 +16,7 @@
           <RouterLink class="nav-link" to="/EnergyPlanner/">Energy Planner</RouterLink>
           <RouterLink class="nav-link" to="/Simulator">Simulation</RouterLink>
           <RouterLink class="nav-link" to="/Contractors">Find Contractors</RouterLink>
-          <!-- <RouterLink class="btn btn-success nav-cta" to="/3d">Explore EcoHome ↗</RouterLink> -->
+          <!-- <RouterLink class="btn btn-success nav-cta" to="/3d">Explore EcoHome ↗</RouterLink> revamped -->
         </div>
       </div>
     </div>
