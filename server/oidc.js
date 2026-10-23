@@ -77,4 +77,11 @@ function safeReturnTo(value) {
     : '';
 }
 
-module.exports = { loadKeys, getOidcConfig, safeReturnTo };
+// The login page to show after a failed login, still remembering where the user was going.
+function loginErrorUrl(query, returnTo) {
+  const params = new URLSearchParams(query);
+  if (safeReturnTo(returnTo)) params.set('redirect', returnTo);
+  return '/login?' + params;
+}
+
+module.exports = { loadKeys, getOidcConfig, safeReturnTo, loginErrorUrl };

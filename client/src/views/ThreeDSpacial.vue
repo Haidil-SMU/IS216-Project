@@ -3,10 +3,7 @@
 
     <div class="d-flex flex-grow-1 min-h-0 min-w-0">
       <main class="flex-grow-1 min-w-0 bg-light p-0 position-relative">
-        <FloorPlan3D v-if="mode==='flat'" :rooms="plan.rooms" :footprint="plan.footprint"
-  :selected-id="selectedRoomId" @select-room="selectedRoomId = $event" @open-room="openRoom" />
         <RoomCanvas
-          v-else
           ref="canvas"
           :appliances="spawnedAppliances"
           :room="room"
@@ -15,17 +12,14 @@
           @no-space="handleNoSpace"
           @removed="handleRemoved"
           @analysis="analysis = $event"
-          @layout-changed="onLayoutChanged"
         />
-        <button v-if="mode==='room'" class="btn btn-sm btn-dark position-absolute top-0 start-0 m-2" style="z-index:5" @click="backToFlat">← Whole flat</button>
-        <div v-if="loadError" class="alert alert-danger position-absolute m-3" style="z-index:5">{{ loadError }}</div>
       </main>
 
       <aside class="right-sidebar overflow-auto bg-body-secondary border-start p-3 d-flex flex-column justify-content-between">
         <div>
           <h5 class="fw-bold mb-1">Room Summary</h5>
           <p class="small text-muted mb-3">Electricity Tariff: ${{ energyData.electricityTariff }}/kWh</p>
-          <div v-if="mode==='flat'" class="small mb-2">Adding to: <b>{{ selectedRoom?.name ?? 'click a room first' }}</b></div>
+
           <div class="card bg-white border-0 shadow-sm p-3 mb-3">
             <label v-for="s in sliders" :key="s.key" class="small d-block mb-1">
               <span class="d-flex justify-content-between"><span>{{ s.label }}</span><b>{{ room[s.key].toFixed(1) }} m</b></span>
@@ -103,6 +97,7 @@
           </ul>
         </div>
       </aside>
+
     </div>
 
     <footer class="bottom-sidebar bg-dark text-white border-top border-secondary flex-shrink-0">
@@ -115,39 +110,14 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed } from 'vue'
 import energyData from '../data/energyData.json'
 import AppliancesList from '../components/AppliancesList.vue'
 import RoomCanvas from '../components/RoomCanvas.vue'
-import FloorPlan3D from '../components/FloorPlan3D.vue'
-import { resolveSpec } from '../stores/applianceModels.js'
-import { findSpot } from '../stores/placement.js'
-import { getFloorplan, saveRoomPlacements, createHousehold, addPlacement, saveRoom } from '../api/spatial.js'
-// import { getFloorplan, createHousehold, addPlacement, saveRoom } from '../api/spatial.js'
-const loadError = ref('')
-const HOUSEHOLD_KEY = 'ecohomeHouseholdId'
-
-onMounted(async () => {
-  try {
-    const saved = localStorage.getItem(HOUSEHOLD_KEY)
-    if (saved) {
-      try { return await loadHousehold(saved) }
-      catch { localStorage.removeItem(HOUSEHOLD_KEY) }
-    }
-    const created = await createHousehold({ userId: 'demo-user', name: 'My flat', flatTypeId: '2-room' })
-    localStorage.setItem(HOUSEHOLD_KEY, created.household._id)
-    await loadHousehold(created.household._id)
-  } catch (e) {
-    loadError.value = 'Could not load the floor plan: ' + (e.response?.data?.error || e.message)
-  }
-})
 
 const activeCategory = ref('kitchen')
 const activeApplianceName = ref('Refrigerator')
 const spawnedAppliances = ref([])
-const plan = ref({ rooms: [], footprint: null })
-const activeRoomId = ref(null)
-const mode = computed(() => (activeRoomId.value ? 'room' : 'flat'))
 
 const handleTabChange = (data) => {
   activeCategory.value = data.tabId
@@ -155,64 +125,11 @@ const handleTabChange = (data) => {
 }
 
 const room = reactive({ w: 4.2, d: 3.6, h: 2.6 })
-const activeRoom = computed(() => plan.value.rooms.find((r) => String(r._id) === activeRoomId.value))
-const limits = computed(() => {
-  const r = activeRoom.value
-  if (!r) return { w: 6, d: 6 }
-  const EPS = 0.01, o = r.origin
-  let w = 10, d = 10
-  for (const x of plan.value.rooms) {
-    if (x === r) continue
-    const zOverlap = x.origin.z < o.z + room.d - EPS && x.origin.z + x.dimension.d > o.z + EPS
-    const xOverlap = x.origin.x < o.x + room.w - EPS && x.origin.x + x.dimension.w > o.x + EPS
-    if (zOverlap && x.origin.x >= o.x + EPS) w = Math.min(w, x.origin.x - o.x)
-    if (xOverlap && x.origin.z >= o.z + EPS) d = Math.min(d, x.origin.z - o.z)
-  }
-  return { w: Math.floor(w * 10) / 10, d: Math.floor(d * 10) / 10 }
-})
-const sliders = computed(() => [
-  { key: 'w', label: 'Width', min: 1.5, max: limits.value.w },
-  { key: 'd', label: 'Depth', min: 1.5, max: limits.value.d },
+const sliders = [
+  { key: 'w', label: 'Width', min: 2.5, max: 6 },
+  { key: 'd', label: 'Depth', min: 2.5, max: 6 },
   { key: 'h', label: 'Ceiling height', min: 2.4, max: 3 },
-])
-async function loadHousehold(id) { plan.value = await getFloorplan(id) }
-
-function openRoom(roomId) {
-  const r = plan.value.rooms.find((x) => String(x._id) === roomId)
-  activeRoomId.value = roomId
-  Object.assign(room, r.dimension)
-  const sorted = [...r.placements].sort((a, b) => (a.onPlacementId ? 1 : 0) - (b.onPlacementId ? 1 : 0))
-  spawnedAppliances.value = sorted.map((p) => {
-    const t = energyData.categories[p.category]?.types?.[p.applianceTypeKey]
-    return {
-      id: String(p._id), name: t?.name ?? p.applianceTypeKey, type: p.applianceTypeKey, category: p.category,
-      tick: p.tick, kwhYear: t?.ticks?.[p.tick]?.kwhYear ?? t?.kwhYear ?? 0,
-      pos: { x: p.x, z: p.z, rotY: p.rotY, wall: p.wall, t: p.t, on: p.onPlacementId ? String(p.onPlacementId) : undefined, cu: p.cu },
-    }
-  })
-}
-
-let saveTimer
-async function persistRoom() {
-  if (!activeRoomId.value || !canvas.value) return true
-  try {
-    await saveRoom(activeRoomId.value, { dimension: { ...room }, placements: canvas.value.getPlacements() })
-    return true
-  } catch (e) {
-    notice.value = e.response?.data?.error || 'Could not save the room'
-    setTimeout(() => (notice.value = ''), 4000)
-    return false
-  }
-}
-function onLayoutChanged() { clearTimeout(saveTimer); saveTimer = setTimeout(persistRoom, 400) }
-watch(() => [room.w, room.d, room.h], () => { if (mode.value === 'room') onLayoutChanged() })
-
-async function backToFlat() {
-  clearTimeout(saveTimer)
-  if (!(await persistRoom())) return
-  await loadHousehold(plan.value.household._id)
-  activeRoomId.value = null
-}
+]
 
 const notice = ref('')
 const handleNoSpace = (id, reason) => {
@@ -235,41 +152,11 @@ const overlayOptions = [
 const analysis = ref({ rows: [], totals: null, recs: [] })
 const rowOf = (id) => analysis.value.rows.find((r) => r.id === id)
 
-const selectedRoomId = ref(null)
-const selectedRoom = computed(() => plan.value.rooms.find((r) => String(r._id) === selectedRoomId.value))
-
-const flash = (msg) => { notice.value = msg; setTimeout(() => (notice.value = ''), 4000) }
-
-const handleAddAppliance = async (appliance) => {
-  if (mode.value === 'room') {
-    spawnedAppliances.value.push({ ...appliance, id: Date.now() + Math.random() })
-    return
-  }
-
-  const r = selectedRoom.value
-  if (!r) return flash('Click a room in the floor plan first, then add the item.')
-
-  const spec = resolveSpec(appliance.type, appliance.category)
-  const others = r.placements.map((p) => ({
-    spec: resolveSpec(p.applianceTypeKey, p.category), id: String(p._id),
-    x: p.x, z: p.z, rotY: p.rotY, wall: p.wall, t: p.t, cu: p.cu,
-    on: p.onPlacementId ? String(p.onPlacementId) : undefined,
-  }))
-  const spot = findSpot({ ...r.dimension }, spec, others)
-  if (!spot) {
-    const needsCounter = spec.mode === 'top' && !others.some((o) => o.spec.kind === 'counter')
-    return flash(needsCounter ? 'Add a countertop first, then place this on it.' : 'No free space in this room.')
-  }
-  try {
-    const saved = await addPlacement(r._id, {
-      applianceTypeKey: appliance.type, category: appliance.category, tick: appliance.tick ?? 'none',
-      x: spot.x, z: spot.z, rotY: spot.rotY, wall: spot.wall, t: spot.t, cu: spot.cu ?? 0,
-      onPlacementId: spot.on ?? null,
-    })
-    r.placements.push(saved)
-  } catch (e) {
-    flash('Could not save: ' + (e.response?.data?.error || e.message))
-  }
+const handleAddAppliance = (appliance) => {
+  spawnedAppliances.value.push({
+    ...appliance,
+    id: Date.now() + Math.random() 
+  })
 }
 
 const removeAppliance = (id) => {
