@@ -1,6 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import HomeView from '../components/Home.vue';
-import SimulatorView from '../components/Simulator.vue';
+import SimulatorView from '../components/2DSimulator.vue';
 import EnergyPlannerView from '../components/EnergyPlanner.vue';
 import Contractors from '@/views/Contractors.vue';
 import MyQuotations from '@/views/MyQuotations.vue';
@@ -8,7 +8,7 @@ import ThreeDSpacial from '@/views/ThreeDSpacial.vue';
 import QuotationRequest from '@/views/QuotationRequest.vue';
 import ContractorDashboard from '@/views/ContractorDashboard.vue';
 import AuthView from '@/views/AuthView.vue';
-import { useAuthStore, safeRedirect, homeFor, loginLocation } from '@/stores/auth';
+import { useAuthStore, safeRedirect, homeFor } from '@/stores/auth';
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -25,13 +25,11 @@ const router = createRouter({
 
   {
     path: '/Simulator/',
-    component: SimulatorView,
-    meta: { requiresAuth: true, role: 'client' }
+    component: SimulatorView
   },
     {
     path: '/Contractors',
-    component: Contractors,
-    meta: { requiresAuth: true, role: 'client' }
+    component: Contractors
   },
       {
     path: '/MyQuotations',
@@ -41,8 +39,7 @@ const router = createRouter({
 
   {
     path: '/3d',
-    component: ThreeDSpacial,
-    meta: { requiresAuth: true, role: 'client' }
+    component: ThreeDSpacial
   },
     {
     path: '/QuotationRequest',
@@ -72,15 +69,14 @@ const router = createRouter({
 
 // Personal pages need a session, homeowner and contractor pages are kept apart,
 // and the login pages are only for signed-out users.
-router.beforeEach(async (to, from) => {
+router.beforeEach(async (to) => {
   const auth = useAuthStore();
   await auth.fetchMe();
 
-  // Signed-out users stay where they are and get a popup that counts down to the login page.
   if (to.meta.requiresAuth && !auth.user) {
-    auth.promptLogin(loginLocation(to.fullPath, to.meta.role));
-    // Opened from the address bar there is no page to stay on, so show home underneath.
-    return from.matched.length ? false : '/';
+    const query = { redirect: to.fullPath };
+    if (to.meta.role === 'contractor') query.as = 'contractor';
+    return { path: '/login', query };
   }
   // Contractors only have their dashboard; every other page is for homeowners.
   if (auth.user?.role === 'contractor' && to.meta.role !== 'contractor') {
