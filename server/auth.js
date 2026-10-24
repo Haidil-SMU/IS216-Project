@@ -55,7 +55,18 @@ function publicUser(user) {
     uen: user.corppass?.uen || null,
     singpass: Boolean(user.singpass),
     hasPassword: Boolean(user.passwordHash),
+    // Changes with every new profile picture, so its URL can be cached.
+    pictureVersion: user.pictureUpdatedAt ? user.pictureUpdatedAt.getTime() : null,
   };
+}
+
+// Homeowners save a household before using the rest of the site; other roles have none.
+async function hasHousehold(user) {
+  if (roleOf(user) !== 'client') return true;
+  const count = await getDb()
+    .collection('households')
+    .countDocuments({ userId: user._id }, { limit: 1 });
+  return count > 0;
 }
 
 // Starts a fresh session for the user (prevents session fixation).
@@ -167,7 +178,7 @@ router.post('/signup', authLimiter, async (req, res) => {
   }
 
   await startSession(req, user, { remember: Boolean(req.body?.remember) });
-  res.status(201).json({ user: publicUser(user) });
+  res.status(201).json({ user: { ...publicUser(user), hasHousehold: false } });
 });
 
 // POST: log in with email + password.
@@ -187,7 +198,7 @@ router.post('/login', authLimiter, async (req, res) => {
 
   await users.updateOne({ _id: user._id }, { $set: { lastLoginAt: new Date() } });
   await startSession(req, user, { remember: Boolean(req.body?.remember) });
-  res.json({ user: publicUser(user) });
+  res.json({ user: { ...publicUser(user), hasHousehold: await hasHousehold(user) } });
 });
 
 // POST: end the session and clear the cookie.
@@ -203,7 +214,13 @@ router.post('/logout', (req, res, next) => {
 router.get('/me', async (req, res) => {
   const user = await currentUser(req);
   if (!user) return res.status(401).json({ error: 'Not logged in.' });
-  res.json({ user: { ...publicUser(user), name: await displayName(user) } });
+  res.json({
+    user: {
+      ...publicUser(user),
+      name: await displayName(user),
+      hasHousehold: await hasHousehold(user),
+    },
+  });
 });
 
 module.exports = {

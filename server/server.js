@@ -14,6 +14,7 @@ const singpass = require('./singpass');
 const myinfo = require('./myinfo');
 const corppass = require('./corppass');
 const contractor = require('./contractor');
+const profile = require('./profile');
 
 const PORT = process.env.PORT || 8000;
 const SCENARIO_FILE = path.join(__dirname, 'gameScenarios.json');
@@ -110,6 +111,7 @@ app.use('/api/auth', auth.router);
 app.use('/api/myinfo', myinfo.router);
 app.use('/api/auth/corppass', corppass.router);
 app.use('/api/contractor', contractor.router);
+app.use('/api/profile', profile.router);
 
 // ============================================================
 // GET
@@ -721,7 +723,7 @@ Do not include a total. The application calculates it.
 // POST - Analyze Contractor Quotations with Gemini AI
 // ============================================================
 
-app.post('/api/analyze-quotations', async (req, res) => {
+app.post('/api/analyze-quotations', auth.requireClient, async (req, res) => {
     try {
         const { contractors } = req.body;
 
@@ -822,10 +824,11 @@ function validPlan(body) {
 }
 
 // GET - Retrieve simulator data from MongoDB
-app.get('/api/dev/simulator', async (req, res) => {
+app.get('/api/dev/simulator', auth.requireClient, async (req, res) => {
     try {
         const db = getDb();
 
+        // Every homeowner sees the same demo household for now: rooms aren't linked to accounts yet.
         const householdId = '6ad89eaa947d323d4c2b0ac0';
 
         const rooms = await db.collection('rooms')
@@ -882,10 +885,13 @@ app.get("/api/planner", auth.requireClient, async (req, res) => {
   });
 });
 
-// POST: add a new household for this account.
+// POST: add this account's household. Each account has only one.
 app.post("/api/users", auth.requireClient, async (req, res) => {
   if (!req.body || !req.body.name) {
     return res.status(400).json({ error: "Household name is required." });
+  }
+  if (await getDb().collection("households").countDocuments(ownedBy(req), { limit: 1 })) {
+    return res.status(409).json({ error: "This account already has a household. Edit it instead." });
   }
   const user = householdBody(req, randomUUID());
   await Planner.addHousehold({ ...user, ...ownedBy(req) });

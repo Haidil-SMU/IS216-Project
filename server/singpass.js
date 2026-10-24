@@ -84,7 +84,7 @@ router.get('/login', async (req, res) => {
   const mode = req.query.mode === 'myinfo' ? 'myinfo' : 'login';
   const returnTo = safeReturnTo(req.query.returnTo);
   if (mode === 'myinfo' && !req.session.userId) {
-    return res.redirect('/login?redirect=' + encodeURIComponent(returnTo || '/EnergyPlanner/'));
+    return res.redirect('/login?redirect=' + encodeURIComponent(returnTo || '/MyProfile'));
   }
 
   try {
@@ -115,7 +115,7 @@ router.get('/login', async (req, res) => {
   } catch (error) {
     console.error('Singpass login error:', error.message);
     res.redirect(
-      mode === 'myinfo' ? '/EnergyPlanner/?error=myinfo' : loginErrorUrl({ error: 'singpass' }, returnTo),
+      mode === 'myinfo' ? '/MyProfile?error=myinfo' : loginErrorUrl({ error: 'singpass' }, returnTo),
     );
   }
 });
@@ -126,7 +126,7 @@ router.get('/callback', async (req, res) => {
   delete req.session.singpassFlow;
   const failUrl =
     flow?.mode === 'myinfo'
-      ? '/EnergyPlanner/?error=myinfo'
+      ? '/MyProfile?error=myinfo'
       : loginErrorUrl({ error: 'singpass' }, flow?.returnTo);
 
   try {
@@ -157,13 +157,23 @@ router.get('/callback', async (req, res) => {
     let user;
 
     if (flow.mode === 'myinfo' && req.session.userId) {
-      // Link Singpass to the account that is already logged in.
+      // Link Singpass to the account that is already logged in. An account keeps
+      // the Singpass identity it was first linked to.
       const currentId = new ObjectId(req.session.userId);
-      if (linked && !linked._id.equals(currentId)) {
-        throw new Error('This Singpass account is already linked to another EcoHome account');
+      const current = await users.findOne({ _id: currentId });
+      if (!current) throw new Error('Account not found');
+      const otherAccount = linked && !linked._id.equals(currentId);
+      const otherIdentity = current.singpass?.uuid && current.singpass.uuid !== uuid;
+      if (otherAccount || otherIdentity) {
+        console.error('Singpass callback error: Singpass account does not match this EcoHome account');
+        return res.redirect('/MyProfile?error=myinfo-mismatch');
       }
       if (!linked) {
-        await users.updateOne({ _id: currentId }, { $set: { singpass: { uuid, linkedAt: now } } });
+        const result = await users.updateOne(
+          { _id: currentId, 'singpass.uuid': { $exists: false } },
+          { $set: { singpass: { uuid, linkedAt: now } } },
+        );
+        if (!result.modifiedCount) throw new Error('This account was linked to Singpass meanwhile');
       }
       user = await users.findOne({ _id: currentId });
     } else if (linked) {
@@ -194,7 +204,9 @@ router.get('/callback', async (req, res) => {
       remember: true,
       keep: offerDraft ? { myinfoDraft: household } : {},
     });
-    res.redirect(flow.returnTo || (offerDraft ? '/EnergyPlanner/' : '/'));
+    // New accounts and first-time Singpass logins set up their household before anything else.
+    if (!hasHousehold) return res.redirect('/MyProfile?setup=household');
+    res.redirect(flow.returnTo || (offerDraft ? '/MyProfile' : '/'));
   } catch (error) {
     console.error('Singpass callback error:', error.message);
     res.redirect(failUrl);

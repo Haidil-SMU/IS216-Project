@@ -226,7 +226,203 @@ fieldset {
   position: relative;
   background: #e8f5ec;
 }
-.saved-photo img {
+.saved-photo img
+.popup-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1055;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(18, 38, 27, 0.45);
+  backdrop-filter: blur(2px);
+}
+.popup-card {
+  width: 100%;
+  max-width: 400px;
+  padding: 24px;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 24px 48px -12px rgba(16, 40, 28, 0.35);
+}
+.popup-enter-active,
+.popup-leave-active {
+  transition: opacity 180ms ease;
+}
+.popup-enter-active .popup-card,
+.popup-leave-active .popup-card {
+  transition: transform 180ms ease;
+}
+.popup-enter-from,
+.popup-leave-to {
+  opacity: 0;
+}
+.popup-enter-from .popup-card,
+.popup-leave-to .popup-card {
+  transform: scale(0.94);
+}
+.saved-banner {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 6px 14px;
+  border: 1px solid #badbcc;
+  border-radius: 999px;
+  background: #e8f5ee;
+  color: #0f5132;
+  font-size: 0.875rem;
+}
+.saved-banner a {
+  color: #146c43;
+  font-weight: 600;
+  text-decoration: none;
+}
+.saved-banner a:hover {
+  text-decoration: underline;
+}
+.error-banner {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 4px 8px;
+  max-width: 100%;
+  padding: 6px 14px;
+  border: 1px solid #f1c2c6;
+  /* Not a full pill: the longer messages wrap onto two lines on phones. */
+  border-radius: 16px;
+  background: #fdf0f1;
+  color: #842029;
+  font-size: 0.875rem;
+}
+.error-banner > span {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #c8323a;
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.error-banner button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #a3242b;
+  font-weight: 600;
+}
+.error-banner button:hover {
+  text-decoration: underline;
+}
+/* --tabs is the number of tabs and --tab the open one (0-based), set in MyProfile.vue. */
+.profile-tabs {
+  position: relative;
+  display: inline-grid;
+  grid-template-columns: repeat(var(--tabs), minmax(0, 1fr));
+  padding: 6px;
+  border: 1px solid #dcebe1;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 8px 20px -12px rgba(16, 40, 28, 0.35);
+}
+/* The green pill that slides under the open tab. */
+.profile-tabs-thumb {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 6px;
+  width: calc((100% - 12px) / var(--tabs));
+  border-radius: 999px;
+  background: linear-gradient(135deg, #198754, #2fbf71);
+  box-shadow: 0 6px 14px -6px rgba(25, 135, 84, 0.7);
+  transform: translateX(calc(100% * var(--tab)));
+  transition: transform 0.35s cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+.profile-tab {
+  position: relative;
+  padding: 10px 22px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #485950;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.2s ease, background-color 0.2s ease, transform 0.1s ease;
+}
+.profile-tab:not(.active):hover {
+  color: #168b59;
+  background: #eaf7ee;
+}
+.profile-tab:active {
+  transform: scale(0.96);
+}
+.profile-tab.active {
+  color: #fff;
+}
+.profile-tab:focus-visible {
+  outline: 3px solid rgba(25, 135, 84, 0.45);
+  outline-offset: 2px;
+}
+/* On phones the switcher spans the page and long labels wrap onto two lines. */
+@media (max-width: 575px) {
+  .profile-tabs {
+    display: grid;
+    border-radius: 18px;
+  }
+  .profile-tabs-thumb,
+  .profile-tab {
+    border-radius: 14px;
+  }
+  .profile-tab {
+    padding: 8px 6px;
+    font-size: 0.8rem;
+    line-height: 1.25;
+    white-space: normal;
+  }
+}
+.profile-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px 0;
+  text-align: center;
+}
+.profile-picture-wrap {
+  position: relative;
+  flex: none;
+}
+/* A green gradient ring around the picture. */
+.profile-picture-wrap::before {
+  content: '';
+  position: absolute;
+  inset: -5px;
+  border-radius: 50%;
+  background: conic-gradient(from 200deg, #2fbf71, #146c43, #8fdcb0, #2fbf71);
+  box-shadow: 0 10px 24px -10px rgba(20, 108, 67, 0.55);
+}
+.profile-picture {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 112px;
+  height: 112px;
+  overflow: hidden;
+  border: 4px solid #fff;
+  border-radius: 50%;
+  background: #e3f5ea;
+  color: #146c43;
+  font-size: 2.75rem;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(16, 40, 28, 0.18);
+  transition: opacity 0.2s ease;
+}
+.profile-picture img {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -325,4 +521,130 @@ fieldset {
 }
 .energy-home .planner-bar-chart {
   flex-shrink: 0;
+}
+.profile-picture.busy {
+  opacity: 0.55;
+}
+.profile-picture-edit {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  background: #198754;
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(16, 40, 28, 0.25);
+  transition: background-color 0.15s ease, transform 0.15s ease;
+}
+.profile-picture-edit:hover {
+  background: #146c43;
+  transform: scale(1.06);
+}
+.profile-picture-edit:focus-visible {
+  outline: 3px solid rgba(25, 135, 84, 0.45);
+  outline-offset: 2px;
+}
+.profile-picture-edit:disabled {
+  opacity: 0.7;
+}
+.profile-picture-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  background: #c8323a;
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(16, 40, 28, 0.25);
+  opacity: 0;
+  transform: scale(0.8);
+  transition: opacity 0.15s ease, transform 0.15s ease, background-color 0.15s ease;
+}
+.profile-picture-wrap:hover .profile-picture-remove,
+.profile-picture-wrap:focus-within .profile-picture-remove {
+  opacity: 1;
+  transform: scale(1);
+}
+.profile-picture-remove:hover {
+  background: #a3242b;
+}
+.profile-picture-remove:focus-visible {
+  outline: 3px solid rgba(200, 50, 58, 0.45);
+  outline-offset: 2px;
+}
+.remove-preview {
+  width: 72px;
+  height: 72px;
+  margin-bottom: 12px;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  object-fit: cover;
+  box-shadow: 0 2px 8px rgba(16, 40, 28, 0.18);
+}
+/* Touch screens cannot hover, so keep the button visible there. */
+@media (hover: none) {
+  .profile-picture-remove {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.profile-meta {
+  min-width: 0;
+}
+.profile-name {
+  margin: 4px 0 0;
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #1d2b23;
+  overflow-wrap: anywhere;
+}
+.profile-email {
+  margin: 2px 0 0;
+  color: #5c6b63;
+  overflow-wrap: anywhere;
+}
+.profile-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+.profile-badge {
+  padding: 3px 10px;
+  border: 1px solid #cfe3d7;
+  border-radius: 999px;
+  background: #f1f8f4;
+  color: #146c43;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.profile-badge-singpass {
+  border-color: #f6cdd0;
+  background: #fdf1f2;
+  color: #b3141d;
+}
+@media (max-width: 575px) {
+  .profile-picture {
+    width: 96px;
+    height: 96px;
+    font-size: 2.3rem;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .profile-tabs-thumb,
+  .profile-tab {
+    transition: none;
+  }
 }
