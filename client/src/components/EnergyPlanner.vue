@@ -1,9 +1,11 @@
 <style scoped src="../assets/style.css"></style>
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import axios from 'axios'
+import { useAuthStore } from '@/stores/auth'
 
-const API_URL = 'http://127.0.0.1:8000/api'
+const API_URL = '/api'
 const appliances = ref([])
 const flatTypes = ref([])
 const users = ref([])
@@ -26,6 +28,11 @@ const profile = ref({
   pattern: 'Mostly home in the evenings',
 })
 const plan = ref({ id: '', name: 'Everyday plan', days: 30, tariff: 0.32, items: [] })
+const auth = useAuthStore()
+const route = useRoute()
+const myinfoUrl = auth.singpassUrl('/EnergyPlanner/', 'myinfo')
+const myinfoBanner = ref(false)
+const myinfoFlatMissing = ref(false)
 
 // Computed properties update when the form values change (Week 5).
 const rooms = computed(() => {
@@ -38,7 +45,7 @@ const rooms = computed(() => {
 const householdPlans = computed(() => {
   const result = []
   for (const saved of plans.value) {
-    if (saved.userId === userId.value) result.push(saved)
+    if (saved.householdId === userId.value) result.push(saved)
   }
   return result
 })
@@ -76,13 +83,58 @@ async function load() {
   error.value = ''
   try {
     await getData()
+    await loadMyinfoDraft()
   } catch (err) {
     console.log(err.message)
     error.value = 'Unable to load the planner. Check that the server is running.'
   }
+  if (route.query.error === 'myinfo') {
+    error.value = 'Unable to retrieve your Myinfo details. Please try again or fill in the form yourself.'
+  }
   loading.value = false
 }
 onMounted(load)
+
+// Myinfo: after a Singpass login, the server holds household details for review.
+async function loadMyinfoDraft() {
+  const response = await axios.get(API_URL + '/myinfo/draft')
+  if (response.status !== 200 || !response.data) return
+  const draft = response.data
+  // Singpass worked, but this account returned no Myinfo details to fill in.
+  if (!draft.myinfo?.fields?.length) {
+    await axios.delete(API_URL + '/myinfo/draft')
+    error.value =
+      'Singpass did not return any Myinfo details for this account, so please fill in your household yourself.'
+    return
+  }
+  userId.value = ''
+  profile.value = {
+    ...profile.value,
+    name: draft.name,
+    occupants: draft.occupants,
+    address: draft.address,
+    myinfo: draft.myinfo,
+  }
+  if (draft.flatType) profile.value.flatType = draft.flatType
+  changeFlat()
+  myinfoFlatMissing.value = !draft.flatType
+  myinfoBanner.value = true
+}
+async function dismissMyinfo() {
+  myinfoBanner.value = false
+  try {
+    await axios.delete(API_URL + '/myinfo/draft')
+  } catch (err) {
+    console.log(err.message)
+  }
+}
+// Fields filled from Myinfo are locked until the user chooses to edit them.
+function fromMyinfo(field) {
+  return Boolean(profile.value.myinfo?.fields?.includes(field))
+}
+function editManually(field) {
+  profile.value.myinfo.fields = profile.value.myinfo.fields.filter((name) => name !== field)
+}
 
 // Use the required/min/max settings already on the HTML inputs.
 function checkInputs(section) {
@@ -112,6 +164,7 @@ async function saveProfile() {
   try {
     await saveHousehold()
     await getData()
+    myinfoBanner.value = false
     notice.value = 'Household saved.'
   } catch (err) {
     console.log(err.message)
@@ -136,7 +189,7 @@ async function savePlan(copy = false) {
     await saveHousehold()
     const data = {
       name: plan.value.name,
-      userId: userId.value,
+      householdId: userId.value,
       profile: profile.value,
       days: plan.value.days,
       tariff: plan.value.tariff,
@@ -152,7 +205,7 @@ async function savePlan(copy = false) {
     plan.value.id = response.data.id
     if (!compareIds.value.includes(plan.value.id)) compareIds.value.push(plan.value.id)
     await getData()
-    notice.value = 'Plan saved to the server.'
+    notice.value = 'Your plan has been saved.'
   } catch (err) {
     console.log(err.message)
     error.value = 'Unable to save the plan.'
@@ -187,6 +240,7 @@ function newPlan() {
 }
 function changeHousehold(event) {
   userId.value = event.target.value
+  myinfoBanner.value = false
   profile.value = {
     name: 'My household',
     flatType: '4-room',
@@ -319,6 +373,24 @@ function estimate(plan, appliances) {
               <div class="card border-0 shadow-sm">
                 <div class="card-body p-4">
                   <h2 id="household-title" class="h4">🏠 Your household</h2>
+                  <div v-if="myinfoBanner" class="alert alert-success small py-2" role="status">
+                    <strong>Filled from Myinfo.</strong> Please check the details, add your budget
+                    and save the household.
+                    <span v-if="myinfoFlatMissing" class="d-block mt-1">
+                      Myinfo has no HDB flat on record, so please choose your flat type.
+                    </span>
+                    <button type="button" class="btn btn-link btn-sm p-0 mt-1" @click="dismissMyinfo">
+                      Not now
+                    </button>
+                  </div>
+                  <template v-else-if="!profile.myinfo">
+                    <a class="btn-singpass w-100 mb-1" :href="myinfoUrl">
+                      <span>Retrieve Myinfo with</span><span class="sp-wordmark">singpass</span>
+                    </a>
+                    <p class="small text-secondary text-center mb-2">
+                      Fill in your household from your government records.
+                    </p>
+                  </template>
                   <label for="household" class="form-label mt-2">Saved household</label
                   ><select
                     id="household"
@@ -331,7 +403,9 @@ function estimate(plan, appliances) {
                       {{ user.name }}
                     </option>
                   </select>
-                  <label for="household-name" class="form-label">Household name</label
+                  <label for="household-name" class="form-label">
+                    Household name
+                    <span v-if="fromMyinfo('name')" class="badge badge-singpass ms-1">Myinfo</span></label
                   ><input
                     id="household-name"
                     v-model="profile.name"
@@ -339,20 +413,38 @@ function estimate(plan, appliances) {
                     maxlength="100"
                     required
                   />
-                  <label for="flat-type" class="form-label">HDB flat type</label
+                  <p v-if="profile.address" class="small text-secondary mb-3">
+                    📍 {{ profile.address }}
+                    <span v-if="fromMyinfo('address')" class="badge badge-singpass ms-1">Myinfo</span>
+                  </p>
+                  <label for="flat-type" class="form-label">
+                    HDB flat type
+                    <span v-if="fromMyinfo('flatType')" class="badge badge-singpass ms-1">Myinfo</span></label
                   ><select
                     id="flat-type"
                     v-model="profile.flatType"
-                    class="form-select mb-3"
+                    class="form-select"
+                    :class="fromMyinfo('flatType') ? 'mb-1' : 'mb-3'"
+                    :disabled="fromMyinfo('flatType')"
                     @change="changeFlat"
                   >
                     <option v-for="flat in flatTypes" :key="flat.id" :value="flat.id">
                       {{ flat.name }}
                     </option>
                   </select>
+                  <button
+                    v-if="fromMyinfo('flatType')"
+                    type="button"
+                    class="btn btn-link btn-sm p-0 mb-3"
+                    @click="editManually('flatType')"
+                  >
+                    Edit manually
+                  </button>
                   <div class="row g-3 mb-3">
                     <div class="col-6">
-                      <label for="occupants" class="form-label">Occupants</label
+                      <label for="occupants" class="form-label">
+                        Occupants
+                        <span v-if="fromMyinfo('occupants')" class="text-secondary small">(estimated)</span></label
                       ><input
                         id="occupants"
                         v-model.number="profile.occupants"

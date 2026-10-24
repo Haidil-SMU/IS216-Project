@@ -8,6 +8,24 @@
       "bedrooms": 3,
       "budget": 150,
       "pattern": "3"
+    },
+    {
+      "name": "My household",
+      "flatType": "4-room",
+      "occupants": 4,
+      "bedrooms": 3,
+      "budget": 150,
+      "pattern": "Mostly home in the evenings",
+      "id": "5f98e017-06f0-4488-93f6-2d2d9192bce3"
+    },
+    {
+      "name": "My household",
+      "flatType": "4-room",
+      "occupants": 4,
+      "bedrooms": 3,
+      "budget": 150,
+      "pattern": "Mostly home in the evenings",
+      "id": "d50793b1-70ec-446e-ada5-f1773931ee4c"
     }
   ]
 }

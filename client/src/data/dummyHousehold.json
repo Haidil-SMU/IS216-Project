@@ -1,0 +1,92 @@
+{
+  "householdId": "demo-household-001",
+  "flatType": "4-room",
+  "rooms": [
+    {
+      "id": "bedroom-1",
+      "name": "Bedroom",
+      "room": {
+        "w": 4.2,
+        "d": 3.6,
+        "h": 2.6
+      },
+      "spawnedAppliances": [
+        {
+          "id": "demo-ac-101",
+          "name": "Air Conditioner",
+          "power": 1.0,
+          "kwhYear": 1200,
+          "tick": "none"
+        },
+        {
+          "id": "demo-light-102",
+          "name": "Lights",
+          "power": 0.08,
+          "kwhYear": 100,
+          "tick": "none"
+        }
+      ]
+    },
+    {
+      "id": "living-room",
+      "name": "Living Room",
+      "room": {
+        "w": 5.0,
+        "d": 4.0,
+        "h": 2.6
+      },
+      "spawnedAppliances": [
+        {
+          "id": "demo-fan-201",
+          "name": "Ceiling Fan",
+          "power": 0.1,
+          "kwhYear": 150,
+          "tick": "none"
+        },
+        {
+          "id": "demo-tv-202",
+          "name": "Television",
+          "power": 0.15,
+          "kwhYear": 200,
+          "tick": "none"
+        }
+      ]
+    },
+    {
+      "id": "kitchen",
+      "name": "Kitchen",
+      "room": {
+        "w": 3.0,
+        "d": 2.8,
+        "h": 2.6
+      },
+      "spawnedAppliances": [
+        {
+          "id": "demo-fridge-301",
+          "name": "Refrigerator",
+          "power": 0.15,
+          "kwhYear": 400,
+          "tick": "none"
+        }
+      ]
+    },
+    {
+      "id": "bathroom",
+      "name": "Bathroom",
+      "room": {
+        "w": 2.2,
+        "d": 1.8,
+        "h": 2.6
+      },
+      "spawnedAppliances": [
+        {
+          "id": "demo-heater-401",
+          "name": "Water Heater",
+          "power": 1.5,
+          "kwhYear": 350,
+          "tick": "none"
+        }
+      ]
+    }
+  ]
+}

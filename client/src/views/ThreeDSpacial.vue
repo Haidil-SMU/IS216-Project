@@ -85,6 +85,7 @@
           </ul>
         </div>
       </aside>
+
     </div>
 
     <footer class="bottom-sidebar bg-dark text-white border-top border-secondary flex-shrink-0">

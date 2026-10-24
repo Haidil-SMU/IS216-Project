@@ -1,9 +1,29 @@
-<template>
-  <nav class="navbar navbar-expand-lg navbar-dark bg-success">
-    <div class="container">
+<script setup>
+import { computed } from 'vue'
+import { useRouter } from 'vue-router'
+import { useAuthStore, homeFor } from '@/stores/auth'
 
-      <RouterLink class="navbar-brand fw-bold" to="/">
-        🏠 HDB EcoHome
+const auth = useAuthStore()
+const router = useRouter()
+
+// First letter or digit of the name (company names can start with "#" or "(").
+const initial = computed(() => (auth.user?.name.match(/[A-Za-z0-9]/)?.[0] || '?').toUpperCase())
+
+async function logout() {
+  try {
+    await auth.logout()
+  } finally {
+    router.push('/login')
+  }
+}
+</script>
+
+<template>
+  <nav class="navbar navbar-expand-lg eco-navbar">
+    <div class="container-fluid px-3 px-lg-4">
+
+      <RouterLink class="navbar-brand fw-bold" :to="homeFor(auth.user)">
+        <span class="brand-icon" aria-hidden="true">⌂</span> HDB <span class="brand-green">EcoHome</span>
       </RouterLink>
 
       <button
@@ -16,27 +36,82 @@
       </button>
 
       <div class="collapse navbar-collapse" id="navbar">
-        <div class="navbar-nav ms-auto">
+        <div class="navbar-nav ms-auto align-items-lg-center gap-lg-2">
 
-          <RouterLink class="nav-link" to="/">
-            Home
+          <!-- Contractors only have their dashboard; every other page is for homeowners -->
+          <RouterLink v-if="auth.isContractor" class="nav-link" to="/ContractorDashboard">
+            Dashboard
           </RouterLink>
 
-          <RouterLink class="nav-link" to="/Simulator">
-            My HDB
-          </RouterLink>
+          <template v-else>
+            <RouterLink class="nav-link" to="/">
+              Home
+            </RouterLink>
 
-          <RouterLink class="nav-link" to="/EnergyPlanner/">
-            Energy Planner
-          </RouterLink>
+            <RouterLink class="nav-link" to="/Simulator">
+              My HDB
+            </RouterLink>
 
-          <RouterLink class="nav-link" to="/Contractors">
-            Find Contractors
-          </RouterLink>
+            <RouterLink class="nav-link" to="/EnergyPlanner/">
+              Energy Planner
+            </RouterLink>
 
-          <RouterLink class="nav-link" to="/3d">
-            3D Spatial
-          </RouterLink>
+            <RouterLink class="nav-link" to="/Contractors">
+              Find Contractors
+            </RouterLink>
+
+            <RouterLink class="nav-link" to="/3d">
+              3D Spatial
+            </RouterLink>
+          </template>
+
+          <!-- Account -->
+          <div v-if="auth.user" class="nav-item dropdown ms-lg-3">
+            <button
+              class="btn nav-link dropdown-toggle account-toggle"
+              type="button"
+              data-bs-toggle="dropdown"
+              aria-expanded="false"
+            >
+              <span class="avatar" aria-hidden="true">{{ initial }}</span>
+              {{ auth.user.name }}
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+              <template v-if="auth.user.email || auth.user.singpass">
+                <li class="px-3 py-2 small text-secondary">
+                  <div v-if="auth.user.email">{{ auth.user.email }}</div>
+                  <span v-if="auth.user.singpass" class="badge badge-singpass mt-1">
+                    ✓ Singpass verified
+                  </span>
+                </li>
+                <li><hr class="dropdown-divider" /></li>
+              </template>
+              <template v-if="auth.isContractor">
+                <li>
+                  <RouterLink class="dropdown-item" to="/ContractorDashboard">Quotation requests</RouterLink>
+                </li>
+              </template>
+              <template v-else>
+                <li>
+                  <RouterLink class="dropdown-item" to="/EnergyPlanner/">My households &amp; plans</RouterLink>
+                </li>
+                <li>
+                  <RouterLink class="dropdown-item" to="/MyQuotations">My quotations</RouterLink>
+                </li>
+              </template>
+              <li><hr class="dropdown-divider" /></li>
+              <li>
+                <button class="dropdown-item text-danger" type="button" @click="logout">Log out</button>
+              </li>
+            </ul>
+          </div>
+
+          <div v-else-if="auth.ready" class="d-flex gap-2 ms-lg-3 py-2 py-lg-0">
+            <RouterLink class="btn btn-sm btn-outline-success" to="/login">Log in</RouterLink>
+            <RouterLink class="btn btn-sm btn-success fw-semibold" to="/signup">
+              Sign up
+            </RouterLink>
+          </div>
 
         </div>
       </div>
@@ -45,8 +120,76 @@
   </nav>
 </template>
 <style scoped>
-.router-link-active {
-  color: white !important;
-  font-weight: bold;
+/* Visual styling only. Auth, roles, logout and links are unchanged. */
+.eco-navbar {
+  background: #ffffff;
+  padding: 14px 0;
+  box-shadow: 0 2px 16px rgba(16, 47, 36, 0.08);
+  position: relative;
+  z-index: 1030;
+}
+.navbar-brand {
+  color: #19352a;
+  font-size: 22px;
+  white-space: nowrap;
+}
+.brand-icon {
+  color: #168b59;
+  font-size: 32px;
+  vertical-align: -2px;
+}
+.brand-green { color: #168b59; }
+.nav-link {
+  color: #485950;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 8px;
+  padding: 9px 10px;
+}
+.nav-link:hover,
+.nav-link.router-link-active {
+  color: #168b59 !important;
+  background: #eaf7ee;
+}
+.account-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #264c3b;
+  border: 1px solid #d6e9dd;
+  background: #f4faf6;
+  padding: 6px 10px;
+}
+.account-toggle:hover,
+.account-toggle:focus {
+  color: #168b59;
+  background: #eaf7ee;
+}
+.avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #d8f2df;
+  color: #145c32;
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+.dropdown-menu {
+  border: 1px solid #dcebe1;
+  border-radius: 12px;
+}
+.dropdown-item.router-link-active {
+  color: #168b59 !important;
+  background: #eaf7ee;
+}
+.badge-singpass {
+  background: #e2f4e7;
+  color: #176c43;
+}
+.navbar-toggler { border-color: #d5e2da; }
+.navbar-toggler-icon {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3E%3Cpath stroke='%2319352a' stroke-linecap='round' stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/%3E%3C/svg%3E");
 }
 </style>
