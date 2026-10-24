@@ -3,7 +3,7 @@ import HomeView from '../components/Home.vue';
 import SimulatorView from '../components/Simulator.vue';
 import EnergyPlannerView from '../components/EnergyPlanner.vue';
 import Contractors from '@/views/Contractors.vue';
-import MyQuotations from '@/views/MyQuotations.vue';
+import MyProfile from '@/views/MyProfile.vue';
 import ThreeDSpacial from '@/views/ThreeDSpacial.vue';
 import QuotationRequest from '@/views/QuotationRequest.vue';
 import ContractorDashboard from '@/views/ContractorDashboard.vue';
@@ -16,7 +16,7 @@ const router = createRouter({
   {
     path: '/EnergyPlanner/',
     component: EnergyPlannerView,
-    meta: { requiresAuth: true, role: 'client' }
+    meta: { requiresAuth: true, role: 'client', requiresHousehold: true }
   },
   {
     path: '/',
@@ -26,28 +26,33 @@ const router = createRouter({
   {
     path: '/Simulator/',
     component: SimulatorView,
-    meta: { requiresAuth: true, role: 'client' }
+    meta: { requiresAuth: true, role: 'client', requiresHousehold: true }
   },
     {
     path: '/Contractors',
     component: Contractors,
-    meta: { requiresAuth: true, role: 'client' }
+    meta: { requiresAuth: true, role: 'client', requiresHousehold: true }
   },
-      {
+  // My quotations is now a tab on My Profile; keep the old address working.
+  {
     path: '/MyQuotations',
-    component: MyQuotations,
+    redirect: { path: '/MyProfile', query: { tab: 'quotations' } }
+  },
+  {
+    path: '/MyProfile',
+    component: MyProfile,
     meta: { requiresAuth: true, role: 'client' }
   },
 
   {
     path: '/3d',
     component: ThreeDSpacial,
-    meta: { requiresAuth: true, role: 'client' }
+    meta: { requiresAuth: true, role: 'client', requiresHousehold: true }
   },
     {
     path: '/QuotationRequest',
     component: QuotationRequest,
-    meta: { requiresAuth: true, role: 'client' }
+    meta: { requiresAuth: true, role: 'client', requiresHousehold: true }
   },
       {
     path: '/ContractorDashboard',
@@ -88,6 +93,10 @@ router.beforeEach(async (to, from) => {
   }
   if (to.meta.role && auth.user && (auth.user.role || 'client') !== to.meta.role) {
     return homeFor(auth.user);
+  }
+  // Homeowners save their household on My Profile before using these pages.
+  if (to.meta.requiresHousehold && auth.user?.hasHousehold === false) {
+    return { path: '/MyProfile', query: { setup: 'household' } };
   }
   if (to.meta.guestOnly && auth.user) {
     return safeRedirect(to.query.redirect) || homeFor(auth.user);

@@ -26,6 +26,10 @@ export const useAuthStore = defineStore('auth', () => {
   const ready = ref(false)
   const loggedIn = computed(() => user.value !== null)
   const isContractor = computed(() => user.value?.role === 'contractor')
+  // The profile picture's address, or null to show the user's initial instead.
+  const pictureUrl = computed(() =>
+    user.value?.pictureVersion ? `${API_URL}/profile/picture?v=${user.value.pictureVersion}` : null,
+  )
   // Login page to send the user to while the "please log in" popup is open, else null.
   const loginPrompt = ref(null)
   let pending = null
@@ -99,6 +103,7 @@ export const useAuthStore = defineStore('auth', () => {
     ready,
     loggedIn,
     isContractor,
+    pictureUrl,
     loginPrompt,
     fetchMe,
     login,
