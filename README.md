@@ -24,6 +24,7 @@ server/   Express 5 API, MongoDB, sessions, Singpass / Corppass login
 | `oidc.js` | Shared OpenID Connect set-up and this app's keys |
 | `singpass.js` / `myinfo.js` | Singpass login and Myinfo → household mapping |
 | `corppass.js` / `contractor.js` | Corppass login, contractor profiles, BCA UEN lookup |
+| `profile.js` | Profile pictures (stored in MongoDB, one per account) |
 | `appliances.json`, `hdb_rooms.json`, `gameScenarios.json` | Catalogue data for the planner and simulator |
 
 In development, Vite proxies `/api` to the server at `http://127.0.0.1:8000` (see `client/vite.config.js`), so the browser only ever talks to `localhost:5173`.
@@ -142,7 +143,7 @@ pnpm lint        # oxlint + ESLint
 
 Passwords need at least 8 characters, with an uppercase letter, a lowercase letter, a number and a symbol. Login and sign-up allow 10 attempts per 15 minutes.
 
-**Singpass (MockPass).** On `/login`, choose the Singpass button and pick a persona from the MockPass dropdown. These Myinfo personas pre-fill an Energy Planner household:
+**Singpass (MockPass).** On `/login`, choose the Singpass button and pick a persona from the MockPass dropdown. These Myinfo personas pre-fill a household on the My Profile page:
 
 | NRIC | Name | Myinfo data | Planner flat type | Estimated occupants |
 |---|---|---|---|---|
@@ -152,15 +153,15 @@ Passwords need at least 8 characters, with an uppercase letter, a lowercase lett
 | `S9812382B` | Freya Lim Guo En | 5-room HDB, married, 2 children | 5-room | 4 |
 | `S9912374E` | Timothy Tan Cheng Guan | Condominium (not HDB) | *(none, choose one yourself)* | 4 |
 
-An email account can also link Singpass later: in the Energy Planner, click **Retrieve Myinfo with singpass**.
+An email account can also link Singpass later: on **My Profile**, click **Retrieve Myinfo with singpass**.
 
 #### Steps to try
 
-1. **Log in** with email or a Singpass persona. A new Singpass user lands on the Energy Planner with the Myinfo household filled in.
-2. **Energy Planner:** check and save the household, add appliances, then save, edit and delete a plan.
+1. **Log in** with email or a Singpass persona. A new Singpass user lands on My Profile with the Myinfo household filled in. New accounts must save a household there first; until then, the planner, My HDB, Find Contractors and 3D Spatial send them back to My Profile.
+2. **My Profile** (click your name in the navbar): check and save the household on the *My Household* tab (each account has one household). **Energy Planner:** pick the household, add appliances, then save, edit and delete a plan.
 3. **Simulator** and **3D room:** try the energy scenarios and place appliances in a room.
 4. **Find Contractors:** browse website-registered contractors and BCA-registered contractors from data.gov.sg, then request a quotation from a website-registered contractor (pick services, add a description and budget). At least one contractor must have finished their profile first (see [Contractors](#contractors)).
-5. **My Quotations:** edit a request while it is still *pending*, then see the contractor's quote or rejection once they reply. Comparing quotations with AI needs `GEMINI_API_KEY`.
+5. **My Profile → My quotations** (click your name in the navbar): edit a request while it is still *pending*, then see the contractor's quote or rejection once they reply. Comparing quotations with AI needs `GEMINI_API_KEY`.
 
 ### Contractors
 
@@ -181,7 +182,7 @@ The BCA lookup calls data.gov.sg live (5-second timeout, results cached for an h
 2. **Set up the business profile.** Only complete profiles appear in the homeowners' Find Contractors.
 3. **Open a quotation request** after a homeowner has sent you one (homeowner step 4).
 4. **AI draft (optional):** upload your own PDF price list (max 5 MB). Gemini drafts a quotation for you to review. Needs `GEMINI_API_KEY`.
-5. **Respond** with *quoted* (with a total) or *rejected*. The homeowner sees the result in **My Quotations**.
+5. **Respond** with *quoted* (with a total) or *rejected*. The homeowner sees the result under **My Profile → My quotations**.
 
 > `server/users.json` and `server/plans.json` are leftover sample data from the earlier file-based version. Households and plans are now stored in MongoDB per account.
 

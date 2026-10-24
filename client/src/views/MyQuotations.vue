@@ -351,22 +351,12 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="container py-5">
+  <div>
 
     <!-- HEADER -->
-    <div class="mb-5">
+    <div class="mb-4">
 
-      <span
-        class="badge bg-success-subtle text-success-emphasis rounded-pill px-3 py-2 mb-3"
-      >
-        HDB EcoHome Services
-      </span>
-
-      <h1 class="fw-bold mb-3">
-        My <span class="text-success">Quotations</span>
-      </h1>
-
-      <p class="text-muted fs-5">
+      <p class="text-muted">
         Track your renovation quotation requests,
         review contractor responses and compare quotations.
       </p>

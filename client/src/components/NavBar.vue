@@ -65,45 +65,29 @@ async function logout() {
             </RouterLink>
           </template>
 
-          <!-- Account -->
-          <div v-if="auth.user" class="nav-item dropdown ms-lg-3">
-            <button
-              class="btn nav-link dropdown-toggle account-toggle"
-              type="button"
-              data-bs-toggle="dropdown"
-              aria-expanded="false"
+          <!-- Account: the name opens the profile page, the icon logs out. -->
+          <div v-if="auth.user" class="d-flex align-items-center gap-2 ms-lg-3 py-2 py-lg-0">
+            <RouterLink
+              class="btn account-toggle"
+              :to="auth.isContractor ? '/ContractorDashboard' : '/MyProfile'"
             >
-              <span class="avatar" aria-hidden="true">{{ initial }}</span>
+              <img v-if="auth.pictureUrl" class="avatar" :src="auth.pictureUrl" alt="" />
+              <span v-else class="avatar" aria-hidden="true">{{ initial }}</span>
               {{ auth.user.name }}
+            </RouterLink>
+            <button
+              class="btn logout-btn"
+              type="button"
+              aria-label="Log out"
+              title="Log out"
+              @click="logout"
+            >
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                <path d="m16 17 5-5-5-5" />
+                <path d="M21 12H9" />
+              </svg>
             </button>
-            <ul class="dropdown-menu dropdown-menu-end shadow-sm">
-              <template v-if="auth.user.email || auth.user.singpass">
-                <li class="px-3 py-2 small text-secondary">
-                  <div v-if="auth.user.email">{{ auth.user.email }}</div>
-                  <span v-if="auth.user.singpass" class="badge badge-singpass mt-1">
-                    ✓ Singpass verified
-                  </span>
-                </li>
-                <li><hr class="dropdown-divider" /></li>
-              </template>
-              <template v-if="auth.isContractor">
-                <li>
-                  <RouterLink class="dropdown-item" to="/ContractorDashboard">Quotation requests</RouterLink>
-                </li>
-              </template>
-              <template v-else>
-                <li>
-                  <RouterLink class="dropdown-item" to="/EnergyPlanner/">My households &amp; plans</RouterLink>
-                </li>
-                <li>
-                  <RouterLink class="dropdown-item" to="/MyQuotations">My quotations</RouterLink>
-                </li>
-              </template>
-              <li><hr class="dropdown-divider" /></li>
-              <li>
-                <button class="dropdown-item text-danger" type="button" @click="logout">Log out</button>
-              </li>
-            </ul>
           </div>
 
           <div v-else-if="auth.ready" class="d-flex gap-2 ms-lg-3 py-2 py-lg-0">
@@ -156,14 +140,18 @@ async function logout() {
   align-items: center;
   gap: 0.5rem;
   color: #264c3b;
+  font-size: 14px;
+  font-weight: 600;
   border: 1px solid #d6e9dd;
   background: #f4faf6;
   padding: 6px 10px;
 }
 .account-toggle:hover,
-.account-toggle:focus {
+.account-toggle:focus,
+.account-toggle.router-link-active {
   color: #168b59;
   background: #eaf7ee;
+  border-color: #d6e9dd;
 }
 .avatar {
   display: inline-grid;
@@ -175,18 +163,23 @@ async function logout() {
   color: #145c32;
   font-weight: 700;
   font-size: 0.85rem;
+  object-fit: cover;
 }
-.dropdown-menu {
-  border: 1px solid #dcebe1;
-  border-radius: 12px;
+.logout-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  color: #b4232a;
+  border: 1px solid #f1d4d6;
+  background: #fff6f6;
 }
-.dropdown-item.router-link-active {
-  color: #168b59 !important;
-  background: #eaf7ee;
-}
-.badge-singpass {
-  background: #e2f4e7;
-  color: #176c43;
+.logout-btn:hover,
+.logout-btn:focus {
+  color: #fff;
+  background: #c8323a;
+  border-color: #c8323a;
 }
 .navbar-toggler { border-color: #d5e2da; }
 .navbar-toggler-icon {
