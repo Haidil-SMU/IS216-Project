@@ -10,7 +10,10 @@
       "television": "5 hours/day",
       "clothesDryer": "3 loads/week",
       "waterHeater": "3 showers/day",
-      "lighting": "5 hours/day"
+      "lighting": "5 hours/day",
+      "fans": "8 hours/day (ceiling), 6 hours/day (stand)",
+      "washingMachine": "4 loads/week",
+      "dishwasher": "5 cycles/week"
     }
   },
   "categories": {
@@ -169,6 +172,29 @@
           "name": "Induction Cooker",
           "kwhYear": 365,
           "description": "Illustrative: ~2000W for 30 minutes a day"
+        },
+        "electric_kettle": {
+          "name": "Electric Kettle",
+          "kwhYear": 150,
+          "description": "Illustrative: ~1.8kW for about 14 minutes a day"
+        },
+        "toaster": {
+          "name": "Toaster",
+          "kwhYear": 45,
+          "description": "Illustrative: ~900W for about 8 minutes a day"
+        },
+        "dishwasher": {
+          "name": "Dishwasher",
+          "ticks": {
+            "2_tick": {
+              "kwhYear": 300,
+              "description": "Illustrative 12-place dishwasher, 5 cycles/week"
+            },
+            "3_tick": {
+              "kwhYear": 240,
+              "description": "Illustrative efficient dishwasher"
+            }
+          }
         }
       }
     },
@@ -437,6 +463,36 @@
               "description": "Illustrative very efficient heat pump dryer"
             }
           }
+        },
+        "front_load_washer": {
+          "name": "Front-load Washing Machine",
+          "ticks": {
+            "2_tick": {
+              "kwhYear": 120,
+              "description": "Illustrative 8kg washer, 4 loads/week"
+            },
+            "3_tick": {
+              "kwhYear": 95,
+              "description": "Illustrative efficient 8kg washer"
+            },
+            "4_tick": {
+              "kwhYear": 75,
+              "description": "Illustrative very efficient 8kg washer"
+            }
+          }
+        },
+        "top_load_washer": {
+          "name": "Top-load Washing Machine",
+          "ticks": {
+            "2_tick": {
+              "kwhYear": 140,
+              "description": "Illustrative 9kg washer, 4 loads/week"
+            },
+            "3_tick": {
+              "kwhYear": 110,
+              "description": "Illustrative efficient 9kg washer"
+            }
+          }
         }
       }
     },
@@ -548,6 +604,113 @@
               "description": "Illustrative high-efficacy fluorescent lighting"
             }
           }
+        }
+      }
+    },
+    "fans": {
+      "name": "Fans",
+      "unit": "kWh/year",
+      "types": {
+        "ceiling_fan": {
+          "name": "Ceiling Fan",
+          "ticks": {
+            "2_tick": {
+              "kwhYear": 146,
+              "description": "Illustrative 55W AC-motor ceiling fan, 8 hours daily"
+            },
+            "3_tick": {
+              "kwhYear": 110,
+              "description": "Illustrative 40W ceiling fan, 8 hours daily"
+            },
+            "4_tick": {
+              "kwhYear": 70,
+              "description": "Illustrative 25W DC-motor ceiling fan, 8 hours daily"
+            }
+          }
+        },
+        "stand_fan": {
+          "name": "Stand Fan",
+          "ticks": {
+            "2_tick": {
+              "kwhYear": 99,
+              "description": "Illustrative 45W stand fan, 6 hours daily"
+            },
+            "3_tick": {
+              "kwhYear": 66,
+              "description": "Illustrative 30W stand fan, 6 hours daily"
+            },
+            "4_tick": {
+              "kwhYear": 44,
+              "description": "Illustrative 20W DC stand fan, 6 hours daily"
+            }
+          }
+        },
+        "exhaust_fan": {
+          "name": "Exhaust Fan",
+          "kwhYear": 22,
+          "description": "Illustrative: ~20W for about 3 hours a day"
+        }
+      }
+    },
+    "bathroom": {
+      "name": "Bathroom",
+      "unit": "kWh/year",
+      "types": {
+        "instant_water_heater": {
+          "name": "Instant Water Heater",
+          "ticks": {
+            "1_tick": {
+              "kwhYear": 420,
+              "description": "Illustrative 3.5kW instant heater, 3 showers daily"
+            },
+            "2_tick": {
+              "kwhYear": 350,
+              "description": "Illustrative efficient instant heater"
+            },
+            "3_tick": {
+              "kwhYear": 300,
+              "description": "Illustrative very efficient instant heater"
+            }
+          }
+        },
+        "storage_water_heater": {
+          "name": "Storage Water Heater (25L)",
+          "ticks": {
+            "2_tick": {
+              "kwhYear": 520,
+              "description": "Illustrative 25L storage heater, standby losses included"
+            },
+            "3_tick": {
+              "kwhYear": 430,
+              "description": "Illustrative well-insulated storage heater"
+            }
+          }
+        }
+      }
+    },
+    "home": {
+      "name": "Home & Office",
+      "unit": "kWh/year",
+      "types": {
+        "air_purifier": {
+          "name": "Air Purifier",
+          "kwhYear": 110,
+          "description": "Illustrative: ~25W running 12 hours a day"
+        },
+        "dehumidifier": {
+          "name": "Dehumidifier",
+          "kwhYear": 260,
+          "description": "Illustrative: ~200W for about 3.5 hours a day"
+        },
+        "desktop_computer": {
+          "name": "Desktop Computer + Monitor",
+          "kwhYear": 220,
+          "description": "Illustrative: ~150W for about 4 hours a day"
+        },
+        "floor_lamp": {
+          "name": "LED Floor Lamp",
+          "kwhYear": 20,
+          "description": "Illustrative: ~12W for about 5 hours a day"
         }
       }
     }

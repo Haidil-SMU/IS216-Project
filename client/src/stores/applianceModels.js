@@ -19,6 +19,20 @@ const SIZES = {
   air_fryer: [0.3, 0.3, 0.35],
   rice_cooker: [0.3, 0.25, 0.3],
   induction_cooker: [0.35, 0.06, 0.42],
+  electric_kettle: [0.2, 0.25, 0.2],
+  toaster: [0.3, 0.2, 0.2],
+  dishwasher: [0.6, 0.85, 0.6],
+  front_load_washer: [0.6, 0.85, 0.6],
+  top_load_washer: [0.55, 0.95, 0.58],
+  ceiling_fan: [1.2, 0.35, 1.2],
+  stand_fan: [0.45, 1.2, 0.45],
+  exhaust_fan: [0.3, 0.1, 0.3],
+  instant_water_heater: [0.4, 0.25, 0.12],
+  storage_water_heater: [0.4, 0.55, 0.4],
+  air_purifier: [0.35, 0.6, 0.2],
+  dehumidifier: [0.35, 0.5, 0.25],
+  desktop_computer: [0.5, 0.45, 0.45],
+  floor_lamp: [0.3, 1.55, 0.3],
 }
 
 const KINDS = {
@@ -31,6 +45,15 @@ const KINDS = {
   tv: { mode: 'floor', size: [1.23, 0.9, 0.25], y: 0 },
   dryer: { mode: 'floor', size: [0.6, 0.85, 0.65], y: 0 },
   light: { mode: 'ceiling', size: [0.2, 0.3, 0.2], y: 0 },
+  ceilingfan: { mode: 'ceiling', size: [1.2, 0.35, 1.2], y: 0 },
+  exhaust: { mode: 'ceiling', size: [0.3, 0.1, 0.3], y: 0 },
+  standfan: { mode: 'floor', size: [0.45, 1.2, 0.45], y: 0 },
+  washer: { mode: 'floor', size: [0.6, 0.85, 0.6], y: 0 },
+  dishwasher: { mode: 'floor', size: [0.6, 0.85, 0.6], y: 0 },
+  heater: { mode: 'wall', size: [0.4, 0.3, 0.15], y: 1.6 },
+  purifier: { mode: 'floor', size: [0.35, 0.6, 0.2], y: 0 },
+  pc: { mode: 'floor', size: [0.5, 0.45, 0.45], y: 0 },
+  lamp: { mode: 'floor', size: [0.3, 1.55, 0.3], y: 0 },
 }
 
 function classify(type, category) {
@@ -39,6 +62,18 @@ function classify(type, category) {
     if (type.includes('door')) return { kind: 'door', variant: type.includes('glass') ? 'glass' : '' }
     return { kind: 'counter', variant: type.includes('plain') ? 'plain' : 'sink' }
   }
+  if (category === 'fans') {
+    if (type === 'stand_fan') return { kind: 'standfan', variant: '' }
+    if (type === 'exhaust_fan') return { kind: 'exhaust', variant: '' }
+    return { kind: 'ceilingfan', variant: '' }
+  }
+  if (category === 'bathroom') return { kind: 'heater', variant: type.startsWith('storage') ? 'storage' : 'instant' }
+  if (category === 'home') {
+    if (type === 'desktop_computer') return { kind: 'pc', variant: '' }
+    if (type === 'floor_lamp') return { kind: 'lamp', variant: '' }
+    return { kind: 'purifier', variant: type === 'dehumidifier' ? 'dehumidifier' : 'purifier' }
+  }
+  if (category === 'kitchen' && type === 'dishwasher') return { kind: 'dishwasher', variant: '' }
   if (category === 'kitchen' && !type.includes('refrigerator')) return { kind: 'cook', variant: type }
   if (category === 'kitchen') {
     const variant = type.includes('ice') ? 'ice' : type.includes('commercial') ? 'commercial' : type.includes('no_freezer') ? 'mini' : ''
@@ -50,7 +85,7 @@ function classify(type, category) {
     return { kind: 'ac', variant: 'split' }
   }
   if (category === 'television') return { kind: 'tv', variant: '' }
-  if (category === 'laundry') return { kind: 'dryer', variant: type }
+  if (category === 'laundry') return type.includes('washer') ? { kind: 'washer', variant: type.startsWith('top') ? 'top' : 'front' } : { kind: 'dryer', variant: type }
   if (category === 'lights') return { kind: 'light', variant: type }
   return { kind: 'dryer', variant: '' } 
 }
@@ -64,6 +99,7 @@ export function resolveSpec(type = '', category = '') {
   if (kind === 'ac' && variant === 'portable') { [w, h, d, y, mode] = [0.4, 0.8, 0.4, 0, 'floor'] }
   if (kind === 'ac' && type === 'vrf') { [w, h] = [1.1, 0.34] }
   if (kind === 'light') y = 0 
+  if (kind === 'heater') y = variant === 'storage' ? 1.4 : 1.7
   return { kind, variant, mode, w, h, d, y, gap: base.gap }
 }
 
@@ -139,6 +175,20 @@ const BUILDERS = {
       b.box(w * 0.65, h * 0.78, 0.01, 0x14181d, [-w * 0.1, h * 0.11, front], { roughness: 0.1 })
       b.box(w * 0.2, h * 0.78, 0.012, 0x2b3139, [w * 0.35, h * 0.11, front])
       b.box(0.012, h * 0.6, 0.02, STEEL, [w * 0.2, h * 0.2, front + 0.01], METAL)
+    } else if (variant === 'electric_kettle') {
+      b.cyl(w * 0.45, h * 0.8, 0xe5e7eb, [0, 0, 0], METAL)
+      b.cyl(w * 0.35, h * 0.2, 0x1f2933, [0, h * 0.8, 0])
+      b.box(0.03, h * 0.6, 0.05, 0x111827, [w * 0.5, h * 0.15, 0])
+      b.box(0.04, 0.02, 0.01, 0x38bdf8, [0, h * 0.4, w * 0.45], { emissive: 0x38bdf8, emissiveIntensity: 0.8 })
+    } else if (variant === 'toaster') {
+      b.box(w, h, d, 0xcbd5e1, [0, 0, 0], METAL)
+      b.box(w * 0.7, 0.01, 0.05, 0x111827, [0, h, -0.04]); b.box(w * 0.7, 0.01, 0.05, 0x111827, [0, h, 0.04])
+      b.box(0.02, 0.04, 0.03, 0x111827, [w / 2, h * 0.6, 0])
+    } else if (variant === 'rice_cooker') {
+      b.cyl(w * 0.48, h * 0.7, 0xf8fafc, [0, 0, 0])
+      b.cyl(w * 0.46, h * 0.3, 0xcbd5e1, [0, h * 0.7, 0])
+      b.box(0.1, 0.04, 0.01, 0x1f2933, [0, h * 0.35, w * 0.48])
+      b.ball(0.02, 0x64748b, [0, h, 0])
     } else if (variant === 'air_fryer') {
       b.box(w, h * 0.78, d, 0x2b2f36, [0, 0, 0])
       b.cyl(w * 0.5, h * 0.22, 0x1c1f24, [0, h * 0.78, 0])
@@ -234,8 +284,117 @@ const BUILDERS = {
     lit(b.ball(variant === 'cfl' ? r * 0.7 : r, glow.color, [0, r, 0]))
     if (variant === 'cfl') b.cyl(r * 0.8, r * 1.6, 0xf1f5f9, [0, r * 1.4, 0])
   },
-}
 
+  ceilingfan({ w, h }, b) {
+    const rotor = new THREE.Group()
+    const blade = (a) => {
+      const m = new THREE.Mesh(new RoundedBoxGeometry(0.5, 0.012, 0.13, 2, 0.005), new THREE.MeshStandardMaterial({ color: 0x8b6b4a, roughness: 0.6 }))
+      m.position.set(Math.cos(a) * (w * 0.32), 0.06, Math.sin(a) * (w * 0.32))
+      m.rotation.y = -a
+      m.castShadow = true
+      rotor.add(m)
+    }
+    for (let i = 0; i < 4; i++) blade((i * Math.PI) / 2)
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.1, 24), new THREE.MeshStandardMaterial({ color: 0xf1f5f9, roughness: 0.4 }))
+    hub.position.y = 0.06; hub.castShadow = true
+    rotor.add(hub)
+    b.group.add(rotor)
+    b.group.userData.rotor = rotor
+    b.cyl(0.015, h - 0.17, DARK, [0, 0.11, 0])
+    b.cyl(0.06, 0.04, WHITE, [0, h - 0.04, 0])
+  },
+
+  exhaust({ w, h }, b) {
+    b.box(w, h, w, WHITE, [0, 0, 0])
+    b.cyl(w * 0.4, 0.012, 0x94a3b8, [0, 0, 0])
+    for (let i = 0; i < 3; i++) b.box(w * 0.6, 0.006, 0.02, 0xcbd5e1, [0, 0.004, (i - 1) * 0.07])
+  },
+
+  standfan({ w, h }, b) {
+    b.cyl(w * 0.42, 0.03, 0x374151, [0, 0, 0])
+    b.cyl(0.018, h * 0.62, STEEL, [0, 0.03, 0], METAL)
+    const head = new THREE.Group()
+    head.position.set(0, h * 0.72, 0.03)
+    const cage = new THREE.Mesh(new THREE.TorusGeometry(w * 0.45, 0.008, 8, 32), new THREE.MeshStandardMaterial({ color: STEEL, ...METAL }))
+    cage.castShadow = true
+    head.add(cage)
+    const disc = new THREE.Mesh(new THREE.CylinderGeometry(w * 0.42, w * 0.42, 0.004, 24), new THREE.MeshStandardMaterial({ color: 0xbfdbfe, transparent: true, opacity: 0.45, depthWrite: false }))
+    disc.rotation.x = Math.PI / 2
+    head.add(disc)
+    const motor = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.12, 16), new THREE.MeshStandardMaterial({ color: 0x475569 }))
+    motor.rotation.x = Math.PI / 2; motor.position.z = -0.07; motor.castShadow = true
+    head.add(motor)
+    b.group.add(head)
+  },
+
+  washer({ w, h, d, variant }, b) {
+    const front = d / 2
+    b.box(w, h, d, WHITE, [0, 0, 0], { roughness: 0.3 })
+    if (variant === 'top') {
+      b.box(w, 0.08, d, 0xcbd5e1, [0, h - 0.08, 0])
+      b.box(w * 0.7, 0.01, d * 0.55, 0x1e293b, [0, h, -0.04], { roughness: 0.1, transparent: true, opacity: 0.85 })
+      b.box(w * 0.5, 0.04, 0.02, 0x475569, [0, h - 0.06, front])
+      return
+    }
+    b.box(w, 0.1, 0.02, 0x475569, [0, h - 0.14, front])
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.03, 12, 32), new THREE.MeshStandardMaterial({ color: STEEL, ...METAL }))
+    ring.position.set(0, h * 0.42, front); ring.castShadow = true; b.group.add(ring)
+    const door = b.cyl(0.19, 0.02, 0x1e293b, [0, 0, front - 0.005], { roughness: 0.1, transparent: true, opacity: 0.85 })
+    door.rotation.x = Math.PI / 2
+    door.position.y = h * 0.42
+  },
+
+  dishwasher({ w, h, d }, b) {
+    const front = d / 2
+    b.box(w, h, d, STEEL, [0, 0, 0], METAL)
+    b.box(w * 0.96, 0.08, 0.02, 0x1f2933, [0, h - 0.1, front])
+    b.box(0.03, 0.012, 0.012, 0x10b981, [w * 0.35, h - 0.06, front + 0.01], { emissive: 0x10b981, emissiveIntensity: 0.9 })
+    b.box(w * 0.6, 0.02, 0.03, 0x64748b, [0, h - 0.2, front + 0.015], METAL)
+  },
+
+  heater({ w, h, d, variant }, b) {
+    const front = d / 2
+    if (variant === 'storage') {
+      b.cyl(w * 0.5, h * 0.9, WHITE, [0, 0.05, 0])
+      b.cyl(w * 0.5, 0.05, 0xcbd5e1, [0, 0, 0])
+      b.box(0.1, 0.06, 0.02, 0x1f2933, [0, h * 0.5, front])
+      b.box(0.02, 0.02, 0.01, 0xef4444, [0.06, h * 0.5, front + 0.01], { emissive: 0xef4444, emissiveIntensity: 0.8 })
+      return
+    }
+    b.box(w, h, d, WHITE, [0, 0, 0], { roughness: 0.3 })
+    b.box(w * 0.7, 0.04, 0.01, 0x1f2933, [0, h * 0.6, front])
+    b.cyl(0.02, 0.05, STEEL, [-w * 0.3, -0.04, 0], METAL)
+    b.cyl(0.02, 0.05, STEEL, [w * 0.3, -0.04, 0], METAL)
+    b.box(0.02, 0.02, 0.008, 0x38bdf8, [w * 0.35, h * 0.2, front], { emissive: 0x38bdf8, emissiveIntensity: 0.8 })
+  },
+
+  purifier({ w, h, d, variant }, b) {
+    const front = d / 2
+    b.box(w, h, d, variant === 'dehumidifier' ? 0xe2e8f0 : WHITE, [0, 0, 0], { roughness: 0.35 })
+    for (let i = 0; i < 6; i++) b.box(w * 0.7, 0.008, 0.01, DARK, [0, h * 0.55 + i * 0.03, front])
+    b.box(w * 0.5, 0.03, 0.01, 0x0f172a, [0, h - 0.1, front])
+    b.box(0.03, 0.012, 0.012, variant === 'dehumidifier' ? 0x38bdf8 : 0x10b981, [w * 0.3, h - 0.05, front], { emissive: variant === 'dehumidifier' ? 0x38bdf8 : 0x10b981, emissiveIntensity: 1 })
+    if (variant === 'dehumidifier') b.box(w * 0.7, h * 0.18, 0.02, 0x93c5fd, [0, 0.05, front], { transparent: true, opacity: 0.6 })
+  },
+
+  pc({ w, h, d }, b) {
+    b.box(0.2, h, d, 0x1f2933, [-w / 2 + 0.1, 0, 0])
+    b.box(0.015, 0.02, 0.01, 0x38bdf8, [-w / 2 + 0.1, h * 0.8, d / 2], { emissive: 0x38bdf8, emissiveIntensity: 1 })
+    b.box(0.26, 0.015, 0.2, 0x374151, [0.1, 0, 0])
+    b.box(0.03, 0.18, 0.03, 0x374151, [0.1, 0.015, 0])
+    b.box(0.5, 0.3, 0.025, 0x111418, [0.1, 0.2, 0])
+    b.box(0.47, 0.27, 0.005, 0x0b1220, [0.1, 0.215, 0.015], { roughness: 0.05, emissive: 0x1d4ed8, emissiveIntensity: 0.25 })
+  },
+
+  lamp({ h }, b) {
+    b.cyl(0.11, 0.025, 0x374151, [0, 0, 0])
+    b.cyl(0.01, h - 0.3, 0x374151, [0, 0.025, 0])
+    const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.15, 0.25, 24, 1, true), new THREE.MeshStandardMaterial({ color: 0xfff3b0, emissive: 0xffd24a, emissiveIntensity: 0.7, side: THREE.DoubleSide }))
+    shade.position.y = h - 0.15
+    b.group.add(shade)
+  },
+
+}
 
 export function createAppliance3DModel(type = '', category = '') {
   const spec = resolveSpec(type, category)

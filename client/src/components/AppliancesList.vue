@@ -86,7 +86,10 @@ const tabs = [
   { id: 'living', label: 'Living'},
   { id: 'television', label: 'TV'},
   { id: 'laundry', label: 'Laundry'},
-  { id: 'lights', label: 'Lights'}
+  { id: 'lights', label: 'Lights'},
+  { id: 'fans', label: 'Fans'},
+  { id: 'bathroom', label: 'Bathroom'},
+  { id: 'home', label: 'Home & Office'}
 ]
 
 const activeTab = ref('kitchen')

@@ -40,7 +40,7 @@ export function onCounter(counter, spec, cu) {
   const lim = Math.max(0, counter.spec.w / 2 - spec.w / 2 - 0.03)
   cu = clamp(cu, -lim, lim)
   const u = TANGENT[counter.wall], n = NORMAL[counter.wall]
-  const back = -(counter.spec.d / 2 - spec.d / 2 - 0.03) // tucked towards the wall
+  const back = -(counter.spec.d / 2 - spec.d / 2 - 0.03)
   return { x: counter.x + u[0] * cu + n[0] * back, z: counter.z + u[1] * cu + n[1] * back, rotY: counter.rotY, wall: -1, t: 0, on: counter.id, cu }
 }
 
@@ -71,7 +71,6 @@ export function placeAt(room, spec, p, current, items = []) {
   return { x: clamp(p[0], hx, room.w - hx), z: clamp(p[1], hz, room.d - hz), rotY, wall: -1, t: 0 }
 }
 
-
 const isGround = (s) => s.y === 0 && s.mode !== 'ceiling'
 
 function footprint(it) {
@@ -85,6 +84,10 @@ function footprint(it) {
 }
 
 function clash(a, b) {
+  if (a.spec.mode === 'ceiling' || b.spec.mode === 'ceiling') {
+    if (a.spec.mode !== b.spec.mode) return false
+    return Math.abs(a.x - b.x) < (a.spec.w + b.spec.w) / 2 && Math.abs(a.z - b.z) < (a.spec.d + b.spec.d) / 2
+  }
   if (a.spec.mode === 'top' || b.spec.mode === 'top') { 
     return a.spec.mode === b.spec.mode && a.on === b.on && Math.abs(a.cu - b.cu) < (a.spec.w + b.spec.w) / 2 + 0.03
   }
@@ -100,7 +103,6 @@ function clash(a, b) {
 }
 
 export const isBlocked = (candidate, others) => others.some((o) => o !== candidate && clash(candidate, o))
-
 
 export function findSpot(room, spec, others) {
   const tryIt = (pos) => (pos && !isBlocked({ spec, ...pos }, others) ? pos : null)
@@ -120,13 +122,15 @@ export function findSpot(room, spec, others) {
     }
   }
   if (spec.mode === 'wall' || spec.mode === 'opening') return null
-  for (let x = 0.4; x < room.w; x += 0.3) for (let z = 0.4; z < room.d; z += 0.3) {
-    const hit = tryIt(placeAt(room, spec, [x, z]))
+  const spots = []
+  for (let x = 0.4; x < room.w; x += 0.3) for (let z = 0.4; z < room.d; z += 0.3) spots.push([x, z])
+  if (spec.mode === 'ceiling') spots.sort((a, b) => Math.hypot(a[0] - room.w / 2, a[1] - room.d / 2) - Math.hypot(b[0] - room.w / 2, b[1] - room.d / 2))
+  for (const p of spots) {
+    const hit = tryIt(placeAt(room, spec, p, undefined, others))
     if (hit) return hit
   }
   return null
 }
-
 
 export function wallPieces(room, items) {
   const out = []
@@ -145,3 +149,22 @@ export function wallPieces(room, items) {
   }
   return out
 }
+
+function wallAxis(room, wall) {
+  return wall % 2 === 0
+    ? { start: room.origin.x, length: room.dimension.w }
+    : { start: room.origin.z, length: room.dimension.d }
+}
+
+const toFlat = (room, wall, t) => { const a = wallAxis(room, wall); return wall >= 2 ? a.start + a.length - t : a.start + t }
+const fromFlat = (room, wall, g) => { const a = wallAxis(room, wall); return wall >= 2 ? a.start + a.length - g : g - a.start }
+
+export function sharedRange(room, other, wall) {
+  const a = wallAxis(room, wall), b = wallAxis(other, wall)
+  const lo = Math.max(a.start, b.start), hi = Math.min(a.start + a.length, b.start + b.length)
+  if (hi <= lo) return null
+  const t1 = fromFlat(room, wall, lo), t2 = fromFlat(room, wall, hi)
+  return { t0: Math.min(t1, t2), t1: Math.max(t1, t2) }
+}
+
+export const sameSpotOn = (room, wall, t, other, otherWall) => fromFlat(other, otherWall, toFlat(room, wall, t))

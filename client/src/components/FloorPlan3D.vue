@@ -2,36 +2,57 @@
   <div class="floorplan w-100 h-100 position-relative">
     <div ref="host" class="w-100 h-100"></div>
     <div class="hint position-absolute top-0 start-50 translate-middle-x mt-2 px-3 py-1 small rounded-pill">
-      Drag to orbit · scroll to zoom · click a room to select · double-click to edit it
+      <template v-if="selectedItemId">Drag to move it (doors and windows slide along their wall) · R rotates floor items · Delete removes appliances</template>
+      <template v-else-if="selectedId">Drag an item to move it · drag the room's edges or corners to resize · drag the room floor to move the room</template>
+      <template v-else>Drag to orbit · scroll to zoom · click a room to select it, then drag items or edges</template>
     </div>
   </div>
 </template>
 
 <script setup>
-
-import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import { watch, ref, onMounted, onBeforeUnmount } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { createAppliance3DModel } from '../stores/applianceModels.js'
-import { wallPieces, wallPoint, NORMAL, WALL_THICKNESS } from '../stores/placement.js'
+import { createAppliance3DModel, resolveSpec } from '../stores/applianceModels.js'
+import { wallPieces, wallPoint, placeAt, onWall, onCounter, isBlocked, sharedRange, sameSpotOn, NORMAL, WALL_THICKNESS } from '../stores/placement.js'
+import { sunAt, heatAt, throwOf, airDirection } from '../stores/energy.js'
 
 const props = defineProps({
   rooms: { type: Array, default: () => [] },
   footprint: { type: Object, default: null },
   selectedId: { type: String, default: null },
+  selectedItemId: { type: String, default: null },
+  overlays: { type: Object, default: () => ({ sun: false, heat: true, air: true }) },
 })
-const emit = defineEmits(['select-room', 'open-room'])
+const emit = defineEmits(['select-room', 'select-item', 'edit-rect', 'move-items', 'move-opening', 'drag-preview', 'rotate-blocked'])
 
 const FLOOR = { living: 0xf3e9d2, kitchen: 0xdcebf5, bedroom: 0xf0e2ee, bathroom: 0xd8efe4 }
+const ARCH_H = 2.1
+const MIN = { living: 3.0, kitchen: 1.8, bedroom: 2.4, bathroom: 1.2 }
+const AREA = { min: -20, max: 40 }
+const MAGNET = 0.25
 const host = ref(null)
 
 let scene, camera, renderer, controls, frame, observer
 const world = new THREE.Group()
+const handles = new THREE.Group()
+const ghost = new THREE.Group()
+const grid = new THREE.GridHelper(60, 60, 0x94a3b8, 0xd5dbe3)
+grid.position.set(10, 0.002, 10)
+grid.visible = false
+const groups = new Map()
+const itemModels = new Map()
+const outline = new THREE.BoxHelper(new THREE.Object3D(), 0x0ea5e9)
+outline.visible = false
 const floors = new Map()
+let wallMeshes = []
+
 const wallMats = [0, 1, 2, 3].map(() => new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, transparent: true }))
 const ray = new THREE.Raycaster()
 let hoverId = null
 let downAt = null
+
+const snap = (v) => Math.round(v * 10) / 10
 
 function label(text, sub) {
   const c = document.createElement('canvas')
@@ -48,31 +69,24 @@ function label(text, sub) {
   return sprite
 }
 
-function buildRoom(r) {
-  const { w, d, h } = r.dimension
-  const group = new THREE.Group()
-  group.position.set(r.origin.x, 0, r.origin.z)
+function buildWalls(r, moved = {}) {
+  const id = String(r._id), group = groups.get(id), { w, d, h } = r.dimension
+  if (!group) return
 
-  const floor = new THREE.Mesh(
-    new THREE.BoxGeometry(w, 0.05, d),
-    new THREE.MeshStandardMaterial({ color: FLOOR[r.type] ?? 0xeeeeee, roughness: 0.85 }),
-  )
-  floor.position.set(w / 2, -0.025, d / 2)
-  floor.receiveShadow = true
-  floor.userData.roomId = String(r._id)
-  floor.userData.base = FLOOR[r.type] ?? 0xeeeeee
-  group.add(floor)
-  floors.set(String(r._id), floor)
+  wallMeshes = wallMeshes.filter((mesh) => {
+    if (mesh.userData.wall.roomId !== id) return true
+    group.remove(mesh)
+    mesh.geometry.dispose()
+    return false
+  })
 
   const items = []
   for (const p of r.placements || []) {
-    const model = createAppliance3DModel(p.applianceTypeKey, p.category)
-    const spec = model.userData.spec
-    model.position.set(p.x, spec.mode === 'ceiling' ? h - spec.h : spec.y, p.z)
-    model.rotation.y = p.rotY
-    group.add(model)
-    items.push({ spec, wall: p.wall, t: p.t })
+    const at = moved[String(p._id)] ?? p
+    items.push({ spec: resolveSpec(p.applianceTypeKey, p.category), wall: at.wall, t: at.t })
   }
+  for (const o of r.openWalls || [])
+    items.push({ spec: { mode: 'opening', w: o.t1 - o.t0, y: 0, h: ARCH_H }, wall: o.wall, t: (o.t0 + o.t1) / 2 })
 
   for (const pc of wallPieces({ w, d, h }, items)) {
     const len = pc.t1 - pc.t0, hh = pc.y1 - pc.y0
@@ -82,8 +96,41 @@ function buildRoom(r) {
     const mesh = new THREE.Mesh(geo, wallMats[pc.wall])
     mesh.position.set(px - (n[0] * WALL_THICKNESS) / 2, (pc.y0 + pc.y1) / 2, pz - (n[1] * WALL_THICKNESS) / 2)
     mesh.castShadow = mesh.receiveShadow = true
+    mesh.userData.wall = { roomId: id, wall: pc.wall }
+    wallMeshes.push(mesh)
     group.add(mesh)
   }
+}
+
+function buildRoom(r) {
+  const { w, d, h } = r.dimension
+  const id = String(r._id)
+  const group = new THREE.Group()
+  group.position.set(r.origin.x, 0, r.origin.z)
+  group.userData = { roomId: id }
+
+  const floor = new THREE.Mesh(
+    new THREE.BoxGeometry(w, 0.05, d),
+    new THREE.MeshStandardMaterial({ color: FLOOR[r.type] ?? 0xeeeeee, roughness: 0.85 }),
+  )
+  floor.position.set(w / 2, -0.025, d / 2)
+  floor.receiveShadow = true
+  floor.userData.roomId = id
+  group.add(floor)
+  floors.set(id, floor)
+  groups.set(id, group)
+
+  for (const p of r.placements || []) {
+    const model = createAppliance3DModel(p.applianceTypeKey, p.category)
+    const spec = model.userData.spec
+    model.position.set(p.x, spec.mode === 'ceiling' ? h - spec.h : spec.y, p.z)
+    model.rotation.y = p.rotY
+    group.add(model)
+    itemModels.set(String(p._id), { model, roomId: id })
+  }
+
+  buildWalls(r)
+  addOverlays(id, group, w, d)
 
   const tag = label(r.name, `${(w * d).toFixed(0)} m²`)
   tag.position.set(w / 2, 0.4, d / 2)
@@ -91,10 +138,80 @@ function buildRoom(r) {
   world.add(group)
 }
 
+const HEATMAP_SIZE = 64
+const overlayParts = new Map()
+let overlayDirtyRoom = null
+
+function makeHeatmap(color, height, w, d) {
+  const canvas = document.createElement('canvas')
+  canvas.width = canvas.height = HEATMAP_SIZE
+  const texture = new THREE.CanvasTexture(canvas)
+  const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false })
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, d), material)
+  mesh.rotation.x = -Math.PI / 2
+  mesh.position.set(w / 2, height, d / 2)
+  mesh.renderOrder = 2
+  return { mesh, canvas, texture, color: new THREE.Color(color) }
+}
+
+function addOverlays(roomId, group, w, d) {
+  const parts = { sun: makeHeatmap(0xffc929, 0.02, w, d), heat: makeHeatmap(0xe8420f, 0.03, w, d), arrows: new THREE.Group() }
+  group.add(parts.sun.mesh, parts.heat.mesh, parts.arrows)
+  overlayParts.set(roomId, parts)
+}
+
+function disposeOverlays() {
+  for (const parts of overlayParts.values()) {
+    for (const map of [parts.sun, parts.heat]) { map.texture.dispose(); map.mesh.material.dispose() }
+    parts.arrows.children.forEach((arrow) => arrow.dispose())
+  }
+  overlayParts.clear()
+}
+
+function paintHeatmap(map, valueAt, room) {
+  const ctx = map.canvas.getContext('2d'), image = ctx.createImageData(HEATMAP_SIZE, HEATMAP_SIZE)
+  const { r, g, b } = map.color
+  for (let row = 0; row < HEATMAP_SIZE; row++)
+    for (let col = 0; col < HEATMAP_SIZE; col++) {
+      const point = [((col + 0.5) / HEATMAP_SIZE) * room.w, ((row + 0.5) / HEATMAP_SIZE) * room.d]
+      image.data.set([r * 255, g * 255, b * 255, valueAt(point) * 150], (row * HEATMAP_SIZE + col) * 4)
+    }
+  ctx.putImageData(image, 0, 0)
+  map.texture.needsUpdate = true
+}
+
+function drawAirflow(parts, room, items) {
+  parts.arrows.children.forEach((arrow) => arrow.dispose())
+  parts.arrows.clear()
+  for (const ac of items.filter((i) => i.spec.kind === 'ac')) {
+    const reach = Math.min(throwOf(room, items, ac), 3.5), [fx, fz] = airDirection(ac)
+    for (const spread of [-0.5, -0.25, 0, 0.25, 0.5]) {
+      const cos = Math.cos(spread), sin = Math.sin(spread)
+      const direction = new THREE.Vector3(fx * cos - fz * sin, -0.25, fx * sin + fz * cos).normalize()
+      const start = new THREE.Vector3(ac.x, ac.spec.y + ac.spec.h / 2, ac.z)
+      parts.arrows.add(new THREE.ArrowHelper(direction, start, reach * (1 - Math.abs(spread) * 0.3), 0x22b8cf, 0.18, 0.1))
+    }
+  }
+}
+
+function refreshOverlays(roomId) {
+  const r = roomById(roomId), parts = overlayParts.get(roomId)
+  if (!r || !parts) return
+  const items = idrag && idrag.roomId === roomId ? idrag.all : itemsOf(r)
+  parts.sun.mesh.visible = !!props.overlays.sun
+  parts.heat.mesh.visible = !!props.overlays.heat
+  parts.arrows.visible = !!props.overlays.air
+  if (props.overlays.sun) paintHeatmap(parts.sun, (p) => sunAt(r.dimension, items, p), r.dimension)
+  if (props.overlays.heat) paintHeatmap(parts.heat, (p) => heatAt(r.dimension, items, p), r.dimension)
+  if (props.overlays.air) drawAirflow(parts, r.dimension, items)
+}
+
 function clearWorld() {
+  disposeOverlays()
   world.traverse((o) => o.geometry?.dispose?.())
   world.clear()
-  floors.clear()
+  floors.clear(); groups.clear(); itemModels.clear()
+  wallMeshes = []
 }
 
 let framed = false
@@ -102,47 +219,315 @@ function build() {
   if (!scene) return
   clearWorld()
   props.rooms.forEach(buildRoom)
+  props.rooms.forEach((r) => refreshOverlays(String(r._id)))
   highlight()
+  drawHandles()
   if (!framed && props.rooms.length) { frameCamera(); framed = true }
 }
 
+function setTint(id, hex, strength = 0.35) {
+  const f = floors.get(id)
+  if (!f) return
+  f.material.emissive.setHex(hex)
+  f.material.emissiveIntensity = hex ? strength : 0
+}
+
 function highlight() {
-  for (const [id, f] of floors) {
+  for (const id of floors.keys()) {
     const on = id === props.selectedId, hov = id === hoverId
-    f.material.emissive.setHex(on ? 0x2563eb : hov ? 0x64748b : 0x000000)
-    f.material.emissiveIntensity = on ? 0.35 : 0.25
+    setTint(id, on ? 0x2563eb : hov ? 0x64748b : 0x000000, on ? 0.35 : 0.25)
   }
 }
 
 function frameCamera() {
-  const W = props.footprint?.w ?? 10, D = props.footprint?.d ?? 8
-  const reach = Math.max(W, D) * 1.2
-  controls.target.set(W / 2, 0, D / 2)
-  camera.position.set(W / 2 + reach * 0.3, reach * 0.95, D + reach * 0.75)
+  const fp = props.footprint ?? { x: 0, z: 0, w: 10, d: 8 }
+  const cx = fp.x + fp.w / 2, cz = fp.z + fp.d / 2, reach = Math.max(fp.w, fp.d) * 1.2
+  controls.target.set(cx, 0, cz)
+  camera.position.set(cx + reach * 0.3, reach * 0.95, fp.z + fp.d + reach * 0.75)
 }
 
 function fadeWalls() {
-  const W = props.footprint?.w ?? 10, D = props.footprint?.d ?? 8
-  const dx = camera.position.x - W / 2, dz = camera.position.z - D / 2
-  const facing = [dz < 0, dx > 0, dz > 0, dx < 0] // outward direction of walls 0..3 is -NORMAL
+  const fp = props.footprint ?? { x: 0, z: 0, w: 10, d: 8 }
+  const dx = camera.position.x - (fp.x + fp.w / 2), dz = camera.position.z - (fp.z + fp.d / 2)
+  const facing = [dz < 0, dx > 0, dz > 0, dx < 0]
   wallMats.forEach((m, i) => { m.opacity = facing[i] ? 0.1 : 1; m.depthWrite = !facing[i] })
 }
 
-function pick(e) {
+function aim(e) {
   const r = renderer.domElement.getBoundingClientRect()
   ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera)
-  const hit = ray.intersectObjects([...floors.values()], false)[0]
+}
+function pickRoom(e, exceptId = null) {
+  aim(e)
+  const hit = ray.intersectObjects([...floors.values()], false).find((h) => h.object.userData.roomId !== exceptId)
   return hit ? hit.object.userData.roomId : null
 }
+const liftedPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+function groundPoint(e, y = 0) {
+  aim(e)
+  const p = new THREE.Vector3()
+  liftedPlane.constant = -y
+  return ray.ray.intersectPlane(liftedPlane, p) ? p : null
+}
 
-const onMove = (e) => { const id = pick(e); if (id !== hoverId) { hoverId = id; highlight() } }
-const onDown = (e) => { downAt = [e.clientX, e.clientY] }
-const onUp = (e) => {
+const roomById = (id) => props.rooms.find((r) => String(r._id) === id)
+
+function disposeGroup(g) { g.traverse((o) => { o.geometry?.dispose?.(); o.material?.dispose?.() }); g.clear() }
+
+function drawHandles() {
+  disposeGroup(handles)
+  const r = roomById(props.selectedId)
+  if (!r) return
+  const { x, z } = r.origin, { w, d } = r.dimension
+  for (const [sx, sz] of [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    const corner = sx && sz
+    const m = new THREE.Mesh(
+      new THREE.BoxGeometry(corner ? 0.34 : sx ? 0.16 : 0.7, 0.3, corner ? 0.34 : sx ? 0.7 : 0.16),
+      new THREE.MeshBasicMaterial({ color: corner ? 0xf59e0b : 0x2563eb, depthTest: false }),
+    )
+    m.position.set(x + w / 2 + (sx * w) / 2, 0.2, z + d / 2 + (sz * d) / 2)
+    m.renderOrder = 6
+    m.userData.handle = { sx, sz }
+    handles.add(m)
+  }
+}
+
+function drawGhost(rect, ok) {
+  disposeGroup(ghost)
+  if (!rect || rect.w <= 0 || rect.d <= 0) return
+  const m = new THREE.Mesh(
+    new THREE.BoxGeometry(rect.w, 0.12, rect.d),
+    new THREE.MeshBasicMaterial({ color: ok ? 0x16a34a : 0xdc2626, transparent: true, opacity: 0.45, depthWrite: false }),
+  )
+  m.position.set(rect.x + rect.w / 2, 0.08, rect.z + rect.d / 2)
+  m.renderOrder = 4
+  ghost.add(m)
+}
+
+function edgesOf(axis, exceptId) {
+  const out = []
+  for (const o of props.rooms) {
+    if (String(o._id) === exceptId) continue
+    const a = axis === 'x' ? o.origin.x : o.origin.z, len = axis === 'x' ? o.dimension.w : o.dimension.d
+    out.push(a, a + len)
+  }
+  return out
+}
+
+function snapCoord(v, axis, exceptId) {
+  let best = null
+  for (const e of edgesOf(axis, exceptId)) if (Math.abs(e - v) <= MAGNET && (best === null || Math.abs(e - v) < Math.abs(best - v))) best = e
+  return best ?? snap(v)
+}
+
+function snapShift(a0, a1, axis, exceptId) {
+  let best = null
+  for (const e of edgesOf(axis, exceptId)) for (const mine of [a0, a1]) {
+    const dlt = e - mine
+    if (Math.abs(dlt) <= MAGNET && (best === null || Math.abs(dlt) < Math.abs(best))) best = dlt
+  }
+  return best ?? snap(a0) - a0
+}
+
+function rectOk(rect, type, exceptId) {
+  const EPS = 0.02
+  if (rect.w < (MIN[type] ?? 1.2) - EPS || rect.d < (MIN[type] ?? 1.2) - EPS) return false
+  if (rect.x < AREA.min || rect.z < AREA.min || rect.x + rect.w > AREA.max || rect.z + rect.d > AREA.max) return false
+  return !props.rooms.some((o) => String(o._id) !== exceptId &&
+    Math.min(rect.x + rect.w, o.origin.x + o.dimension.w) - Math.max(rect.x, o.origin.x) > EPS &&
+    Math.min(rect.z + rect.d, o.origin.z + o.dimension.d) - Math.max(rect.z, o.origin.z) > EPS)
+}
+
+function dragRect(bd, p) {
+  const dx = p.x - bd.start.x, dz = p.z - bd.start.z
+  const o = bd.rect0
+  if (bd.kind === 'move')
+    return { x: snap(o.x + dx + snapShift(o.x + dx, o.x + dx + o.w, 'x', bd.id)), z: snap(o.z + dz + snapShift(o.z + dz, o.z + dz + o.d, 'z', bd.id)), w: o.w, d: o.d }
+  let { x, z, w, d } = o
+  if (bd.sx === 1) w = snapCoord(o.x + o.w + dx, 'x', bd.id) - o.x
+  if (bd.sx === -1) { const nx = snapCoord(o.x + dx, 'x', bd.id); w = o.x + o.w - nx; x = nx }
+  if (bd.sz === 1) d = snapCoord(o.z + o.d + dz, 'z', bd.id) - o.z
+  if (bd.sz === -1) { const nz = snapCoord(o.z + dz, 'z', bd.id); d = o.z + o.d - nz; z = nz }
+  return { x: snap(x), z: snap(z), w: snap(w), d: snap(d) }
+}
+
+function pickHandle(e) {
+  aim(e)
+  const hit = ray.intersectObjects(handles.children, false)[0]
+  return hit ? hit.object.userData.handle : null
+}
+
+const modelY = (spec, h) => (spec.mode === 'ceiling' ? h - spec.h : spec.y)
+
+function itemsOf(r) {
+  return (r.placements || []).map((p) => ({
+    id: String(p._id), spec: resolveSpec(p.applianceTypeKey, p.category),
+    x: p.x, z: p.z, rotY: p.rotY, wall: p.wall, t: p.t, cu: p.cu ?? 0,
+    on: p.onPlacementId ? String(p.onPlacementId) : undefined,
+    connectsTo: p.connectsTo ?? null,
+  }))
+}
+function pickItem(e) {
+  aim(e)
+  const entries = [...itemModels.entries()]
+  const hit = ray.intersectObjects(entries.map(([, v]) => v.model), true)[0]
+  if (!hit) return null
+  let obj = hit.object
+  while (obj.parent && !entries.some(([, v]) => v.model === obj)) obj = obj.parent
+  const found = entries.find(([, v]) => v.model === obj)
+  return found ? { id: found[0], roomId: found[1].roomId } : null
+}
+const poseModel = (it, h) => {
+  const m = itemModels.get(it.id)?.model
+  if (!m) return
+  m.position.set(it.x, modelY(it.spec, h), it.z)
+  m.rotation.y = it.rotY
+}
+const poseOf = (it) => ({ x: it.x, z: it.z, rotY: it.rotY, wall: it.wall, t: it.t, cu: it.cu ?? 0 })
+
+let bd = null
+let idrag = null
+
+function onMove(e) {
+  if (idrag) return dragItem(e)
+  if (bd) {
+    const p = groundPoint(e)
+    if (!p) return
+    bd.rect = dragRect(bd, p)
+    bd.ok = rectOk(bd.rect, roomById(bd.id).type, bd.id)
+    bd.moved = bd.moved || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4
+    if (bd.moved) drawGhost(bd.rect, bd.ok)
+    return
+  }
+  const id = pickRoom(e)
+  renderer.domElement.style.cursor = pickItem(e) ? 'grab' : pickHandle(e) ? 'pointer' : id && id === props.selectedId ? 'move' : ''
+  if (id !== hoverId) { hoverId = id; highlight() }
+}
+
+function openingPos(r, d, local, others) {
+  if (!d.shared) return placeAt(r.dimension, d.item.spec, local, d.item, others)
+  const room = r.dimension, wall = d.item.wall
+  const along = [local[0], local[1], room.w - local[0], room.d - local[1]][wall]
+  const margin = d.item.spec.w / 2 + 0.1
+  if (d.shared.t1 - d.shared.t0 < 2 * margin) return null
+  return onWall(room, d.item.spec, wall, Math.max(d.shared.t0 + margin, Math.min(d.shared.t1 - margin, along)))
+}
+
+function poseDoorPartner(d) {
+  const { room, placement, spec } = d.partner
+  const pos = onWall(room.dimension, spec, placement.wall, sameSpotOn(roomById(d.roomId), d.item.wall, d.item.t, room, placement.wall))
+  const model = itemModels.get(String(placement._id))?.model
+  if (pos && model) { model.position.set(pos.x, spec.y, pos.z); model.rotation.y = pos.rotY }
+  return pos
+}
+
+function rebuildDragWalls(d) {
+  buildWalls(roomById(d.roomId), { [d.item.id]: d.item })
+  if (d.partner) buildWalls(d.partner.room, { [String(d.partner.placement._id)]: d.partnerPos })
+}
+
+function linkedDoorInfo(r, item) {
+  if (item.spec.kind !== 'door' || !item.connectsTo || item.connectsTo === 'outside') return {}
+  const other = props.rooms.find((o) => o.name === item.connectsTo)
+  const shared = other && sharedRange(r, other, item.wall)
+  const placement = other && (other.placements || []).find((q) => q.connectsTo === r.name && q.wall === (item.wall + 2) % 4)
+  return { shared, partner: placement && { room: other, placement, spec: item.spec } }
+}
+
+function dragItem(e) {
+  const d = idrag, r = roomById(d.roomId)
+  if (!r) return
+  const p = groundPoint(e, d.planeY)
+  if (!p) return
+  d.moved = d.moved || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4
+  if (!d.moved) return
+  const room = r.dimension, others = d.all.filter((o) => o !== d.item)
+  const local = [p.x - r.origin.x + d.dx, p.z - r.origin.z + d.dz]
+  const pos = d.item.spec.mode === 'opening' ? openingPos(r, d, local, others) : placeAt(room, d.item.spec, local, d.item, others)
+  if (!pos || isBlocked({ spec: d.item.spec, ...pos }, others)) return
+  Object.assign(d.item, pos)
+  poseModel(d.item, room.h)
+  if (d.partner) d.partnerPos = poseDoorPartner(d)
+  if (d.item.spec.mode === 'opening') rebuildDragWalls(d)
+  overlayDirtyRoom = d.roomId
+  if (d.item.spec.kind === 'counter')
+    for (const o of d.all) if (o.on === d.item.id) { Object.assign(o, onCounter(d.item, o.spec, o.cu)); poseModel(o, room.h) }
+}
+
+function onDown(e) {
+  downAt = [e.clientX, e.clientY]
+  if (e.button !== 0) return
+  const el = renderer.domElement
+
+  const hit = pickItem(e)
+  if (hit) {
+    const r = roomById(hit.roomId), all = itemsOf(r), item = all.find((i) => i.id === hit.id)
+    const entry = itemModels.get(hit.id), planeY = entry.model.position.y + item.spec.h / 2
+    const start = groundPoint(e, planeY)
+    if (hit.roomId !== props.selectedId) emit('select-room', hit.roomId)
+    emit('select-item', hit.id)
+    if (!start || !item) return
+    idrag = { roomId: hit.roomId, item, all, planeY, dx: item.x - (start.x - r.origin.x), dz: item.z - (start.z - r.origin.z), moved: false, ...linkedDoorInfo(r, item) }
+    controls.enabled = false
+    el.setPointerCapture?.(e.pointerId)
+    el.style.cursor = 'grabbing'
+    return
+  }
+
+  const h = pickHandle(e), start = groundPoint(e)
+  const id = h ? props.selectedId : pickRoom(e)
+  if (!id || (!h && id !== props.selectedId)) return
+  const r = roomById(id)
+  if (!start || !r) return
+  bd = { kind: h ? 'handle' : 'move', id, sx: h?.sx ?? 0, sz: h?.sz ?? 0, start, moved: false, rect: null, ok: false,
+         rect0: { x: r.origin.x, z: r.origin.z, w: r.dimension.w, d: r.dimension.d } }
+  controls.enabled = false
+  el.setPointerCapture?.(e.pointerId)
+}
+
+function onUp(e) {
+  if (idrag) {
+    const d = idrag
+    idrag = null
+    controls.enabled = true
+    renderer.domElement.style.cursor = ''
+    if (d.moved && d.item.spec.mode === 'opening') {
+      emit('move-opening', { roomId: d.roomId, id: d.item.id, wall: d.item.wall, t: d.item.t })
+      return
+    }
+    if (d.moved) {
+      const updates = d.all.filter((o) => o === d.item || o.on === d.item.id).map((o) => ({ id: o.id, ...poseOf(o) }))
+      emit('move-items', { roomId: d.roomId, updates })
+    }
+    return
+  }
+  if (bd) {
+    const d = bd
+    bd = null
+    controls.enabled = true
+    drawGhost(null)
+    if (d.moved && d.ok && d.rect) { emit('edit-rect', { roomId: d.id, rect: d.rect }); return }
+    if (d.moved) return
+  }
   if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4) return
-  const id = pick(e)
+  const id = pickRoom(e)
+  emit('select-item', null)
   if (id) emit('select-room', id)
 }
-const onDbl = (e) => { const id = pick(e); if (id) emit('open-room', id) }
+
+function onKey(e) {
+  if (e.key.toLowerCase() !== 'r' || e.ctrlKey || e.metaKey || e.altKey || !props.selectedItemId) return
+  const t = e.target
+  if (t && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName))) return
+  const entry = itemModels.get(props.selectedItemId), r = entry && roomById(entry.roomId)
+  if (!r) return
+  const all = itemsOf(r), item = all.find((i) => i.id === props.selectedItemId)
+  if (!item || item.spec.mode !== 'floor' || item.wall >= 0) return
+  const others = all.filter((o) => o !== item)
+  const pos = placeAt(r.dimension, item.spec, [item.x, item.z], { rotY: item.rotY + Math.PI / 2 }, others)
+  if (!pos || isBlocked({ spec: item.spec, ...pos }, others)) return emit('rotate-blocked')
+  emit('move-items', { roomId: entry.roomId, updates: [{ id: item.id, ...poseOf({ ...item, ...pos }) }] })
+}
 
 function init() {
   const width = host.value.clientWidth || 800, height = host.value.clientHeight || 500
@@ -159,9 +544,9 @@ function init() {
   const sun = new THREE.DirectionalLight(0xffffff, 1.9)
   sun.position.set(8, 16, 10)
   sun.castShadow = true
-  Object.assign(sun.shadow.camera, { left: -14, right: 14, top: 14, bottom: -14, near: 1, far: 50 })
+  Object.assign(sun.shadow.camera, { left: -16, right: 16, top: 16, bottom: -16, near: 1, far: 60 })
   sun.shadow.mapSize.set(2048, 2048)
-  scene.add(new THREE.AmbientLight(0xfff6e5, 1.5), sun, world)
+  scene.add(new THREE.AmbientLight(0xfff6e5, 1.5), sun, grid, world, handles, ghost, outline)
 
   controls = new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = true
@@ -173,13 +558,24 @@ function init() {
   el.addEventListener('pointermove', onMove)
   el.addEventListener('pointerdown', onDown)
   el.addEventListener('pointerup', onUp)
-  el.addEventListener('dblclick', onDbl)
+  el.addEventListener('pointercancel', () => { bd = null; idrag = null; controls.enabled = true; drawGhost(null); emit('drag-preview', null); build() })
+  window.addEventListener('keydown', onKey)
 
+  showGrid()
   build()
   const loop = () => {
     frame = requestAnimationFrame(loop)
     controls.update()
     fadeWalls()
+    if (overlayDirtyRoom) {
+      refreshOverlays(overlayDirtyRoom)
+      if (idrag) emit('drag-preview', { roomId: idrag.roomId, poses: Object.fromEntries(idrag.all.map((o) => [o.id, poseOf(o)])) })
+      overlayDirtyRoom = null
+    }
+    for (const { model } of itemModels.values()) if (model.userData.rotor) model.userData.rotor.rotation.y += 0.04
+    const sel = props.selectedItemId && itemModels.get(props.selectedItemId)
+    outline.visible = !!sel
+    if (sel) outline.setFromObject(sel.model)
     renderer.render(scene, camera)
   }
   loop()
@@ -195,13 +591,18 @@ function init() {
 }
 
 watch(() => props.rooms, build, { deep: true })
+watch(() => props.overlays, () => props.rooms.forEach((r) => refreshOverlays(String(r._id))), { deep: true })
 watch(() => props.selectedId, highlight)
+const showGrid = () => { if (grid) grid.visible = !!props.selectedId }
+watch(() => props.selectedId, () => { showGrid(); drawHandles() })
 onMounted(init)
 onBeforeUnmount(() => {
   cancelAnimationFrame(frame)
+  window.removeEventListener('keydown', onKey)
   observer?.disconnect()
   controls?.dispose()
   clearWorld()
+  disposeGroup(handles); disposeGroup(ghost)
   renderer?.dispose()
   renderer?.domElement.remove()
 })

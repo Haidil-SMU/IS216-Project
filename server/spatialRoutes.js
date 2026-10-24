@@ -1,8 +1,8 @@
-// server/spatialRoutes.js  -  households, generated floor plan, and room placements
 const express = require('express');
 const { ObjectId } = require('mongodb');
 const { getDb } = require('./db');
 const { generateRooms, LAYOUTS } = require('./floorplan');
+const L = require('./layout');
 
 const router = express.Router();
 
@@ -10,6 +10,10 @@ const oid = (s) => (ObjectId.isValid(s) && String(new ObjectId(s)) === String(s)
 const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
 const finite = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
 
+const guard = (fn) => async (req, res, next) => {
+  try { await fn(req, res); }
+  catch (e) { if (e instanceof L.LayoutError) return bad(res, e.message, 409); next(e); }
+};
 
 function sanitizePlacements(list) {
   const idMap = new Map();
@@ -37,28 +41,38 @@ function sanitizePlacements(list) {
   return out;
 }
 
-
-function findClash(origin, dim, siblings) {
-  const EPS = 0.02;
-  return siblings.find((o) =>
-    origin.x < o.origin.x + o.dimension.w - EPS && origin.x + dim.w > o.origin.x + EPS &&
-    origin.z < o.origin.z + o.dimension.d - EPS && origin.z + dim.d > o.origin.z + EPS);
+async function loadRooms(db, householdId) {
+  const rooms = await db.collection('rooms').find({ householdId }).sort({ order: 1 }).toArray();
+  return rooms.map((r) => ({ ...r, openWalls: r.openWalls || [] }));
 }
+
+async function saveRooms(db, rooms) {
+  const f = (v) => (Number.isFinite(v) ? v : 0);
+  const ops = rooms.map((r) => ({
+    updateOne: {
+      filter: { _id: r._id },
+      update: {
+        $set: {
+          origin: { x: f(r.origin.x), z: f(r.origin.z) },
+          dimension: { w: f(r.dimension.w), d: f(r.dimension.d), h: f(r.dimension.h) },
+          placements: r.placements.map((p) => ({ ...p, x: f(p.x), z: f(p.z), rotY: f(p.rotY), t: f(p.t), cu: f(p.cu) })),
+          openWalls: r.openWalls.map((o) => ({ wall: o.wall, t0: f(o.t0), t1: f(o.t1), to: o.to })),
+        },
+      },
+    },
+  }));
+  if (ops.length) await db.collection('rooms').bulkWrite(ops);
+}
+
+const answer = (rooms) => ({ rooms, footprint: L.footprintOf(rooms), warnings: L.warnings(rooms) });
 
 async function insertRooms(db, householdId, flatTypeId) {
-  const { footprint, rooms } = generateRooms(flatTypeId);
+  const { rooms } = generateRooms(flatTypeId);
   const docs = rooms.map((r) => ({ ...r, householdId }));
   await db.collection('rooms').insertMany(docs);
-  return { footprint, rooms: docs };
+  return answer(docs);
 }
 
-// GET /api/flat-types
-router.get('/flat-types', async (req, res) => {
-  const db = await getDb();
-  res.json(await db.collection('flat_types').find().sort({ bedrooms: 1, _id: 1 }).toArray());
-});
-
-// POST /api/households
 router.post('/households', async (req, res) => {
   const { userId, flatTypeId, name } = req.body || {};
   if (!userId || !name) return bad(res, 'userId and name are required');
@@ -81,65 +95,68 @@ router.post('/households', async (req, res) => {
   }
 });
 
-// GET /api/households/:id/floorplan
 router.get('/households/:id/floorplan', async (req, res) => {
   const id = oid(req.params.id);
   if (!id) return bad(res, 'Invalid household id');
   const db = await getDb();
   const household = await db.collection('households').findOne({ _id: id });
   if (!household) return bad(res, 'Household not found', 404);
-  const rooms = await db.collection('rooms').find({ householdId: id }).sort({ order: 1 }).toArray();
-  const t = LAYOUTS[household.flatTypeId];
-  res.json({ household, footprint: t ? { w: t.width, d: t.depth } : null, rooms });
+  res.json({ household, ...answer(await loadRooms(db, id)) });
 });
 
-// PUT /api/households/:id/flat-type   { flatTypeId }
-router.put('/households/:id/flat-type', async (req, res) => {
-  const id = oid(req.params.id);
-  const { flatTypeId } = req.body || {};
-  if (!id) return bad(res, 'Invalid household id');
-  if (!LAYOUTS[flatTypeId]) return bad(res, 'Unknown flatTypeId');
+router.put('/households/:id/openings/:pid', guard(async (req, res) => {
+  const hid = oid(req.params.id), pid = oid(req.params.pid), roomId = oid(req.body?.roomId);
+  if (!hid || !pid || !roomId) return bad(res, 'householdId, roomId and the door/window id are required');
   const db = await getDb();
-  const { matchedCount } = await db.collection('households').updateOne({ _id: id }, { $set: { flatTypeId, updatedAt: new Date() } });
-  if (!matchedCount) return bad(res, 'Household not found', 404);
-  await db.collection('rooms').deleteMany({ householdId: id });
-  res.json(await insertRooms(db, id, flatTypeId));
-});
+  const rooms = L.moveOpening(await loadRooms(db, hid), roomId, pid, Number(req.body.wall), Number(req.body.t));
+  await saveRooms(db, rooms);
+  res.json(answer(rooms));
+}));
 
-// GET /api/rooms/:roomId
-router.get('/rooms/:roomId', async (req, res) => {
-  const id = oid(req.params.roomId);
-  if (!id) return bad(res, 'Invalid room id');
-  const room = await (await getDb()).collection('rooms').findOne({ _id: id });
-  room ? res.json(room) : bad(res, 'Room not found', 404);
-});
+router.delete('/households/:id/openings/:pid', guard(async (req, res) => {
+  const hid = oid(req.params.id), pid = oid(req.params.pid), roomId = oid(req.query.roomId);
+  if (!hid || !pid || !roomId) return bad(res, 'householdId, roomId and the door/window id are required');
+  const db = await getDb();
+  const rooms = L.removeOpening(await loadRooms(db, hid), roomId, pid);
+  await saveRooms(db, rooms);
+  res.json(answer(rooms));
+}));
 
-// PUT /api/rooms/:roomId
-router.put('/rooms/:roomId', async (req, res) => {
-  const id = oid(req.params.roomId);
-  if (!id) return bad(res, 'Invalid room id');
-  const rooms = (await getDb()).collection('rooms');
-  const room = await rooms.findOne({ _id: id });
-  if (!room) return bad(res, 'Room not found', 404);
+router.put('/households/:id/room-rect', guard(async (req, res) => {
+  const hid = oid(req.params.id), roomId = oid(req.body?.roomId), r = req.body?.rect;
+  if (!hid || !roomId || !r) return bad(res, 'householdId, roomId and rect are required');
+  const db = await getDb();
+  const rooms = L.setRoomRect(await loadRooms(db, hid), roomId, { x: finite(r.x), z: finite(r.z), w: finite(r.w), d: finite(r.d) });
+  await saveRooms(db, rooms);
+  res.json(answer(rooms));
+}));
 
-  const set = {};
-  const d = req.body?.dimension;
-  if (d) {
-    const dim = { w: finite(d.w), d: finite(d.d), h: finite(d.h) };
-    if (dim.w < 1.5 || dim.w > 15 || dim.d < 1.5 || dim.d > 15 || dim.h < 2.2 || dim.h > 4) return bad(res, 'Room size out of range');
-    const siblings = await rooms.find({ householdId: room.householdId, _id: { $ne: id } }).toArray();
-    const clash = findClash(room.origin, dim, siblings);
-    if (clash) return bad(res, `That size would overlap the ${clash.name}`, 409);
-    set.dimension = dim;
-  }
-  if (Array.isArray(req.body?.placements)) set.placements = sanitizePlacements(req.body.placements);
-  if (!Object.keys(set).length) return bad(res, 'Nothing to update');
+router.put('/households/:id/layout', guard(async (req, res) => {
+  const hid = oid(req.params.id), incoming = req.body?.rooms;
+  if (!hid || !Array.isArray(incoming) || incoming.length > 40) return bad(res, 'householdId and rooms are required');
+  const rooms = incoming.map((r) => {
+    const _id = oid(r?._id);
+    if (!_id) throw new L.LayoutError('Bad room id in the layout');
+    return {
+      _id, householdId: hid,
+      name: String(r.name ?? '').trim(), type: String(r.type ?? ''), order: Math.trunc(finite(r.order)),
+      origin: { x: finite(r.origin?.x), z: finite(r.origin?.z) },
+      dimension: { w: finite(r.dimension?.w), d: finite(r.dimension?.d), h: finite(r.dimension?.h) },
+      placements: sanitizePlacements(Array.isArray(r.placements) ? r.placements : []),
+      openWalls: (Array.isArray(r.openWalls) ? r.openWalls : []).map((o) => ({ wall: Math.trunc(finite(o.wall, -1)), t0: finite(o.t0), t1: finite(o.t1), to: String(o.to ?? '') })),
+    };
+  });
+  L.validateLayout(rooms);
+  const db = await getDb();
+  const ids = rooms.map((r) => r._id);
+  if (await db.collection('rooms').countDocuments({ _id: { $in: ids }, householdId: { $ne: hid } })) return bad(res, 'Those rooms belong to another flat', 403);
+  await db.collection('rooms').bulkWrite([
+    { deleteMany: { filter: { householdId: hid, _id: { $nin: ids } } } },
+    ...rooms.map((r) => ({ replaceOne: { filter: { _id: r._id }, replacement: r, upsert: true } })),
+  ]);
+  res.json(answer(rooms));
+}));
 
-  await rooms.updateOne({ _id: id }, { $set: set });
-  res.json(set);
-});
-
-// PUT /api/rooms/:roomId/placements
 router.put('/rooms/:roomId/placements', async (req, res) => {
   const id = oid(req.params.roomId);
   if (!id) return bad(res, 'Invalid room id');
@@ -149,7 +166,6 @@ router.put('/rooms/:roomId/placements', async (req, res) => {
   matchedCount ? res.json({ placements }) : bad(res, 'Room not found', 404);
 });
 
-// POST /api/rooms/:roomId/placements
 router.post('/rooms/:roomId/placements', async (req, res) => {
   const id = oid(req.params.roomId);
   if (!id) return bad(res, 'Invalid room id');
@@ -159,7 +175,6 @@ router.post('/rooms/:roomId/placements', async (req, res) => {
   matchedCount ? res.status(201).json(placement) : bad(res, 'Room not found', 404);
 });
 
-// PUT /api/rooms/:roomId/placements/:pid
 router.put('/rooms/:roomId/placements/:pid', async (req, res) => {
   const roomId = oid(req.params.roomId), pid = oid(req.params.pid);
   if (!roomId || !pid) return bad(res, 'Invalid id');
@@ -172,7 +187,6 @@ router.put('/rooms/:roomId/placements/:pid', async (req, res) => {
   r.matchedCount ? res.json({ ok: true }) : bad(res, 'Room not found', 404);
 });
 
-// DELETE /api/rooms/:roomId/placements/:pid
 router.delete('/rooms/:roomId/placements/:pid', async (req, res) => {
   const roomId = oid(req.params.roomId), pid = oid(req.params.pid);
   if (!roomId || !pid) return bad(res, 'Invalid id');
@@ -185,4 +199,3 @@ router.delete('/rooms/:roomId/placements/:pid', async (req, res) => {
 
 module.exports = router;
 module.exports.sanitizePlacements = sanitizePlacements;
-module.exports.findClash = findClash;

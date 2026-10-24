@@ -41,7 +41,7 @@ function loadGameData() {
 
 const app = express();
 
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 
 // Handle CORS headers and OPTIONS preflight requests for all /api endpoints
 app.use('/api', (req, res, next) => {

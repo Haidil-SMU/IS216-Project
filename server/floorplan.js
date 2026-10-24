@@ -151,4 +151,4 @@ function generateRooms(flatTypeId) {
   return { footprint: { w: W, d: D }, rooms };
 }
 
-module.exports = { generateRooms, LAYOUTS, CEILING_H };
+module.exports = { generateRooms, LAYOUTS, CEILING_H, opening, wallPoint, NORMAL, TANGENT, WALL_THICKNESS };

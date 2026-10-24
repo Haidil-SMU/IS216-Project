@@ -3,102 +3,84 @@
 
     <div class="d-flex flex-grow-1 min-h-0 min-w-0">
       <main class="flex-grow-1 min-w-0 bg-light p-0 position-relative">
-        <FloorPlan3D v-if="mode==='flat'" :rooms="plan.rooms" :footprint="plan.footprint"
-  :selected-id="selectedRoomId" @select-room="selectedRoomId = $event" @open-room="openRoom" />
-        <RoomCanvas
-          v-else
-          ref="canvas"
-          :appliances="spawnedAppliances"
-          :room="room"
-          :tariff="energyData.electricityTariff"
+        <FloorPlan3D
+          :rooms="plan.rooms" :footprint="plan.footprint"
+          :selected-id="selectedRoomId" :selected-item-id="selectedItemId"
+          @select-room="selectedRoomId = $event" @select-item="selectedItemId = $event"
           :overlays="overlays"
-          @no-space="handleNoSpace"
-          @removed="handleRemoved"
-          @analysis="analysis = $event"
-          @layout-changed="onLayoutChanged"
-        />
-        <button v-if="mode==='room'" class="btn btn-sm btn-dark position-absolute top-0 start-0 m-2" style="z-index:5" @click="backToFlat">← Whole flat</button>
+          @edit-rect="onEditRect" @move-items="onMoveItems" @move-opening="onMoveOpening" @drag-preview="preview = $event" @rotate-blocked="flash('No room to rotate it here.')" />
         <div v-if="loadError" class="alert alert-danger position-absolute m-3" style="z-index:5">{{ loadError }}</div>
       </main>
 
       <aside class="right-sidebar overflow-auto bg-body-secondary border-start p-3 d-flex flex-column justify-content-between">
         <div>
-          <h5 class="fw-bold mb-1">Room Summary</h5>
+          <h5 class="fw-bold mb-1">Flat Summary</h5>
           <p class="small text-muted mb-3">Electricity Tariff: ${{ energyData.electricityTariff }}/kWh</p>
-          <div v-if="mode==='flat'" class="small mb-2">Adding to: <b>{{ selectedRoom?.name ?? 'click a room first' }}</b></div>
-          <div class="card bg-white border-0 shadow-sm p-3 mb-3">
-            <label v-for="s in sliders" :key="s.key" class="small d-block mb-1">
-              <span class="d-flex justify-content-between"><span>{{ s.label }}</span><b>{{ room[s.key].toFixed(1) }} m</b></span>
-              <input type="range" class="form-range" :min="s.min" :max="s.max" step="0.1" v-model.number="room[s.key]">
+
+          <div class="d-flex gap-1 mb-2">
+            <button class="btn btn-sm btn-outline-secondary flex-fill" :disabled="!canUndo" title="Undo (Ctrl+Z)" @click="undo">↶ Undo</button>
+            <button class="btn btn-sm btn-outline-secondary flex-fill" :disabled="!canRedo" title="Redo (Ctrl+Shift+Z)" @click="redo">↷ Redo</button>
+          </div>
+
+          <div v-if="!selectedRoom" class="small text-muted mb-2">Click a room to select it. New items are added to the selected room.</div>
+
+          <div class="card card-body small mb-2 py-2">
+            <div class="fw-semibold mb-1">Show in room</div>
+            <label v-for="layer in OVERLAY_LAYERS" :key="layer.key" class="form-check d-flex align-items-center gap-2 mb-0">
+              <input type="checkbox" class="form-check-input mt-0" v-model="overlays[layer.key]">
+              <span class="legend-dot" :style="{ background: layer.color }"></span>{{ layer.label }}
             </label>
           </div>
 
-          <div class="card bg-white border-0 shadow-sm p-3 mb-3">
-            <div class="small text-uppercase text-muted fw-bold mb-1">Show in room</div>
-            <div v-for="o in overlayOptions" :key="o.key" class="form-check form-switch small">
-              <input :id="'ov-' + o.key" v-model="overlays[o.key]" class="form-check-input" type="checkbox">
-              <label :for="'ov-' + o.key" class="form-check-label">{{ o.label }}</label>
-            </div>
+          <div v-if="selectedOpening" class="card card-body small mb-2 py-2 d-flex flex-row align-items-center justify-content-between">
+            <span>Selected: <b>{{ selectedOpening.name }}</b> (drag it along the wall)</span>
+            <button class="btn btn-sm btn-outline-danger py-0" @click="removeSelectedOpening">Remove</button>
           </div>
 
+          <div v-if="warnings.length" class="alert alert-warning small mb-2 py-1">
+            <div v-for="w in warnings" :key="w">⚠ {{ w }}</div>
+          </div>
           <div v-if="notice" class="alert alert-warning py-1 px-2 small">{{ notice }}</div>
 
           <div class="card bg-white border-0 shadow-sm p-3 mb-3">
-            <div class="small text-uppercase text-muted fw-bold">Est. Total Energy</div>
+            <div class="small text-uppercase text-muted fw-bold">Est. Total Energy (whole flat)</div>
             <div class="fs-4 fw-bold text-info">{{ totalKwhYear }} <span class="fs-6 text-muted">kWh/yr</span></div>
-            <div v-if="placementImpact" class="small" :class="placementImpact > 0 ? 'text-danger' : 'text-success'">
-              {{ placementImpact > 0 ? '+' : '' }}{{ placementImpact.toFixed(1) }}% from placement (rated {{ ratedKwhYear }} kWh/yr)
+            <div v-if="placementImpact >= 0.1" class="small text-danger">
+              +{{ placementImpact.toFixed(1) }}% from placement (rated {{ ratedKwhYear }} kWh/yr)
             </div>
-
-            <hr class="my-2">
-
-            <div class="small text-uppercase text-muted fw-bold">Est. Annual Cost</div>
-            <div class="fs-4 fw-bold text-success">${{ totalAnnualCost }} <span class="fs-6 text-muted">/yr</span></div>
           </div>
 
-          <div v-if="analysis.recs.length" class="card bg-white border-0 shadow-sm p-3 mb-3">
+          <div v-if="recs.length" class="card bg-white border-0 shadow-sm p-3 mb-3">
             <div class="small text-uppercase text-muted fw-bold mb-2">Recommendations</div>
-            <div v-for="r in analysis.recs" :key="r.idx" class="small mb-2">
+            <div v-for="r in recs" :key="r.id" class="small mb-2">
               <div>{{ r.text }}</div>
-              <button class="btn btn-sm btn-outline-success py-0 mt-1" @click="canvas.applyRec(r.idx)">Apply</button>
+              <button class="btn btn-sm btn-outline-success py-0 mt-1" @click="applyRec(r)">Apply</button>
             </div>
           </div>
 
           <div class="fw-semibold small mb-2 d-flex justify-content-between align-items-center">
-            <span>Items in Room ({{ spawnedAppliances.length }})</span>
-            <button 
-              v-if="spawnedAppliances.length > 0" 
-              class="btn btn-link btn-sm text-danger text-decoration-none p-0"
-              @click="clearAllAppliances"
-            >
-              Clear All
-            </button>
+            <span>Items in {{ selectedRoom?.name ?? 'room' }} ({{ roomItems.length }})</span>
+            <button v-if="roomItems.length" class="btn btn-link btn-sm text-danger text-decoration-none p-0" @click="clearRoomItems">Clear All</button>
           </div>
 
           <ul class="list-group list-group-flush rounded shadow-sm overflow-hidden">
-            <li 
-              v-for="item in spawnedAppliances" 
-              :key="item.id"
-              class="list-group-item d-flex align-items-center justify-content-between px-2 py-2 small"
+            <li
+              v-for="item in roomItems" :key="item.id"
+              class="list-group-item d-flex align-items-center justify-content-between px-2 py-2 small item-row"
+              :class="{ 'bg-info-subtle': item.id === selectedItemId }"
+              @click="selectedItemId = item.id"
             >
               <div class="text-truncate me-2">
                 <div class="fw-bold text-truncate">{{ item.name }}</div>
                 <div class="text-muted fs-7">
-                  <span v-if="item.tick !== 'none'" class="badge bg-warning text-dark me-1">
-                    {{ item.tick.replace('_tick', '✔') }}
-                  </span>
-                  <span>{{ rowOf(item.id) ? Math.round(rowOf(item.id).kwh) : item.kwhYear }} kWh/yr</span>
+                  <span v-if="item.tick && item.tick !== 'none'" class="badge bg-warning text-dark me-1">{{ item.tick.replace('_tick', '✔') }}</span>
+                  <span>{{ rowOf(item.id) ? Math.round(rowOf(item.id).kwh) : item.kwh }} kWh/yr</span>
                 </div>
-                <div v-for="f in rowOf(item.id)?.factors || []" :key="f.key" v-show="Math.abs(f.pct) >= 0.5" class="fs-7 text-warning-emphasis">
-                  +{{ f.pct.toFixed(0) }}% {{ f.label.toLowerCase() }}
+                <div v-for="f in rowOf(item.id)?.factors || []" :key="f.key" class="fs-7 text-warning-emphasis">
+                  +{{ f.pct.toFixed(1) }}% {{ f.label.toLowerCase() }}
                 </div>
               </div>
-              <button 
-                class="btn btn-outline-danger btn-xs py-0 px-1 border-0"
-                @click="removeAppliance(item.id)"
-              >
-                ✕
-              </button>
+              <button class="btn btn-outline-danger btn-xs py-0 px-1 border-0" @click.stop="removeItem(item.id)">✕</button>
             </li>
           </ul>
         </div>
@@ -106,24 +88,24 @@
     </div>
 
     <footer class="bottom-sidebar bg-dark text-white border-top border-secondary flex-shrink-0">
-      <AppliancesList 
-        @tab-changed="handleTabChange" 
-        @add-appliance="handleAddAppliance" 
-      />
+      <AppliancesList @add-appliance="handleAddAppliance" />
     </footer>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import energyData from '../data/energyData.json'
 import AppliancesList from '../components/AppliancesList.vue'
-import RoomCanvas from '../components/RoomCanvas.vue'
 import FloorPlan3D from '../components/FloorPlan3D.vue'
 import { resolveSpec } from '../stores/applianceModels.js'
 import { findSpot } from '../stores/placement.js'
-import { getFloorplan, saveRoomPlacements, createHousehold, addPlacement, saveRoom } from '../api/spatial.js'
-// import { getFloorplan, createHousehold, addPlacement, saveRoom } from '../api/spatial.js'
+import { analyse } from '../stores/energy.js'
+import {
+  getFloorplan, createHousehold, addPlacement, movePlacement, removePlacement, saveRoomPlacements,
+  setRoomRect, moveOpening, removeOpening, restoreLayout,
+} from '../api/spatial.js'
+
 const loadError = ref('')
 const HOUSEHOLD_KEY = 'ecohomeHouseholdId'
 
@@ -142,148 +124,255 @@ onMounted(async () => {
   }
 })
 
-const activeCategory = ref('kitchen')
-const activeApplianceName = ref('Refrigerator')
-const spawnedAppliances = ref([])
 const plan = ref({ rooms: [], footprint: null })
-const activeRoomId = ref(null)
-const mode = computed(() => (activeRoomId.value ? 'room' : 'flat'))
+const warnings = ref([])
+const notice = ref('')
+const flash = (msg) => { notice.value = msg; setTimeout(() => (notice.value = ''), 4000) }
+const hid = () => plan.value.household._id
 
-const handleTabChange = (data) => {
-  activeCategory.value = data.tabId
-  activeApplianceName.value = data.applianceName
+async function loadHousehold(id) {
+  plan.value = await getFloorplan(id)
+  warnings.value = plan.value.warnings ?? []
+  resetHistory()
 }
 
-const room = reactive({ w: 4.2, d: 3.6, h: 2.6 })
-const activeRoom = computed(() => plan.value.rooms.find((r) => String(r._id) === activeRoomId.value))
-const limits = computed(() => {
-  const r = activeRoom.value
-  if (!r) return { w: 6, d: 6 }
-  const EPS = 0.01, o = r.origin
-  let w = 10, d = 10
-  for (const x of plan.value.rooms) {
-    if (x === r) continue
-    const zOverlap = x.origin.z < o.z + room.d - EPS && x.origin.z + x.dimension.d > o.z + EPS
-    const xOverlap = x.origin.x < o.x + room.w - EPS && x.origin.x + x.dimension.w > o.x + EPS
-    if (zOverlap && x.origin.x >= o.x + EPS) w = Math.min(w, x.origin.x - o.x)
-    if (xOverlap && x.origin.z >= o.z + EPS) d = Math.min(d, x.origin.z - o.z)
-  }
-  return { w: Math.floor(w * 10) / 10, d: Math.floor(d * 10) / 10 }
-})
-const sliders = computed(() => [
-  { key: 'w', label: 'Width', min: 1.5, max: limits.value.w },
-  { key: 'd', label: 'Depth', min: 1.5, max: limits.value.d },
-  { key: 'h', label: 'Ceiling height', min: 2.4, max: 3 },
-])
-async function loadHousehold(id) { plan.value = await getFloorplan(id) }
+const selectedRoomId = ref(null)
+const selectedItemId = ref(null)
+const selectedRoom = computed(() => plan.value.rooms.find((r) => String(r._id) === selectedRoomId.value))
 
-function openRoom(roomId) {
-  const r = plan.value.rooms.find((x) => String(x._id) === roomId)
-  activeRoomId.value = roomId
-  Object.assign(room, r.dimension)
-  const sorted = [...r.placements].sort((a, b) => (a.onPlacementId ? 1 : 0) - (b.onPlacementId ? 1 : 0))
-  spawnedAppliances.value = sorted.map((p) => {
-    const t = energyData.categories[p.category]?.types?.[p.applianceTypeKey]
-    return {
-      id: String(p._id), name: t?.name ?? p.applianceTypeKey, type: p.applianceTypeKey, category: p.category,
-      tick: p.tick, kwhYear: t?.ticks?.[p.tick]?.kwhYear ?? t?.kwhYear ?? 0,
-      pos: { x: p.x, z: p.z, rotY: p.rotY, wall: p.wall, t: p.t, on: p.onPlacementId ? String(p.onPlacementId) : undefined, cu: p.cu },
+watch(() => plan.value.rooms, (rooms) => {
+  if (selectedRoomId.value && !rooms.some((r) => String(r._id) === selectedRoomId.value)) selectedRoomId.value = null
+  if (selectedItemId.value && !rooms.some((r) => r.placements.some((p) => String(p._id) === selectedItemId.value))) selectedItemId.value = null
+})
+watch(selectedRoomId, (id) => {
+  const r = plan.value.rooms.find((x) => String(x._id) === id)
+  if (selectedItemId.value && !r?.placements.some((p) => String(p._id) === selectedItemId.value)) selectedItemId.value = null
+})
+
+const kwhOf = (p) => {
+  const t = energyData.categories[p.category]?.types?.[p.applianceTypeKey]
+  return t?.ticks?.[p.tick]?.kwhYear ?? t?.kwhYear ?? 0
+}
+const nameOf = (p) => energyData.categories[p.category]?.types?.[p.applianceTypeKey]?.name ?? p.applianceTypeKey
+
+const preview = ref(null)
+const placedOf = (r) => r.placements.map((p) => ({
+  id: String(p._id), name: nameOf(p), kwh: p.category === 'build' ? 0 : kwhOf(p),
+  spec: resolveSpec(p.applianceTypeKey, p.category),
+  x: p.x, z: p.z, rotY: p.rotY, wall: p.wall, t: p.t, cu: p.cu ?? 0,
+  on: p.onPlacementId ? String(p.onPlacementId) : undefined,
+  ...(preview.value?.roomId === String(r._id) ? preview.value.poses[String(p._id)] : null),
+}))
+
+const roomItems = computed(() => {
+  const r = selectedRoom.value
+  if (!r) return []
+  return r.placements
+    .filter((p) => !(p.category === 'build' && /window|door/.test(p.applianceTypeKey)))
+    .map((p) => ({ id: String(p._id), name: nameOf(p), tick: p.tick, kwh: kwhOf(p) }))
+})
+
+const analyses = computed(() => plan.value.rooms.map((r) => ({
+  roomId: String(r._id),
+  ...analyse(r.dimension, placedOf(r), energyData.electricityTariff),
+})))
+const rowOf = (id) => { for (const a of analyses.value) { const row = a.rows.find((x) => x.id === id); if (row) return row } return null }
+const sumOf = (key) => analyses.value.reduce((total, a) => total + a[key], 0)
+
+const ratedKwhYear = computed(() => Math.round(sumOf('base')))
+const totalKwhYear = computed(() => Math.round(sumOf('kwh')))
+const placementImpact = computed(() => (sumOf('base') ? (sumOf('avoidKwh') / sumOf('base')) * 100 : 0))
+
+const recs = computed(() => analyses.value.find((a) => a.roomId === selectedRoomId.value)?.recs ?? [])
+
+const overlays = reactive({ sun: false, heat: true, air: true })
+const OVERLAY_LAYERS = [
+  { key: 'sun', label: 'Sunlight', color: '#ffc929' },
+  { key: 'heat', label: 'Heat', color: '#e8420f' },
+  { key: 'air', label: 'Aircon airflow', color: '#22b8cf' },
+]
+
+const MAX_HISTORY = 50
+const undoStack = ref([])
+const redoStack = ref([])
+const canUndo = computed(() => undoStack.value.length > 0)
+const canRedo = computed(() => redoStack.value.length > 0)
+const snapshot = () => JSON.stringify(plan.value.rooms)
+function remember(before) {
+  undoStack.value.push(before)
+  if (undoStack.value.length > MAX_HISTORY) undoStack.value.shift()
+  redoStack.value = []
+}
+const resetHistory = () => { undoStack.value = []; redoStack.value = [] }
+
+let chain = Promise.resolve()
+const enqueue = (fn) => { const p = chain.then(fn); chain = p.catch(() => {}); return p }
+
+const applyGeometry = (res) => {
+  plan.value = { ...plan.value, rooms: res.rooms, footprint: res.footprint }
+  warnings.value = res.warnings ?? []
+}
+
+function commit(fn) {
+  return enqueue(async () => {
+    const before = snapshot()
+    try {
+      const res = await fn()
+      applyGeometry(res)
+      remember(before)
+      return res
+    } catch (e) { flash(e.response?.data?.error || e.message); return null }
+  })
+}
+const run = async (fn) => !!(await commit(fn))
+
+function travel(from, to) {
+  return enqueue(async () => {
+    const target = from.value[from.value.length - 1]
+    if (!target) return
+    const current = snapshot()
+    try {
+      applyGeometry(await restoreLayout(hid(), JSON.parse(target)))
+      from.value.pop()
+      to.value.push(current)
+    } catch (e) { flash(e.response?.data?.error || e.message) }
+  })
+}
+const undo = () => travel(undoStack, redoStack)
+const redo = () => travel(redoStack, undoStack)
+
+const onEditRect = ({ roomId, rect }) => run(() => setRoomRect(hid(), roomId, rect))
+
+const selectedOpening = computed(() => {
+  for (const r of plan.value.rooms) {
+    const p = r.placements.find((x) => String(x._id) === selectedItemId.value)
+    if (p && p.category === 'build' && /window|door/.test(p.applianceTypeKey)) return { roomId: String(r._id), id: String(p._id), name: nameOf(p) }
+  }
+  return null
+})
+const removeSelectedOpening = () => {
+  const o = selectedOpening.value
+  if (o) run(() => removeOpening(hid(), o.roomId, o.id))
+}
+
+async function onMoveOpening({ roomId, id, wall, t }) {
+  const saved = await run(() => moveOpening(hid(), roomId, id, wall, t))
+  preview.value = null
+  if (!saved) plan.value = { ...plan.value, rooms: [...plan.value.rooms] }
+}
+
+const roomOf = (roomId) => plan.value.rooms.find((x) => String(x._id) === roomId)
+
+const handleAddAppliance = async (appliance) => {
+  if (!selectedRoom.value) {
+    const first = plan.value.rooms.find((r) => r.type === 'living') ?? plan.value.rooms[0]
+    if (!first) return
+    selectedRoomId.value = String(first._id)
+  }
+  const r = selectedRoom.value
+  const spec = resolveSpec(appliance.type, appliance.category)
+  const others = placedOf(r)
+  const spot = findSpot({ ...r.dimension }, spec, others)
+  if (!spot) {
+    const needsCounter = spec.mode === 'top' && !others.some((o) => o.spec.kind === 'counter')
+    return flash(needsCounter ? 'Add a countertop first, then place this on it.' : `No free space in the ${r.name}. Move something, or make the room bigger.`)
+  }
+  const roomId = String(r._id)
+  await enqueue(async () => {
+    const before = snapshot()
+    try {
+      const saved = await addPlacement(roomId, {
+        applianceTypeKey: appliance.type, category: appliance.category, tick: appliance.tick ?? 'none',
+        x: spot.x, z: spot.z, rotY: spot.rotY, wall: spot.wall, t: spot.t, cu: spot.cu ?? 0,
+        onPlacementId: spot.on ?? null,
+      })
+      roomOf(roomId)?.placements.push(saved)
+      remember(before)
+      selectedItemId.value = String(saved._id)
+    } catch (e) {
+      flash('Could not save: ' + (e.response?.data?.error || e.message))
     }
   })
 }
 
-let saveTimer
-async function persistRoom() {
-  if (!activeRoomId.value || !canvas.value) return true
-  try {
-    await saveRoom(activeRoomId.value, { dimension: { ...room }, placements: canvas.value.getPlacements() })
-    return true
-  } catch (e) {
-    notice.value = e.response?.data?.error || 'Could not save the room'
-    setTimeout(() => (notice.value = ''), 4000)
-    return false
-  }
+function onMoveItems({ roomId, updates }) {
+  return enqueue(async () => {
+    const before = snapshot()
+    const r = roomOf(roomId)
+    if (!r) return
+    try {
+      for (const u of updates) {
+        const { id, ...pos } = u
+        const p = r.placements.find((x) => String(x._id) === id)
+        if (!p) continue
+        Object.assign(p, pos)
+        await movePlacement(roomId, id, pos)
+      }
+      remember(before)
+    } catch (e) {
+      flash('Could not save the move: ' + (e.response?.data?.error || e.message))
+      await loadHousehold(hid())
+    } finally {
+      preview.value = null
+    }
+  })
 }
-function onLayoutChanged() { clearTimeout(saveTimer); saveTimer = setTimeout(persistRoom, 400) }
-watch(() => [room.w, room.d, room.h], () => { if (mode.value === 'room') onLayoutChanged() })
-
-async function backToFlat() {
-  clearTimeout(saveTimer)
-  if (!(await persistRoom())) return
-  await loadHousehold(plan.value.household._id)
-  activeRoomId.value = null
-}
-
-const notice = ref('')
-const handleNoSpace = (id, reason) => {
-  removeAppliance(id)
-  notice.value = reason
-  setTimeout(() => (notice.value = ''), 4000)
-}
-
-const handleRemoved = (ids) => {
-  spawnedAppliances.value = spawnedAppliances.value.filter((item) => !ids.includes(item.id))
-}
-
-const canvas = ref(null)
-const overlays = reactive({ sun: false, heat: true, air: true })
-const overlayOptions = [
-  { key: 'heat', label: 'Heat from appliances' },
-  { key: 'sun', label: 'Sunlight from windows' },
-  { key: 'air', label: 'Aircon airflow' },
-]
-const analysis = ref({ rows: [], totals: null, recs: [] })
-const rowOf = (id) => analysis.value.rows.find((r) => r.id === id)
-
-const selectedRoomId = ref(null)
-const selectedRoom = computed(() => plan.value.rooms.find((r) => String(r._id) === selectedRoomId.value))
-
-const flash = (msg) => { notice.value = msg; setTimeout(() => (notice.value = ''), 4000) }
-
-const handleAddAppliance = async (appliance) => {
-  if (mode.value === 'room') {
-    spawnedAppliances.value.push({ ...appliance, id: Date.now() + Math.random() })
-    return
-  }
-
+const applyRec = (rec) => {
   const r = selectedRoom.value
-  if (!r) return flash('Click a room in the floor plan first, then add the item.')
+  if (!r) return
+  const { x, z, rotY, wall, t, cu } = rec.to
+  onMoveItems({ roomId: String(r._id), updates: [{ id: rec.id, x, z, rotY, wall, t, cu: cu ?? 0 }] })
+  selectedItemId.value = rec.id
+}
 
-  const spec = resolveSpec(appliance.type, appliance.category)
-  const others = r.placements.map((p) => ({
-    spec: resolveSpec(p.applianceTypeKey, p.category), id: String(p._id),
-    x: p.x, z: p.z, rotY: p.rotY, wall: p.wall, t: p.t, cu: p.cu,
-    on: p.onPlacementId ? String(p.onPlacementId) : undefined,
-  }))
-  const spot = findSpot({ ...r.dimension }, spec, others)
-  if (!spot) {
-    const needsCounter = spec.mode === 'top' && !others.some((o) => o.spec.kind === 'counter')
-    return flash(needsCounter ? 'Add a countertop first, then place this on it.' : 'No free space in this room.')
+function removeItem(id) {
+  const r = selectedRoom.value
+  if (!r) return
+  const roomId = String(r._id)
+  return enqueue(async () => {
+    const before = snapshot()
+    try {
+      await removePlacement(roomId, id)
+      const room = roomOf(roomId)
+      if (room) room.placements = room.placements.filter((p) => String(p._id) !== id && String(p.onPlacementId ?? '') !== id)
+      remember(before)
+    } catch (e) { flash('Could not remove it: ' + (e.response?.data?.error || e.message)) }
+  })
+}
+
+function clearRoomItems() {
+  const r = selectedRoom.value
+  if (!r) return
+  const roomId = String(r._id), listed = new Set(roomItems.value.map((i) => i.id))
+  return enqueue(async () => {
+    const before = snapshot()
+    try {
+      const kept = roomOf(roomId).placements.filter((p) => !listed.has(String(p._id)) || p.applianceTypeKey.includes('countertop'))
+      const keptIds = new Set(kept.map((p) => String(p._id)))
+      const final = kept.filter((p) => !p.onPlacementId || keptIds.has(String(p.onPlacementId)))
+      const res = await saveRoomPlacements(roomId, final)
+      roomOf(roomId).placements = res.placements
+      remember(before)
+    } catch (e) { flash('Could not clear the room: ' + (e.response?.data?.error || e.message)) }
+  })
+}
+
+const typing = (e) => { const t = e.target; return !!t && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName)) }
+function onKey(e) {
+  if (typing(e) || e.altKey) return
+  const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase()
+  if (mod && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo() }
+  else if (mod && k === 'y') { e.preventDefault(); redo() }
+  else if (!mod && (e.key === 'Delete' || e.key === 'Backspace') && selectedItemId.value && roomItems.value.some((i) => i.id === selectedItemId.value)) {
+    e.preventDefault()
+    removeItem(selectedItemId.value)
+  } else if (!mod && (e.key === 'Delete' || e.key === 'Backspace') && selectedOpening.value) {
+    e.preventDefault()
+    removeSelectedOpening()
   }
-  try {
-    const saved = await addPlacement(r._id, {
-      applianceTypeKey: appliance.type, category: appliance.category, tick: appliance.tick ?? 'none',
-      x: spot.x, z: spot.z, rotY: spot.rotY, wall: spot.wall, t: spot.t, cu: spot.cu ?? 0,
-      onPlacementId: spot.on ?? null,
-    })
-    r.placements.push(saved)
-  } catch (e) {
-    flash('Could not save: ' + (e.response?.data?.error || e.message))
-  }
 }
-
-const removeAppliance = (id) => {
-  spawnedAppliances.value = spawnedAppliances.value.filter(item => item.id !== id)
-}
-
-const clearAllAppliances = () => {
-  spawnedAppliances.value = []
-}
-
-const ratedKwhYear = computed(() => spawnedAppliances.value.reduce((sum, item) => sum + (item.kwhYear || 0), 0))
-const totalKwhYear = computed(() => Math.round(analysis.value.totals ? analysis.value.totals.kwh : ratedKwhYear.value))
-const totalAnnualCost = computed(() => Math.round(totalKwhYear.value * energyData.electricityTariff))
-const placementImpact = computed(() => (analysis.value.totals ? analysis.value.totals.impactPct : 0))
+onMounted(() => window.addEventListener('keydown', onKey))
+onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 </script>
 
 <style scoped>
@@ -313,8 +402,17 @@ const placementImpact = computed(() => (analysis.value.totals ? analysis.value.t
   min-width: 0;
 }
 
+.item-row { cursor: pointer; }
+
 .fs-7 {
   font-size: 0.7rem;
+}
+
+.legend-dot {
+  display: inline-block;
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 50%;
 }
 
 .btn-xs {
