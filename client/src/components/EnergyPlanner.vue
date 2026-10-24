@@ -3,7 +3,6 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import axios from 'axios'
-import { useAuthStore } from '@/stores/auth'
 
 const API_URL = '/api'
 const appliances = ref([])
@@ -18,7 +17,6 @@ const busy = ref(false)
 const error = ref('')
 const notice = ref('')
 const plannerForm = ref(null)
-const householdSection = ref(null)
 const profile = ref({
   name: 'My household',
   flatType: '4-room',
@@ -28,11 +26,7 @@ const profile = ref({
   pattern: 'Mostly home in the evenings',
 })
 const plan = ref({ id: '', name: 'Everyday plan', days: 30, tariff: 0.32, items: [] })
-const auth = useAuthStore()
 const route = useRoute()
-const myinfoUrl = auth.singpassUrl('/EnergyPlanner/', 'myinfo')
-const myinfoBanner = ref(false)
-const myinfoFlatMissing = ref(false)
 
 // Computed properties update when the form values change (Week 5).
 const rooms = computed(() => {
@@ -58,6 +52,12 @@ const comparison = computed(() => {
 })
 const totals = computed(() => estimate(plan.value, appliances.value))
 const remaining = computed(() => profile.value.budget - totals.value.cost)
+const flatName = computed(() => {
+  for (const flat of flatTypes.value) {
+    if (flat.id === profile.value.flatType) return flat.name
+  }
+  return profile.value.flatType
+})
 
 function money(value) {
   return 'S$' + value.toFixed(2)
@@ -83,58 +83,16 @@ async function load() {
   error.value = ''
   try {
     await getData()
-    await loadMyinfoDraft()
+    // Open the household asked for in the URL (from My Profile), else the first one.
+    const household = users.value.find((user) => user.id === route.query.household) || users.value[0]
+    if (household) selectHousehold(household.id)
   } catch (err) {
     console.log(err.message)
     error.value = 'Unable to load the planner. Check that the server is running.'
   }
-  if (route.query.error === 'myinfo') {
-    error.value = 'Unable to retrieve your Myinfo details. Please try again or fill in the form yourself.'
-  }
   loading.value = false
 }
 onMounted(load)
-
-// Myinfo: after a Singpass login, the server holds household details for review.
-async function loadMyinfoDraft() {
-  const response = await axios.get(API_URL + '/myinfo/draft')
-  if (response.status !== 200 || !response.data) return
-  const draft = response.data
-  // Singpass worked, but this account returned no Myinfo details to fill in.
-  if (!draft.myinfo?.fields?.length) {
-    await axios.delete(API_URL + '/myinfo/draft')
-    error.value =
-      'Singpass did not return any Myinfo details for this account, so please fill in your household yourself.'
-    return
-  }
-  userId.value = ''
-  profile.value = {
-    ...profile.value,
-    name: draft.name,
-    occupants: draft.occupants,
-    address: draft.address,
-    myinfo: draft.myinfo,
-  }
-  if (draft.flatType) profile.value.flatType = draft.flatType
-  changeFlat()
-  myinfoFlatMissing.value = !draft.flatType
-  myinfoBanner.value = true
-}
-async function dismissMyinfo() {
-  myinfoBanner.value = false
-  try {
-    await axios.delete(API_URL + '/myinfo/draft')
-  } catch (err) {
-    console.log(err.message)
-  }
-}
-// Fields filled from Myinfo are locked until the user chooses to edit them.
-function fromMyinfo(field) {
-  return Boolean(profile.value.myinfo?.fields?.includes(field))
-}
-function editManually(field) {
-  profile.value.myinfo.fields = profile.value.myinfo.fields.filter((name) => name !== field)
-}
 
 // Use the required/min/max settings already on the HTML inputs.
 function checkInputs(section) {
@@ -145,36 +103,12 @@ function checkInputs(section) {
   return true
 }
 
-// POST creates a household; PUT updates the selected household.
-// The calling save function handles request errors.
-async function saveHousehold() {
-  let response
-  if (userId.value === '') {
-    response = await axios.post(API_URL + '/users', profile.value)
-  } else {
-    response = await axios.put(API_URL + '/users/' + userId.value, profile.value)
-  }
-  userId.value = response.data.id
-}
-async function saveProfile() {
-  if (!checkInputs(householdSection.value)) return
-  busy.value = true
-  error.value = ''
-  notice.value = ''
-  try {
-    await saveHousehold()
-    await getData()
-    myinfoBanner.value = false
-    notice.value = 'Household saved.'
-  } catch (err) {
-    console.log(err.message)
-    error.value = 'Unable to save the household.'
-  }
-  busy.value = false
-}
-
 // POST /plans creates a new plan. PUT /plans/:id updates an existing plan.
 async function savePlan(copy = false) {
+  if (!userId.value) {
+    error.value = 'Please save a household in My Profile before saving a plan.'
+    return
+  }
   if (!checkInputs(plannerForm.value)) return
   for (const item of plan.value.items) {
     if (!rooms.value.includes(item.room)) {
@@ -186,7 +120,6 @@ async function savePlan(copy = false) {
   error.value = ''
   notice.value = ''
   try {
-    await saveHousehold()
     const data = {
       name: plan.value.name,
       householdId: userId.value,
@@ -238,9 +171,8 @@ function newPlan() {
   error.value = ''
   notice.value = ''
 }
-function changeHousehold(event) {
-  userId.value = event.target.value
-  myinfoBanner.value = false
+function selectHousehold(id) {
+  userId.value = id
   profile.value = {
     name: 'My household',
     flatType: '4-room',
@@ -349,7 +281,7 @@ function estimate(plan, appliances) {
         <span class="badge bg-success mb-2">Personalised household energy planner</span>
         <h1 class="fw-bold">A smarter plan for your HDB.</h1>
         <p class="text-secondary mb-0">
-          Build your household, explore everyday choices, and compare your monthly electricity use.
+          Pick your household, explore everyday choices, and compare your monthly electricity use.
         </p>
       </div>
       <div v-if="error" class="alert alert-danger" role="alert">
@@ -369,135 +301,51 @@ function estimate(plan, appliances) {
         <fieldset ref="plannerForm" :disabled="busy">
           <legend class="visually-hidden">Energy planner</legend>
           <div class="row g-4">
-            <section ref="householdSection" class="col-lg-4" aria-labelledby="household-title">
+            <section class="col-lg-4" aria-labelledby="household-title">
               <div class="card border-0 shadow-sm">
                 <div class="card-body p-4">
                   <h2 id="household-title" class="h4">🏠 Your household</h2>
-                  <div v-if="myinfoBanner" class="alert alert-success small py-2" role="status">
-                    <strong>Filled from Myinfo.</strong> Please check the details, add your budget
-                    and save the household.
-                    <span v-if="myinfoFlatMissing" class="d-block mt-1">
-                      Myinfo has no HDB flat on record, so please choose your flat type.
-                    </span>
-                    <button type="button" class="btn btn-link btn-sm p-0 mt-1" @click="dismissMyinfo">
-                      Not now
-                    </button>
-                  </div>
-                  <template v-else-if="!profile.myinfo">
-                    <a class="btn-singpass w-100 mb-1" :href="myinfoUrl">
-                      <span>Retrieve Myinfo with</span><span class="sp-wordmark">singpass</span>
-                    </a>
-                    <p class="small text-secondary text-center mb-2">
-                      Fill in your household from your government records.
+                  <template v-if="users.length">
+                    <label for="household" class="form-label mt-2">Household</label
+                    ><select
+                      id="household"
+                      class="form-select mb-3"
+                      :value="userId"
+                      @change="selectHousehold($event.target.value)"
+                    >
+                      <option v-for="user in users" :key="user.id" :value="user.id">
+                        {{ user.name }}
+                      </option>
+                    </select>
+                    <dl class="row small mb-3">
+                      <dt class="col-6 fw-normal text-secondary">Flat type</dt>
+                      <dd class="col-6">{{ flatName }}</dd>
+                      <dt class="col-6 fw-normal text-secondary">Occupants</dt>
+                      <dd class="col-6">{{ profile.occupants }}</dd>
+                      <dt class="col-6 fw-normal text-secondary">Bedrooms</dt>
+                      <dd class="col-6">{{ profile.bedrooms }}</dd>
+                      <dt class="col-6 fw-normal text-secondary">Monthly budget</dt>
+                      <dd class="col-6">{{ money(profile.budget) }}</dd>
+                    </dl>
+                    <p class="small text-secondary">
+                      {{ rooms.length }} planning spaces: bedrooms plus living room, kitchen and
+                      bathroom. Bathroom usage is grouped.
                     </p>
+                    <RouterLink
+                      :to="{ path: '/MyProfile', query: { household: userId } }"
+                      class="btn btn-outline-success w-100"
+                    >
+                      Edit in My Profile
+                    </RouterLink>
                   </template>
-                  <label for="household" class="form-label mt-2">Saved household</label
-                  ><select
-                    id="household"
-                    class="form-select mb-3"
-                    :value="userId"
-                    @change="changeHousehold"
-                  >
-                    <option value="">Create new household</option>
-                    <option v-for="user in users" :key="user.id" :value="user.id">
-                      {{ user.name }}
-                    </option>
-                  </select>
-                  <label for="household-name" class="form-label">
-                    Household name
-                    <span v-if="fromMyinfo('name')" class="badge badge-singpass ms-1">Myinfo</span></label
-                  ><input
-                    id="household-name"
-                    v-model="profile.name"
-                    class="form-control mb-3"
-                    maxlength="100"
-                    required
-                  />
-                  <p v-if="profile.address" class="small text-secondary mb-3">
-                    📍 {{ profile.address }}
-                    <span v-if="fromMyinfo('address')" class="badge badge-singpass ms-1">Myinfo</span>
-                  </p>
-                  <label for="flat-type" class="form-label">
-                    HDB flat type
-                    <span v-if="fromMyinfo('flatType')" class="badge badge-singpass ms-1">Myinfo</span></label
-                  ><select
-                    id="flat-type"
-                    v-model="profile.flatType"
-                    class="form-select"
-                    :class="fromMyinfo('flatType') ? 'mb-1' : 'mb-3'"
-                    :disabled="fromMyinfo('flatType')"
-                    @change="changeFlat"
-                  >
-                    <option v-for="flat in flatTypes" :key="flat.id" :value="flat.id">
-                      {{ flat.name }}
-                    </option>
-                  </select>
-                  <button
-                    v-if="fromMyinfo('flatType')"
-                    type="button"
-                    class="btn btn-link btn-sm p-0 mb-3"
-                    @click="editManually('flatType')"
-                  >
-                    Edit manually
-                  </button>
-                  <div class="row g-3 mb-3">
-                    <div class="col-6">
-                      <label for="occupants" class="form-label">
-                        Occupants
-                        <span v-if="fromMyinfo('occupants')" class="text-secondary small">(estimated)</span></label
-                      ><input
-                        id="occupants"
-                        v-model.number="profile.occupants"
-                        class="form-control"
-                        type="number"
-                        min="1"
-                        max="20"
-                        required
-                      />
-                    </div>
-                    <div class="col-6">
-                      <label for="bedrooms" class="form-label">Bedrooms</label
-                      ><input
-                        id="bedrooms"
-                        :value="profile.bedrooms"
-                        class="form-control"
-                        type="number"
-                        readonly
-                        aria-describedby="room-info"
-                      />
-                    </div>
-                  </div>
-                  <p id="room-info" class="small text-secondary">
-                    Bedrooms are set by the selected HDB flat type.
-                    {{ rooms.length }} planning spaces: bedrooms plus living room, kitchen and
-                    bathroom. Bathroom usage is grouped.
-                  </p>
-                  <label for="budget" class="form-label">Monthly electricity budget (S$)</label
-                  ><input
-                    id="budget"
-                    v-model.number="profile.budget"
-                    class="form-control mb-3"
-                    type="number"
-                    min="0"
-                    max="10000"
-                    step="0.01"
-                    required
-                  />
-                  <label for="pattern" class="form-label">Household usage pattern</label
-                  ><textarea
-                    id="pattern"
-                    v-model="profile.pattern"
-                    class="form-control mb-3"
-                    rows="2"
-                    maxlength="300"
-                  ></textarea>
-                  <p class="small text-secondary">
-                    Occupants and usage patterns describe your household. Set appliance hours below
-                    to reflect their actual use.
-                  </p>
-                  <button class="btn btn-outline-success w-100" @click="saveProfile">
-                    Save household
-                  </button>
+                  <template v-else>
+                    <p class="text-secondary">
+                      Save your household in My Profile first, so your plans can be based on it.
+                    </p>
+                    <RouterLink to="/MyProfile" class="btn btn-success w-100">
+                      Set up household
+                    </RouterLink>
+                  </template>
                 </div>
               </div>
             </section>

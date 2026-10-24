@@ -334,7 +334,9 @@ async function submit() {
     celebrate.value = true
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
     await new Promise((resolve) => setTimeout(resolve, reduceMotion ? 0 : 900))
-    router.replace(redirect.value || (isSignup.value ? '/EnergyPlanner/' : homeFor(user)))
+    // A new account sets up its household before anything else.
+    if (isSignup.value) router.replace({ path: '/MyProfile', query: { setup: 'household' } })
+    else router.replace(redirect.value || homeFor(user))
   } catch (err) {
     error.value = err.response?.data?.error || 'Something went wrong. Please try again.'
     busy.value = false
