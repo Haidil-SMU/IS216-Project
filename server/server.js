@@ -8,6 +8,8 @@ const { MongoStore } = require('connect-mongo');
 const { ObjectId } = require('mongodb');
 const { connectDb, getClient, getDb, DB_NAME } = require('./db');
 const auth = require('./auth');
+const Planner = require('./energyplanner-model');
+const Appliances = require('./appliance-model');
 const singpass = require('./singpass');
 const myinfo = require('./myinfo');
 const corppass = require('./corppass');
@@ -47,7 +49,10 @@ function loadGameData() {
 
 
 const app = express();
-const dbReady = connectDb();
+const dbReady = connectDb().then(async (db) => {
+  await Planner.connectDB();
+  return db;
+});
 const isProduction = process.env.NODE_ENV === 'production';
 
 if (!process.env.SESSION_SECRET && isProduction) {
@@ -786,9 +791,6 @@ function readJson(filename) {
   return JSON.parse(content);
 }
 
-// Hide MongoDB's own fields from the Vue page.
-const HIDDEN = { projection: { _id: 0, userId: 0 } };
-
 // Households and plans belong to the logged-in homeowner: userId is their users._id.
 const ownedBy = (req) => ({ userId: new ObjectId(req.session.userId) });
 
@@ -810,8 +812,9 @@ function householdBody(req, id) {
 function validPlan(body) {
   return (
     body &&
-    body.name &&
-    body.householdId &&
+    typeof body.name === 'string' && body.name.trim().length > 0 &&
+    typeof body.householdId === "string" &&
+    body.householdId.length > 0 &&
     Array.isArray(body.items) &&
     body.estimate &&
     body.profile
@@ -854,18 +857,28 @@ app.get('/api/dev/simulator', async (req, res) => {
     }
 });
 
+// Compare names within the same account and household, including older saved plans.
+async function duplicatePlanName(req, exceptId = '') {
+  const plans = await Planner.retrievePlans(req.session.userId);
+  const name = req.body.name.trim().toLowerCase();
+  for (const plan of plans) {
+    if (plan.householdId === req.body.householdId && plan.id !== exceptId && plan.name.trim().toLowerCase() === name) return true;
+  }
+  return false;
+}
+
 // GET: return the catalogue plus this account's households and plans.
 app.get("/api/planner", auth.requireClient, async (req, res) => {
-  const catalogue = readJson("appliances.json");
-  for (const appliance of catalogue.appliances) {
+  const catalogue = await Appliances.retrieveAppliances();
+  for (const appliance of catalogue) {
     appliance.type = appliance.type || appliance.name;
     appliance.location = appliance.location || "Not specified";
   }
   res.json({
-    appliances: catalogue.appliances,
+    appliances: catalogue,
     flatTypes: readJson("hdb_rooms.json").flatTypes,
-    users: await getDb().collection("households").find(ownedBy(req), HIDDEN).toArray(),
-    plans: await getDb().collection("plans").find(ownedBy(req), HIDDEN).toArray(),
+    users: await Planner.retrieveHouseholds(req.session.userId),
+    plans: await Planner.retrievePlans(req.session.userId),
   });
 });
 
@@ -875,22 +888,18 @@ app.post("/api/users", auth.requireClient, async (req, res) => {
     return res.status(400).json({ error: "Household name is required." });
   }
   const user = householdBody(req, randomUUID());
-  await getDb()
-    .collection("households")
-    .insertOne({ ...user, ...ownedBy(req) });
+  await Planner.addHousehold({ ...user, ...ownedBy(req) });
   delete req.session.myinfoDraft;
   res.status(201).json(user);
 });
 
-// PUT: replace this account's household matching the ID in the URL.
+// PUT: update this account's household matching the ID in the URL.
 app.put("/api/users/:id", auth.requireClient, async (req, res) => {
   if (!req.body || !req.body.name) {
     return res.status(400).json({ error: "Household name is required." });
   }
   const user = householdBody(req, req.params.id);
-  const result = await getDb()
-    .collection("households")
-    .replaceOne({ ...ownedBy(req), id: req.params.id }, { ...user, ...ownedBy(req) });
+  const result = await Planner.editHousehold(req.session.userId, req.params.id, user);
   if (result.matchedCount === 0) {
     return res.status(404).json({ error: "Household not found." });
   }
@@ -903,10 +912,19 @@ app.post("/api/plans", auth.requireClient, async (req, res) => {
   if (!validPlan(req.body)) {
     return res.status(400).json({ error: "Plan details are required." });
   }
-  const plan = { ...cleanBody(req.body), id: randomUUID() };
-  await getDb()
-    .collection("plans")
-    .insertOne({ ...plan, ...ownedBy(req) });
+  // A household ID from the browser must belong to the same logged-in account.
+  const household = await Planner.findHousehold(req.session.userId, req.body.householdId);
+  if (!household) {
+    return res.status(404).json({ error: "Household not found." });
+  }
+  if (!Array.isArray(household.appliances) || household.appliances.length === 0) {
+    return res.status(400).json({ error: "Save the household's appliances before creating a plan." });
+  }
+  if (await duplicatePlanName(req)) {
+    return res.status(409).json({ error: "A plan with this name already exists in this household. Choose a different name." });
+  }
+  const plan = { ...cleanBody(req.body), id: randomUUID(), name: req.body.name.trim(), nameKey: req.body.name.trim().toLowerCase() };
+  await Planner.addPlan({ ...plan, ...ownedBy(req) });
   res.status(201).json(plan);
 });
 
@@ -915,10 +933,16 @@ app.put("/api/plans/:id", auth.requireClient, async (req, res) => {
   if (!validPlan(req.body)) {
     return res.status(400).json({ error: "Plan details are required." });
   }
-  const plan = { ...cleanBody(req.body), id: req.params.id };
-  const result = await getDb()
-    .collection("plans")
-    .replaceOne({ ...ownedBy(req), id: req.params.id }, { ...plan, ...ownedBy(req) });
+  // A household ID from the browser must belong to the same logged-in account.
+  const household = await Planner.findHousehold(req.session.userId, req.body.householdId);
+  if (!household) {
+    return res.status(404).json({ error: "Household not found." });
+  }
+  if (await duplicatePlanName(req, req.params.id)) {
+    return res.status(409).json({ error: "A plan with this name already exists in this household. Choose a different name." });
+  }
+  const plan = { ...cleanBody(req.body), id: req.params.id, name: req.body.name.trim(), nameKey: req.body.name.trim().toLowerCase() };
+  const result = await Planner.editPlan(req.session.userId, req.params.id, plan);
   if (result.matchedCount === 0) {
     return res.status(404).json({ error: "Plan not found." });
   }
@@ -927,9 +951,7 @@ app.put("/api/plans/:id", auth.requireClient, async (req, res) => {
 
 // DELETE: remove one of this account's plans.
 app.delete("/api/plans/:id", auth.requireClient, async (req, res) => {
-  const result = await getDb()
-    .collection("plans")
-    .deleteOne({ ...ownedBy(req), id: req.params.id });
+  const result = await Planner.deletePlan(req.session.userId, req.params.id);
   if (result.deletedCount === 0) {
     return res.status(404).json({ error: "Plan not found." });
   }
@@ -939,6 +961,9 @@ app.delete("/api/plans/:id", auth.requireClient, async (req, res) => {
 // One error handler for file or request errors across these routes.
 app.use((error, req, res, next) => {
   if (res.headersSent) return next(error);
+  if (error.code === 11000 && req.path.startsWith('/api/plans')) {
+    return res.status(409).json({ error: "A plan with this name already exists in this household. Choose a different name." });
+  }
   console.log(error.message);
   res
     .status(error.status || 500)

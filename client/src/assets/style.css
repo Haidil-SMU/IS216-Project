@@ -1,4 +1,6 @@
 .planner-page {
+  display: flex;
+  flex-direction: column;
   background: #f8f9fa;
   min-height: 100vh;
 }
@@ -31,4 +33,296 @@ fieldset {
   h1 {
     font-size: 2rem;
   }
+}
+
+/* Energy planner dashboard and household flow */
+
+/* Planner-only styles echo Home.vue; the shared stylesheet stays unchanged. */
+.energy-home {
+  position: relative;
+  isolation: isolate;
+  min-height: 100vh;
+  color: #172b25;
+  background: #a4e5ec;
+  overflow: hidden;
+}
+.energy-home main {
+  flex: 1;
+}
+.energy-home main,
+.energy-home footer {
+  position: relative;
+  z-index: 1;
+}
+.planner-sky {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: linear-gradient(180deg, #71cfee 0%, #b4e9e9 40%, #d9f4d9 100%);
+}
+.planner-sky::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at 8% 30%, #ffffff35, transparent 44%);
+}
+.planner-sun {
+  position: absolute;
+  width: 123px;
+  height: 123px;
+  right: 11%;
+  top: 104px;
+  border-radius: 50%;
+  background: #fff5bf;
+  box-shadow: 0 0 0 20px #fff3b12b, 0 0 90px 38px #ffe8a480;
+  animation: planner-sun-breathe 7s ease-in-out infinite;
+}
+.planner-cloud {
+  position: absolute;
+  width: 195px;
+  height: 52px;
+  left: -250px;
+  border-radius: 90px;
+  background: #ffffffc4;
+  box-shadow: 0 6px 22px #27688014;
+  opacity: .92;
+  animation: planner-cloud-drift linear infinite;
+}
+.planner-cloud::before,
+.planner-cloud::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  background: inherit;
+}
+.planner-cloud::before { width: 95px; height: 83px; left: 37px; bottom: 11px; }
+.planner-cloud::after { width: 103px; height: 68px; left: 95px; bottom: 4px; }
+.cloud-left { top: 105px; animation-duration: 67s; animation-delay: -12s; }
+.cloud-right {
+  top: 250px;
+  width: 135px;
+  height: 38px;
+  transform: scale(.72);
+  animation-duration: 92s;
+  animation-delay: -55s;
+  opacity: .75;
+}
+.cloud-right::before { width: 65px; height: 54px; }
+.cloud-right::after { width: 62px; height: 46px; left: 75px; }
+.planner-cloud-three { top: 425px; animation-duration: 83s; animation-delay: -43s; opacity: .5; }
+.planner-cloud-four { top: 680px; animation-duration: 110s; animation-delay: -77s; opacity: .42; }
+.planner-hills {
+  position: absolute;
+  inset: auto 0 0;
+  height: 285px;
+  opacity: .52;
+  background:
+    radial-gradient(ellipse 58% 89% at 5% 138%, #5eb78c 0 82%, transparent 83%),
+    radial-gradient(ellipse 58% 85% at 74% 145%, #5eb78c 0 82%, transparent 83%),
+    radial-gradient(ellipse 58% 86% at 42% 120%, #94cfa8 0 82%, transparent 83%);
+}
+@keyframes planner-cloud-drift {
+  from { translate: 0 0; }
+  to { translate: calc(100vw + 500px) 0; }
+}
+@keyframes planner-sun-breathe {
+  50% { box-shadow: 0 0 0 25px #fff3b132, 0 0 110px 55px #ffe8a48c; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .planner-cloud, .planner-sun { animation: none; }
+  .cloud-left { left: 15%; }
+  .cloud-right { left: 65%; }
+  .planner-cloud-three { left: 30%; }
+  .planner-cloud-four { left: 75%; }
+}
+.planner-heading {
+  max-width: 720px;
+  padding: 42px 0 30px;
+}
+.planner-eyebrow {
+  color: #146e46;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 1.8px;
+  text-transform: uppercase;
+}
+.planner-heading > .planner-eyebrow {
+  background: #ffffff40;
+  padding: 9px 16px;
+  border: 1px solid #ffffff50;
+  border-radius: 30px;
+}
+.planner-heading h1 {
+  font-size: clamp(2.1rem, 4.3vw, 3.7rem);
+  font-weight: 800;
+  letter-spacing: -1.5px;
+  line-height: 1.12;
+  margin: 25px 0 20px;
+}
+.planner-heading p {
+  color: #42645c;
+  line-height: 1.8;
+}
+.overview-card,
+.dashboard-selector,
+.empty-dashboard,
+.energy-home .card,
+.saved-plan-card {
+  background: #fffffff5;
+  border: 1px solid #e8eeea;
+  border-radius: 14px;
+  box-shadow: 0 8px 24px #163c2309;
+}
+.dashboard-selector {
+  padding: 20px 24px;
+}
+.overview-card {
+  height: 100%;
+  padding: 26px;
+}
+.overview-icon {
+  display: grid;
+  place-items: center;
+  background: #e8f5ec;
+  color: #148958;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  font-size: 23px;
+  margin-bottom: 18px;
+}
+.overview-card p {
+  color: #52675d;
+  margin-bottom: 10px;
+}
+.overview-card h3 {
+  font-size: clamp(1.7rem, 2.8vw, 2.3rem);
+  font-weight: 750;
+}
+.overview-card h3 small {
+  font-size: 1rem;
+}
+.overview-card > span:last-child {
+  font-size: 0.8rem;
+  color: #52675d;
+}
+.saved-plan-card {
+  overflow: hidden;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  transition:
+    transform 0.2s,
+    box-shadow 0.2s;
+}
+.saved-plan-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 16px 36px #163c231c;
+}
+.saved-photo {
+  height: 185px;
+  position: relative;
+  background: #e8f5ec;
+}
+.saved-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.saved-photo-tag {
+  position: absolute;
+  left: 16px;
+  top: 16px;
+  background: #fff;
+  padding: 8px 12px;
+  border-radius: 4px;
+  color: #166e46;
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+.saved-open {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0;
+  border-top: 1px solid #edf1ee;
+  background: transparent;
+  padding: 16px 0 0;
+  color: #12804e;
+  font-weight: 750;
+  text-align: left;
+}
+.saved-open:focus-visible {
+  outline: 3px solid #168b59;
+  outline-offset: 5px;
+}
+.product-preview {
+  background: #eff8f2;
+  border: 1px solid #d8eade;
+  border-radius: 12px;
+  padding: 22px;
+}
+.energy-home .room {
+  background: #f7faf8;
+  border: 1px solid #dce8df;
+  border-radius: 12px;
+  padding: 20px;
+}
+.energy-home .form-control,
+.energy-home .form-select {
+  border-color: #d5e2da;
+  border-radius: 8px;
+}
+.energy-home .btn-success {
+  background: #148958;
+  border-color: #148958;
+}
+.energy-home .btn-success:hover {
+  background: #106c46;
+}
+.planner-editor {
+  scroll-margin-top: 90px;
+}
+.energy-home footer {
+  margin-top: 60px;
+  background: #ffffff70;
+}
+@media (max-width: 575px) {
+  .planner-heading {
+    padding-top: 24px;
+  }
+  .planner-sun {
+    width: 65px;
+    height: 65px;
+    right: -15px;
+    top: 80px;
+  }
+  .overview-card {
+    padding: 20px;
+  }
+  .energy-home .card-body {
+    padding: 20px !important;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .saved-plan-card {
+    transition: none;
+  }
+  .saved-plan-card:hover {
+    transform: none;
+  }
+}
+
+.energy-home .planner-chart { position: relative; height: 320px; min-width: 0; }
+@media (max-width: 575px) { .energy-home .planner-chart { height: 280px; } }
+
+/* Keep 30px comparison bars readable without stretching across the page. */
+.energy-home .planner-chart-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.energy-home .planner-bar-chart {
+  flex-shrink: 0;
 }
