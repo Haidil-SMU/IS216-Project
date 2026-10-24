@@ -716,7 +716,7 @@ Do not include a total. The application calculates it.
 // POST - Analyze Contractor Quotations with Gemini AI
 // ============================================================
 
-app.post('/api/analyze-quotations', async (req, res) => {
+app.post('/api/analyze-quotations', auth.requireClient, async (req, res) => {
     try {
         const { contractors } = req.body;
 
@@ -819,10 +819,11 @@ function validPlan(body) {
 }
 
 // GET - Retrieve simulator data from MongoDB
-app.get('/api/dev/simulator', async (req, res) => {
+app.get('/api/dev/simulator', auth.requireClient, async (req, res) => {
     try {
         const db = getDb();
 
+        // Every homeowner sees the same demo household for now: rooms aren't linked to accounts yet.
         const householdId = '6ad89eaa947d323d4c2b0ac0';
 
         const rooms = await db.collection('rooms')
