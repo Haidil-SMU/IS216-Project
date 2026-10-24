@@ -1,7 +1,7 @@
 <style scoped src="../assets/style.css"></style>
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, nextTick, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
 import { useAuthStore } from '@/stores/auth'
 
@@ -30,9 +30,12 @@ const profile = ref({
 const plan = ref({ id: '', name: 'Everyday plan', days: 30, tariff: 0.32, items: [] })
 const auth = useAuthStore()
 const route = useRoute()
+const router = useRouter()
 const myinfoUrl = auth.singpassUrl('/EnergyPlanner/', 'myinfo')
 const myinfoBanner = ref(false)
 const myinfoFlatMissing = ref(false)
+const myinfoMismatch = ref(false)
+const mismatchButton = ref(null)
 
 // Computed properties update when the form values change (Week 5).
 const rooms = computed(() => {
@@ -92,6 +95,18 @@ async function load() {
     error.value = 'Unable to retrieve your Myinfo details. Please try again or fill in the form yourself.'
   }
   loading.value = false
+  if (route.query.error === 'myinfo-mismatch') {
+    myinfoMismatch.value = true
+    await nextTick()
+    mismatchButton.value?.focus()
+  }
+}
+// Drop ?error from the URL so a refresh does not show the popup again.
+function closeMyinfoMismatch() {
+  myinfoMismatch.value = false
+  const query = { ...route.query }
+  delete query.error
+  router.replace({ query })
 }
 onMounted(load)
 
@@ -916,5 +931,33 @@ function estimate(plan, appliances) {
     <footer class="border-top py-4 text-center text-secondary">
       HDB EcoHome · Household Energy Planner
     </footer>
+
+    <Transition name="popup">
+      <div
+        v-if="myinfoMismatch"
+        class="popup-backdrop"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="mismatch-title"
+        aria-describedby="mismatch-desc"
+        @click.self="closeMyinfoMismatch"
+        @keydown.esc="closeMyinfoMismatch"
+      >
+        <div class="popup-card">
+          <h2 id="mismatch-title" class="h5 fw-bold text-danger text-center">Singpass account mismatch</h2>
+          <p id="mismatch-desc" class="text-secondary mb-3 text-justify">
+            Singpass account does not match this EcoHome account. Please log in using the correct account.
+          </p>
+          <button
+            ref="mismatchButton"
+            type="button"
+            class="btn btn-success w-100"
+            @click="closeMyinfoMismatch"
+          >
+            OK
+          </button>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
