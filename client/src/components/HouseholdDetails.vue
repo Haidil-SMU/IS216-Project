@@ -25,6 +25,9 @@ const myinfoMismatch = ref(false)
 const mismatchButton = ref(null)
 const setupPopup = ref(false)
 const setupButton = ref(null)
+// Set while the "change flat type?" warning is open: which rooms will go and which will be added.
+const flatChange = ref(null)
+const flatChangeCancel = ref(null)
 
 const rooms = computed(() => 3 + Math.min(profile.value.bedrooms, 5))
 // "24 Oct 2026", when this household was last filled from Myinfo.
@@ -159,9 +162,55 @@ function checkInputs(section) {
   return true
 }
 
-// POST creates a household; PUT updates the selected household.
+const flatName = (id) => flatTypes.value.find((flat) => flat.id === id)?.name ?? id
+const roomsOf = (id) => flatTypes.value.find((flat) => flat.id === id)?.rooms ?? []
+
+// What the server did to the 3D floor plan, e.g. " 3D floor plan updated: deleted Bedroom 3."
+function roomNotice(changes) {
+  if (!changes?.updated) return ''
+  const parts = []
+  if (changes.added.length) parts.push('added ' + changes.added.join(', '))
+  if (changes.removed.length) parts.push('deleted ' + changes.removed.join(', '))
+  return parts.length
+    ? ' 3D floor plan updated: ' + parts.join('; ') + '.'
+    : ' 3D floor plan reset to the standard layout.'
+}
+
+// Changing the flat type of a saved household rebuilds its 3D rooms, so ask first.
 async function saveProfile() {
   if (!checkInputs(householdSection.value)) return
+  const saved = users.value.find((user) => user.id === userId.value)
+  const from = saved && (saved.flatTypeId || saved.flatType)
+  const to = profile.value.flatType
+  if (from && from !== to) {
+    const before = roomsOf(from)
+    const after = roomsOf(to)
+    flatChange.value = {
+      from,
+      fromName: flatName(from),
+      toName: flatName(to),
+      removed: before.filter((name) => !after.includes(name)),
+      added: after.filter((name) => !before.includes(name)),
+    }
+    await nextTick()
+    flatChangeCancel.value?.focus()
+    return
+  }
+  await persistProfile()
+}
+async function confirmFlatChange() {
+  flatChange.value = null
+  await persistProfile()
+}
+// Cancelling puts the flat type back to what is saved.
+function cancelFlatChange() {
+  if (flatChange.value) profile.value.flatType = flatChange.value.from
+  flatChange.value = null
+  changeFlat()
+}
+
+// POST creates a household; PUT updates the selected household.
+async function persistProfile() {
   busy.value = true
   error.value = ''
   notice.value = ''
@@ -177,7 +226,7 @@ async function saveProfile() {
     if (auth.user) auth.user.hasHousehold = true
     await getData()
     myinfoBanner.value = false
-    notice.value = 'Household saved.'
+    notice.value = 'Household saved.' + roomNotice(response.data.roomChanges)
   } catch (err) {
     console.log(err.message)
     error.value = err.response?.data?.error || 'Unable to save the household.'
@@ -395,6 +444,61 @@ function changeFlat() {
           >
             Set up household
           </button>
+        </div>
+      </div>
+    </Transition>
+
+    <Transition name="popup">
+      <div
+        v-if="flatChange"
+        class="popup-backdrop"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="flat-change-title"
+        aria-describedby="flat-change-desc"
+        @click.self="cancelFlatChange"
+        @keydown.esc="cancelFlatChange"
+      >
+        <div class="popup-card">
+          <h2 id="flat-change-title" class="h5 fw-bold text-danger">Change your flat type?</h2>
+          <div id="flat-change-desc" class="text-secondary mb-3">
+            <p class="mb-2">
+              Going from <strong>{{ flatChange.fromName }}</strong> to
+              <strong>{{ flatChange.toName }}</strong> rebuilds your 3D floor plan with the standard
+              {{ flatChange.toName }} layout.
+            </p>
+            <p v-if="flatChange.removed.length" class="mb-2 text-danger">
+              <strong>{{ flatChange.removed.join(', ') }}</strong>
+              will be deleted permanently, along with everything placed in
+              {{ flatChange.removed.length > 1 ? 'them' : 'it' }}.
+            </p>
+            <p v-if="flatChange.added.length" class="mb-2">
+              New: <strong>{{ flatChange.added.join(', ') }}</strong
+              >.
+            </p>
+            <p class="mb-0">
+              Room sizes and positions go back to the default, and appliances in the other rooms are
+              kept where they fit. This cannot be undone.
+            </p>
+          </div>
+          <div class="d-flex gap-2">
+            <button
+              ref="flatChangeCancel"
+              type="button"
+              class="btn btn-outline-secondary flex-fill"
+              @click="cancelFlatChange"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              class="btn flex-fill"
+              :class="flatChange.removed.length ? 'btn-danger' : 'btn-success'"
+              @click="confirmFlatChange"
+            >
+              {{ flatChange.removed.length ? 'Delete rooms and save' : 'Change and save' }}
+            </button>
+          </div>
         </div>
       </div>
     </Transition>

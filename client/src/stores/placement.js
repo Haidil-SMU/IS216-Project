@@ -1,3 +1,5 @@
+import { sinkSpan } from './applianceModels.js'
+
 export const WALL_THICKNESS = 0.1
 const GAP = 0.02
 const SNAP = 0.45 
@@ -36,12 +38,28 @@ export function onWall(room, spec, i, t) {
   return { x: px + n[0] * offset, z: pz + n[1] * offset, rotY: Math.atan2(n[0], n[1]), wall: i, t }
 }
 
-export function onCounter(counter, spec, cu) {
-  const lim = Math.max(0, counter.spec.w / 2 - spec.w / 2 - 0.03)
-  cu = clamp(cu, -lim, lim)
+const COUNTER_EDGE = 0.03
+const SINK_MARGIN = 0.03
+
+export function counterPose(counter, spec, cu) {
   const u = TANGENT[counter.wall], n = NORMAL[counter.wall]
-  const back = -(counter.spec.d / 2 - spec.d / 2 - 0.03) // tucked towards the wall
+  const back = -(counter.spec.d / 2 - spec.d / 2 - COUNTER_EDGE)
   return { x: counter.x + u[0] * cu + n[0] * back, z: counter.z + u[1] * cu + n[1] * back, rotY: counter.rotY, wall: -1, t: 0, on: counter.id, cu }
+}
+
+export function onCounter(counter, spec, cu) {
+  const lim = Math.max(0, counter.spec.w / 2 - spec.w / 2 - COUNTER_EDGE)
+  cu = clamp(cu, -lim, lim)
+  const sink = sinkSpan(counter.spec)
+  if (sink) {
+    const lo = sink[0] - spec.w / 2 - SINK_MARGIN, hi = sink[1] + spec.w / 2 + SINK_MARGIN
+    if (cu > lo && cu < hi) {
+      const beside = [lo, hi].filter((v) => v >= -lim - 1e-9 && v <= lim + 1e-9)
+      if (!beside.length) return null
+      cu = beside.reduce((best, v) => (Math.abs(v - cu) < Math.abs(best - cu) ? v : best))
+    }
+  }
+  return counterPose(counter, spec, cu)
 }
 
 function counterAt(items, p) {
@@ -71,7 +89,6 @@ export function placeAt(room, spec, p, current, items = []) {
   return { x: clamp(p[0], hx, room.w - hx), z: clamp(p[1], hz, room.d - hz), rotY, wall: -1, t: 0 }
 }
 
-
 const isGround = (s) => s.y === 0 && s.mode !== 'ceiling'
 
 function footprint(it) {
@@ -85,6 +102,10 @@ function footprint(it) {
 }
 
 function clash(a, b) {
+  if (a.spec.mode === 'ceiling' || b.spec.mode === 'ceiling') {
+    if (a.spec.mode !== b.spec.mode) return false
+    return Math.abs(a.x - b.x) < (a.spec.w + b.spec.w) / 2 && Math.abs(a.z - b.z) < (a.spec.d + b.spec.d) / 2
+  }
   if (a.spec.mode === 'top' || b.spec.mode === 'top') { 
     return a.spec.mode === b.spec.mode && a.on === b.on && Math.abs(a.cu - b.cu) < (a.spec.w + b.spec.w) / 2 + 0.03
   }
@@ -100,7 +121,6 @@ function clash(a, b) {
 }
 
 export const isBlocked = (candidate, others) => others.some((o) => o !== candidate && clash(candidate, o))
-
 
 export function findSpot(room, spec, others) {
   const tryIt = (pos) => (pos && !isBlocked({ spec, ...pos }, others) ? pos : null)
@@ -120,20 +140,23 @@ export function findSpot(room, spec, others) {
     }
   }
   if (spec.mode === 'wall' || spec.mode === 'opening') return null
-  for (let x = 0.4; x < room.w; x += 0.3) for (let z = 0.4; z < room.d; z += 0.3) {
-    const hit = tryIt(placeAt(room, spec, [x, z]))
+  const spots = []
+  for (let x = 0.4; x < room.w; x += 0.3) for (let z = 0.4; z < room.d; z += 0.3) spots.push([x, z])
+  if (spec.mode === 'ceiling') spots.sort((a, b) => Math.hypot(a[0] - room.w / 2, a[1] - room.d / 2) - Math.hypot(b[0] - room.w / 2, b[1] - room.d / 2))
+  for (const p of spots) {
+    const hit = tryIt(placeAt(room, spec, p, undefined, others))
     if (hit) return hit
   }
   return null
 }
 
 
-export function wallPieces(room, items) {
+export function wallPieces(room, items, trimStart = []) {
   const out = []
   const add = (wall, t0, t1, y0, y1) => { if (t1 - t0 > 0.01 && y1 - y0 > 0.01) out.push({ wall, t0, t1, y0, y1 }) }
   for (let i = 0; i < 4; i++) {
     const ops = items.filter((o) => o.spec.mode === 'opening' && o.wall === i).sort((a, b) => a.t - b.t)
-    let t = -WALL_THICKNESS
+    let t = trimStart[i] ? 0 : -WALL_THICKNESS
     for (const o of ops) {
       const t0 = o.t - o.spec.w / 2, t1 = o.t + o.spec.w / 2
       add(i, t, t0, 0, room.h)
@@ -142,6 +165,62 @@ export function wallPieces(room, items) {
       t = t1
     }
     add(i, t, wallLength(room, i), 0, room.h)
+  }
+  return out
+}
+
+function wallAxis(room, wall) {
+  return wall % 2 === 0
+    ? { start: room.origin.x, length: room.dimension.w }
+    : { start: room.origin.z, length: room.dimension.d }
+}
+
+const toFlat = (room, wall, t) => { const a = wallAxis(room, wall); return wall >= 2 ? a.start + a.length - t : a.start + t }
+const fromFlat = (room, wall, g) => { const a = wallAxis(room, wall); return wall >= 2 ? a.start + a.length - g : g - a.start }
+
+export function sharedRange(room, other, wall) {
+  const a = wallAxis(room, wall), b = wallAxis(other, wall)
+  const lo = Math.max(a.start, b.start), hi = Math.min(a.start + a.length, b.start + b.length)
+  if (hi <= lo) return null
+  const t1 = fromFlat(room, wall, lo), t2 = fromFlat(room, wall, hi)
+  return { t0: Math.min(t1, t2), t1: Math.max(t1, t2) }
+}
+
+export const sameSpotOn = (room, wall, t, other, otherWall) => fromFlat(other, otherWall, toFlat(room, wall, t))
+
+
+const rectOf = (r) => ({ x: r.origin.x, z: r.origin.z, w: r.dimension.w, d: r.dimension.d })
+const tAlong = (r, wall, g) => [g - r.x, g - r.z, r.x + r.w - g, r.z + r.d - g][wall]
+const gAlong = (r, wall, t) => [r.x + t, r.z + t, r.x + r.w - t, r.z + r.d - t][wall]
+
+export function refitPlacements(oldR, newR, carry) {
+  const od = oldR.dimension, nd = newR.dimension, oo = oldR.origin, no = newR.origin
+  const out = (oldR.placements || []).map((p) => ({ ...p }))
+  const delta = new Map()
+  const margin = 0.3
+  for (const p of out) {
+    if (p.onPlacementId) continue
+    let nx, nz
+    if (p.wall >= 0) {
+      const n = NORMAL[p.wall], [px, pz] = wallPoint(od, p.wall, p.t)
+      const off = (p.x - px) * n[0] + (p.z - pz) * n[1]
+      const g = gAlong(rectOf(oldR), p.wall, p.t)
+      const nt = clamp(carry ? p.t : tAlong(rectOf(newR), p.wall, g), margin, Math.max(margin, wallLength(nd, p.wall) - margin))
+      const [qx, qz] = wallPoint(nd, p.wall, nt)
+      nx = qx + n[0] * off; nz = qz + n[1] * off; p.t = nt
+    } else {
+      const lx = carry ? p.x : p.x + oo.x - no.x, lz = carry ? p.z : p.z + oo.z - no.z
+      nx = clamp(lx, margin, Math.max(margin, nd.w - margin)); nz = clamp(lz, margin, Math.max(margin, nd.d - margin))
+    }
+    delta.set(String(p._id), { dx: nx - p.x, dz: nz - p.z })
+    p.x = nx; p.z = nz
+  }
+  for (const p of out) {
+    if (!p.onPlacementId) continue
+    const d = delta.get(String(p.onPlacementId)) || { dx: 0, dz: 0 }
+    const sx = carry ? 0 : oo.x - no.x, sz = carry ? 0 : oo.z - no.z
+    p.x = clamp(p.x + sx + d.dx, margin, Math.max(margin, nd.w - margin))
+    p.z = clamp(p.z + sz + d.dz, margin, Math.max(margin, nd.d - margin))
   }
   return out
 }
