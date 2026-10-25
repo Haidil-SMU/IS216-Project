@@ -13,6 +13,8 @@ const myinfo = require('./myinfo');
 const corppass = require('./corppass');
 const contractor = require('./contractor');
 const profile = require('./profile');
+const spatialRoutes = require('./spatialRoutes');
+const { loadLayouts } = require('./floorplan');
 
 const PORT = process.env.PORT || 8000;
 const SCENARIO_FILE = path.join(__dirname, 'gameScenarios.json');
@@ -48,7 +50,10 @@ function loadGameData() {
 
 
 const app = express();
-const dbReady = connectDb();
+const dbReady = connectDb().then(async (db) => {
+  await loadLayouts(db);
+  return db;
+});
 const isProduction = process.env.NODE_ENV === 'production';
 
 if (!process.env.SESSION_SECRET && isProduction) {
@@ -59,7 +64,7 @@ if (!process.env.SESSION_SECRET) {
 }
 if (isProduction) app.set('trust proxy', 1);
 
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 
 // Sessions are stored in MongoDB so users stay logged in across restarts.
 app.use(session({
@@ -352,6 +357,39 @@ app.get('/api/quotation-requests', async (req, res) => {
     });
   }
 });
+// ============================================================
+// GET - 3D FLOOR PLAN OF A QUOTATION REQUEST (contractor, read-only)
+// ============================================================
+
+app.get('/api/quotation-requests/:requestId/floorplan', auth.requireContractor, async (req, res) => {
+  try {
+    const db = getDb();
+    const profile = await contractor.findProfile(req);
+    if (!profile) return res.status(403).json({ error: 'Please set up your business profile first.' });
+    if (!ObjectId.isValid(req.params.requestId)) return res.status(400).json({ error: 'Invalid request ID' });
+
+    // Only requests that were sent to this contractor.
+    const request = await db.collection('quotationRequests').findOne({
+      _id: new ObjectId(req.params.requestId),
+      contractorId: profile._id
+    });
+    if (!request) return res.status(404).json({ error: 'Quotation request not found' });
+    if (!request.householdId) {
+      return res.status(404).json({ error: "The homeowner didn't attach a saved 3D layout to this request." });
+    }
+
+    // The household must belong to the homeowner who sent the request.
+    const plan = await spatialRoutes.floorplanOf(db, request.householdId, request.userId);
+    if (!plan) {
+      return res.status(404).json({ error: 'The 3D layout is no longer available.' });
+    }
+    res.json(plan);
+  } catch (error) {
+    console.error('Error loading quotation request floor plan:', error);
+    res.status(500).json({ error: 'Unable to load the 3D layout' });
+  }
+});
+
 // ============================================================
 // PUT - UPDATE PENDING QUOTATION REQUEST
 // ============================================================
@@ -1323,6 +1361,7 @@ app.get('/api/dev/simulator', auth.requireClient, async (req, res) => {
     }
 });
 
+
 // GET: return the catalogue plus this account's households and plans.
 app.get("/api/planner", auth.requireClient, async (req, res) => {
   const catalogue = readJson("appliances.json");
@@ -1330,12 +1369,33 @@ app.get("/api/planner", auth.requireClient, async (req, res) => {
     appliance.type = appliance.type || appliance.name;
     appliance.location = appliance.location || "Not specified";
   }
-  res.json({
-    appliances: catalogue.appliances,
-    flatTypes: readJson("hdb_rooms.json").flatTypes,
-    users: await getDb().collection("households").find(ownedBy(req), HIDDEN).toArray(),
-    plans: await getDb().collection("plans").find(ownedBy(req), HIDDEN).toArray(),
-  });
+  const db = getDb();
+
+  const flats = await db
+  .collection("flat_types")
+  .find()
+  .sort({ _id: 1 })
+  .toArray();
+
+  const flatTypes = flats.map((flat) => ({
+    id: flat._id,
+    name: flat.name,
+    bedrooms: flat.bedrooms,
+    rooms: (flat.roomTemplate?.rooms || []).map((room) => room.name),
+  }));
+
+    res.json({
+      appliances: catalogue.appliances,
+      flatTypes,
+      users: await db
+        .collection("households")
+        .find(ownedBy(req), HIDDEN)
+        .toArray(),
+      plans: await db
+        .collection("plans")
+        .find(ownedBy(req), HIDDEN)
+        .toArray(),
+    });
 });
 
 // POST: add this account's household. Each account has only one.
@@ -1347,9 +1407,11 @@ app.post("/api/users", auth.requireClient, async (req, res) => {
     return res.status(409).json({ error: "This account already has a household. Edit it instead." });
   }
   const user = householdBody(req, randomUUID());
-  await getDb()
+  const { insertedId } = await getDb()
     .collection("households")
     .insertOne({ ...user, ...ownedBy(req) });
+  // 3D Spatial opens this household (its rooms are made on the first visit).
+  req.session.householdId = String(insertedId);
   delete req.session.myinfoDraft;
   res.status(201).json(user);
 });
@@ -1360,14 +1422,31 @@ app.put("/api/users/:id", auth.requireClient, async (req, res) => {
     return res.status(400).json({ error: "Household name is required." });
   }
   const user = householdBody(req, req.params.id);
-  const result = await getDb()
-    .collection("households")
-    .replaceOne({ ...ownedBy(req), id: req.params.id }, { ...user, ...ownedBy(req) });
-  if (result.matchedCount === 0) {
+  const households = getDb().collection("households");
+  const mine = { ...ownedBy(req), id: req.params.id };
+  const before = await households.findOne(mine);
+  if (!before) {
     return res.status(404).json({ error: "Household not found." });
   }
+
+  // A different flat type means different rooms: add or delete them in the 3D floor plan first,
+  // so if that fails nothing has changed and the person can simply try again.
+  const flatChanged = user.flatTypeId && user.flatTypeId !== (before.flatTypeId || before.flatType);
+  let roomChanges;
+  if (flatChanged) {
+    try {
+      roomChanges = await spatialRoutes.syncRoomsToFlatType(getDb(), before._id, user.flatTypeId);
+    } catch (error) {
+      console.log("Could not update rooms:", error.message);
+      return res.status(500).json({
+        error: "Could not update the 3D floor plan for the new flat type, so nothing was changed. Please try again.",
+      });
+    }
+  }
+  await households.replaceOne(mine, { ...user, ...ownedBy(req) });
+  req.session.householdId = String(before._id);
   delete req.session.myinfoDraft;
-  res.json(user);
+  res.json(roomChanges ? { ...user, roomChanges } : user);
 });
 
 // POST: save a plan and the estimate calculated in EnergyPlanner.vue.
@@ -1408,6 +1487,9 @@ app.delete("/api/plans/:id", auth.requireClient, async (req, res) => {
   res.sendStatus(204);
 });
 
+// 3D Spatial: the floor plan, rooms and placements of the logged-in homeowner's household.
+app.use('/api/spatial', spatialRoutes);
+
 // One error handler for file or request errors across these routes.
 app.use((error, req, res, next) => {
   if (res.headersSent) return next(error);
@@ -1428,6 +1510,7 @@ dbReady
         app.listen(PORT, '127.0.0.1', () => {
             console.log(`Server running at http://127.0.0.1:${PORT}/`);
         });
+        loadLayouts(getDb())
     })
     .catch((error) => {
         console.error("MongoDB error:", error.message);

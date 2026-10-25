@@ -1,10 +1,8 @@
-Here’s the complete file. **Replace Price List** now hides the current list, scrolls to the upload area, and highlights it for four seconds. The button keeps its name instead of changing to “Hide Upload”.
-
-```vue
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import axios from 'axios'
 import { useAuthStore } from '@/stores/auth'
+import FloorPlan3D from '@/components/FloorPlan3D.vue'
 
 const API = '/api'
 const auth = useAuthStore()
@@ -49,9 +47,9 @@ const showPriceList = ref(false)
 const showUpload = ref(false)
 const priceListSearch = ref('')
 const uploadHighlighted = ref(false)
-let uploadHighlightTimer
 
 const temporaryMessage = ref('')
+let uploadHighlightTimer
 let messageTimer
 
 const profileFields = [
@@ -134,11 +132,9 @@ const visibleRequests = computed(() => {
       if (statusFilter.value === 'pending' && request.status !== 'pending') {
         return false
       }
-
       if (statusFilter.value === 'sent' && !isSent(request)) {
         return false
       }
-
       if (!query) return true
 
       const searchable = [
@@ -155,7 +151,6 @@ const visibleRequests = computed(() => {
       const first = requestedTimestamp(a)
       const second = requestedTimestamp(b)
 
-      // Requests without a valid date appear last in both orders.
       if (first === null && second === null) return 0
       if (first === null) return 1
       if (second === null) return -1
@@ -172,9 +167,7 @@ function resetFilters() {
   dateSort.value = 'newest'
 }
 
-// ============================================================
 // PRICE LIST DISPLAY
-// ============================================================
 
 const savedPriceListText = computed(() =>
   typeof latestPriceList.value?.extractedText === 'string'
@@ -210,10 +203,7 @@ const priceGroups = computed(() => {
 
     if (query && !searchable.includes(query)) continue
 
-    if (!groups.has(category)) {
-      groups.set(category, [])
-    }
-
+    if (!groups.has(category)) groups.set(category, [])
     groups.get(category).push(entry)
   }
 
@@ -228,18 +218,9 @@ const informationSections = computed(() => {
   if (!data) return []
 
   return [
-    {
-      title: 'Payment Terms',
-      items: data.paymentTerms || []
-    },
-    {
-      title: 'General Conditions',
-      items: data.generalConditions || []
-    },
-    {
-      title: 'Additional Notes',
-      items: data.additionalNotes || []
-    }
+    { title: 'Payment Terms', items: data.paymentTerms || [] },
+    { title: 'General Conditions', items: data.generalConditions || [] },
+    { title: 'Additional Notes', items: data.additionalNotes || [] }
   ].filter(section => section.items.length)
 })
 
@@ -262,20 +243,16 @@ function formatPriceEntry(entry) {
 function flatTypeLabel(value) {
   if (!value) return 'Not specified'
 
-  const labels = {
+  return {
     '2-room': '2-room HDB',
     '3-room': '3-room HDB',
     '4-room': '4-room HDB',
     '5-room': '5-room HDB',
     executive: 'Executive HDB'
-  }
-
-  return labels[value] || value
+  }[value] || value
 }
 
-// ============================================================
-// PROFILE
-// ============================================================
+// BUSINESS PROFILE
 
 const profileErrors = computed(() => {
   const form = profileForm.value
@@ -295,7 +272,6 @@ const profileErrors = computed(() => {
   }
 
   const description = form.description.trim()
-
   if (description.length < 20 || description.length > 500) {
     errors.description = 'Describe your company in 20 to 500 characters.'
   }
@@ -335,7 +311,6 @@ async function suggestFromRegister() {
       if (!profileForm.value.companyName) {
         profileForm.value.companyName = data.companyName
       }
-
       if (!profileForm.value.services.length) {
         profileForm.value.services = [...(data.services || [])]
       }
@@ -356,7 +331,6 @@ async function saveProfile() {
 
   profileTouched.value = true
   profileError.value = ''
-
   if (Object.keys(profileErrors.value).length) return
 
   savingProfile.value = true
@@ -369,7 +343,6 @@ async function saveProfile() {
     })
 
     const firstTime = needsSetup.value
-
     profile.value = data.profile
     auth.fetchMe(true)
     needsSetup.value = false
@@ -387,13 +360,10 @@ async function saveProfile() {
   }
 }
 
-// ============================================================
 // FORMATTERS
-// ============================================================
 
 function formatDate(date) {
   if (!date) return 'Not specified'
-
   const parsed = new Date(date)
 
   return Number.isNaN(parsed.getTime())
@@ -426,9 +396,7 @@ function statusLabel(status) {
   }[status] || status
 }
 
-// ============================================================
-// TABS / TEMPORARY MESSAGE
-// ============================================================
+// TABS AND NOTIFICATIONS
 
 function dismissMessage() {
   clearTimeout(messageTimer)
@@ -438,7 +406,6 @@ function dismissMessage() {
 function notify(message) {
   clearTimeout(messageTimer)
   temporaryMessage.value = message
-
   messageTimer = setTimeout(() => {
     temporaryMessage.value = ''
   }, 8000)
@@ -460,7 +427,6 @@ async function goToPriceListUpload(message) {
   clearUploadHighlight()
 
   if (message) notify(message)
-
   await nextTick()
 
   uploadHighlighted.value = true
@@ -506,9 +472,7 @@ function handleTabKey(event) {
   document.getElementById(`tab-${nextTab}`)?.focus()
 }
 
-// ============================================================
 // LOAD DATA
-// ============================================================
 
 async function loadLatestPriceList() {
   priceListLoading.value = true
@@ -516,9 +480,7 @@ async function loadLatestPriceList() {
   priceListError.value = ''
 
   try {
-    const { data } = await axios.get(
-      `${API}/contractor/price-list/latest`
-    )
+    const { data } = await axios.get(`${API}/contractor/price-list/latest`)
 
     if (
       !data ||
@@ -544,7 +506,6 @@ async function loadLatestPriceList() {
     return true
   } catch (error) {
     console.error('Saved price list request failed:', error)
-
     const status = error.response?.status
 
     priceListError.value =
@@ -599,7 +560,11 @@ async function loadData() {
       ...request,
       generating: false,
       aiDraft: null,
-      actionError: ''
+      actionError: '',
+      showLayout: false,
+      plan: null,
+      layoutLoading: false,
+      layoutError: ''
     }))
 
     if (!needsSetup.value && profile.value) {
@@ -626,9 +591,47 @@ function refreshDashboard() {
   loadData()
 }
 
-// ============================================================
+// TEAMMATE FEATURE: READ-ONLY CUSTOMER FLOOR PLAN
+
+async function toggleLayout(request) {
+  if (request.layoutLoading) return
+
+  if (request.showLayout) {
+    request.showLayout = false
+    return
+  }
+
+  requests.value.forEach(item => {
+    item.showLayout = false
+  })
+
+  request.layoutError = ''
+
+  if (!request.plan) {
+    request.layoutLoading = true
+
+    try {
+      const { data } = await axios.get(
+        `${API}/quotation-requests/${getId(request)}/floorplan`
+      )
+      request.plan = data
+    } catch (error) {
+      request.layoutError =
+        error.response?.data?.error || 'Unable to load the 3D layout.'
+      return
+    } finally {
+      request.layoutLoading = false
+    }
+  }
+
+  // Close other viewers again in case another layout finished loading.
+  requests.value.forEach(item => {
+    item.showLayout = false
+  })
+  request.showLayout = true
+}
+
 // PDF UPLOAD
-// ============================================================
 
 function selectPDF(event) {
   if (dashboardBusy.value) return
@@ -720,14 +723,10 @@ async function extractPDF() {
   }
 }
 
-// ============================================================
-// AI GENERATION
-// ============================================================
+// AI QUOTATION GENERATION
 
 async function generateAIQuotation(request) {
-  // Missing price lists do not disable the button.
   if (dashboardBusy.value || request.status !== 'pending') return
-
   request.actionError = ''
 
   if (pdfFile.value) {
@@ -740,7 +739,6 @@ async function generateAIQuotation(request) {
   request.generating = true
 
   try {
-    // Verify the saved list before generation.
     const loaded = await loadLatestPriceList()
 
     if (!loaded) {
@@ -763,13 +761,10 @@ async function generateAIQuotation(request) {
 
     request.aiDraft = null
 
-    const { data } = await axios.post(
-      `${API}/generate-quotation`,
-      {
-        requestId: getId(request),
-        contractorId: getCurrentContractorId()
-      }
-    )
+    const { data } = await axios.post(`${API}/generate-quotation`, {
+      requestId: getId(request),
+      contractorId: getCurrentContractorId()
+    })
 
     const draft = data.draft
 
@@ -782,9 +777,7 @@ async function generateAIQuotation(request) {
         service: String(item.service || ''),
         description: String(item.description || ''),
         quantity: Number(item.quantity) || 1,
-        unitPrice: item.unitPrice == null
-          ? null
-          : Number(item.unitPrice),
+        unitPrice: item.unitPrice == null ? null : Number(item.unitPrice),
         source: String(item.source || ''),
         needsReview: Boolean(item.needsReview)
       })),
@@ -804,9 +797,7 @@ async function generateAIQuotation(request) {
   }
 }
 
-// ============================================================
 // QUOTATION CALCULATIONS
-// ============================================================
 
 function getItemAmount(item) {
   if (
@@ -861,9 +852,7 @@ function removeQuotationItem(request, index) {
   request.aiDraft.items.splice(index, 1)
 }
 
-// ============================================================
-// SEND / REJECT
-// ============================================================
+// SEND OR REJECT
 
 async function submitQuotation(request) {
   if (
@@ -1003,20 +992,14 @@ onUnmounted(() => {
     </header>
 
     <div class="notification-region" aria-live="polite" aria-atomic="true">
-      <div
-        v-if="temporaryMessage"
-        class="temporary-message shadow"
-        role="status"
-      >
+      <div v-if="temporaryMessage" class="temporary-message shadow" role="status">
         <span>{{ temporaryMessage }}</span>
         <button
           type="button"
           class="message-close"
           aria-label="Dismiss notification"
           @click="dismissMessage"
-        >
-          ×
-        </button>
+        >×</button>
       </div>
     </div>
 
@@ -1083,10 +1066,7 @@ onUnmounted(() => {
                   :value="auth.user?.uen || profile?.uenNo"
                   readonly
                 />
-                <p class="small text-success mt-1 mb-0">
-                  ✓ Verified by Corppass
-                </p>
-
+                <p class="small text-success mt-1 mb-0">✓ Verified by Corppass</p>
                 <p v-if="needsSetup && uenLookup" class="small mt-2 mb-0">
                   <span v-if="uenLookup.loading">
                     Looking up your UEN in BCA's register…
@@ -1123,9 +1103,7 @@ onUnmounted(() => {
               </div>
 
               <fieldset class="mb-3">
-                <legend class="form-label fw-semibold fs-6">
-                  Renovation services
-                </legend>
+                <legend class="form-label fw-semibold fs-6">Renovation services</legend>
                 <div class="d-flex flex-wrap gap-2">
                   <template v-for="service in serviceOptions" :key="service">
                     <input
@@ -1138,9 +1116,7 @@ onUnmounted(() => {
                     <label
                       :for="'cp-service-' + service"
                       class="btn btn-sm btn-outline-success rounded-pill"
-                    >
-                      {{ service }}
-                    </label>
+                    >{{ service }}</label>
                   </template>
                 </div>
                 <p v-if="profileFieldError('services')" class="small text-danger mt-2">
@@ -1181,9 +1157,7 @@ onUnmounted(() => {
                   type="button"
                   class="btn btn-outline-secondary"
                   @click="editingProfile = false"
-                >
-                  Cancel
-                </button>
+                >Cancel</button>
               </div>
             </fieldset>
           </form>
@@ -1202,9 +1176,7 @@ onUnmounted(() => {
                   v-for="service in profileForm.services"
                   :key="service"
                   class="badge bg-success-subtle text-success-emphasis"
-                >
-                  {{ service }}
-                </span>
+                >{{ service }}</span>
               </div>
               <p class="preserve-lines">
                 {{ profileForm.description || 'Your company description will appear here.' }}
@@ -1248,8 +1220,7 @@ onUnmounted(() => {
           aria-controls="panel-requests"
           @click="activeTab = 'requests'"
         >
-          Quotation Requests
-          <span class="tab-count">{{ pendingCount }}</span>
+          Quotation Requests <span class="tab-count">{{ pendingCount }}</span>
         </button>
         <button
           id="tab-priceList"
@@ -1296,9 +1267,7 @@ onUnmounted(() => {
             </template>
             <template v-else-if="latestPriceList">
               <p class="fw-semibold mb-1">✓ Price list ready</p>
-              <p class="small mb-0 file-name">
-                {{ latestPriceList.originalFileName }}
-              </p>
+              <p class="small mb-0 file-name">{{ latestPriceList.originalFileName }}</p>
             </template>
             <template v-else>
               <p class="fw-semibold mb-1">No price list uploaded</p>
@@ -1309,9 +1278,7 @@ onUnmounted(() => {
             type="button"
             class="btn btn-sm btn-outline-success flex-shrink-0"
             @click="openPriceList"
-          >
-            Manage Price List
-          </button>
+          >Manage Price List</button>
         </div>
 
         <div class="row g-3 mb-4">
@@ -1342,12 +1309,10 @@ onUnmounted(() => {
             class="btn btn-outline-success"
             :disabled="dashboardBusy"
             @click="refreshDashboard"
-          >
-            Refresh
-          </button>
+          >Refresh</button>
         </div>
 
-        <!-- SEARCH / FILTER / SORT -->
+        <!-- SEARCH, FILTER AND SORT -->
         <div class="card border-0 shadow-sm rounded-4 mb-4">
           <div class="card-body p-3 p-md-4">
             <div class="row g-3 align-items-end">
@@ -1381,27 +1346,20 @@ onUnmounted(() => {
                   :class="{ active: statusFilter === 'all' }"
                   :aria-pressed="statusFilter === 'all'"
                   @click="statusFilter = 'all'"
-                >
-                  All <span>{{ myRequests.length }}</span>
-                </button>
+                >All <span>{{ myRequests.length }}</span></button>
                 <button
                   type="button"
                   :class="{ active: statusFilter === 'pending' }"
                   :aria-pressed="statusFilter === 'pending'"
                   @click="statusFilter = 'pending'"
-                >
-                  Pending <span>{{ pendingCount }}</span>
-                </button>
+                >Pending <span>{{ pendingCount }}</span></button>
                 <button
                   type="button"
                   :class="{ active: statusFilter === 'sent' }"
                   :aria-pressed="statusFilter === 'sent'"
                   @click="statusFilter = 'sent'"
-                >
-                  Sent <span>{{ sentCount }}</span>
-                </button>
+                >Sent <span>{{ sentCount }}</span></button>
               </div>
-
               <p class="small text-muted mb-0" aria-live="polite">
                 Showing {{ visibleRequests.length }} of {{ myRequests.length }}
               </p>
@@ -1428,9 +1386,7 @@ onUnmounted(() => {
             type="button"
             class="btn btn-outline-success align-self-center mt-3"
             @click="resetFilters"
-          >
-            Clear Filters
-          </button>
+          >Clear Filters</button>
         </div>
 
         <!-- REQUEST CARDS -->
@@ -1478,17 +1434,43 @@ onUnmounted(() => {
               </div>
             </div>
 
+            <!-- TEAMMATE'S READ-ONLY 3D LAYOUT VIEWER -->
             <div class="bg-light border rounded-3 p-3 mb-4">
               <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
                 <div>
                   <p class="fw-semibold mb-1">Customer's 3D Property Layout</p>
                   <p class="small text-muted mb-0">
-                    Layout viewing will be available soon.
+                    View the customer's room layout and appliance placements.
                   </p>
                 </div>
-                <button type="button" class="btn btn-sm btn-outline-success" disabled>
-                  View 3D Layout
+                <button
+                  type="button"
+                  class="btn btn-outline-success fw-semibold"
+                  :disabled="request.layoutLoading"
+                  :aria-expanded="request.showLayout"
+                  @click="toggleLayout(request)"
+                >
+                  {{
+                    request.layoutLoading
+                      ? 'Loading...'
+                      : request.showLayout
+                        ? 'Hide 3D Layout'
+                        : 'View 3D Layout'
+                  }}
                 </button>
+              </div>
+
+              <p v-if="request.layoutError" class="small text-danger mt-3 mb-0" role="alert">
+                {{ request.layoutError }}
+              </p>
+
+              <div v-if="request.showLayout && request.plan" class="layout-view mt-3">
+                <FloorPlan3D
+                  :rooms="request.plan.rooms"
+                  :footprint="request.plan.footprint"
+                  :overlays="{ sun: false, heat: false, air: false }"
+                  readonly
+                />
               </div>
             </div>
 
@@ -1498,14 +1480,13 @@ onUnmounted(() => {
                 v-for="service in request.services || []"
                 :key="service"
                 class="badge bg-success-subtle text-success-emphasis"
-              >
-                {{ service }}
-              </span>
+              >{{ service }}</span>
             </div>
 
             <p class="fw-semibold mb-1">Renovation Description</p>
             <p class="text-muted preserve-lines">{{ request.description }}</p>
 
+            <!-- PENDING REQUEST -->
             <div
               v-if="request.status === 'pending'"
               class="bg-light rounded-3 p-3 p-md-4 mt-4"
@@ -1562,9 +1543,7 @@ onUnmounted(() => {
                       type="button"
                       class="btn btn-sm btn-outline-danger"
                       @click="removeQuotationItem(request, index)"
-                    >
-                      Remove
-                    </button>
+                    >Remove</button>
                   </div>
 
                   <div class="row g-3">
@@ -1634,9 +1613,7 @@ onUnmounted(() => {
                   type="button"
                   class="btn btn-outline-success mb-4"
                   @click="addQuotationItem(request)"
-                >
-                  + Add Quotation Item
-                </button>
+                >+ Add Quotation Item</button>
 
                 <div class="bg-success-subtle rounded-3 p-3 mb-4">
                   <p class="text-muted mb-1">Draft Quotation Total</p>
@@ -1644,8 +1621,7 @@ onUnmounted(() => {
                     {{ formatMoney(getDraftTotal(request)) }}
                   </h4>
                   <p v-if="hasMissingPrices(request)" class="small text-warning-emphasis mt-2 mb-0">
-                    Some prices or quantities are missing or invalid.
-                    The total is incomplete.
+                    Some prices or quantities are missing or invalid. The total is incomplete.
                   </p>
                 </div>
 
@@ -1662,9 +1638,7 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="btn btn-success w-100 fw-semibold"
-                  :disabled="dashboardBusy ||
-                    hasMissingPrices(request) ||
-                    !request.aiDraft.items.length"
+                  :disabled="dashboardBusy || hasMissingPrices(request) || !request.aiDraft.items.length"
                   @click="submitQuotation(request)"
                 >
                   {{ savingId === getId(request) ? 'Submitting...' : 'Approve & Send Quotation' }}
@@ -1714,7 +1688,6 @@ onUnmounted(() => {
                   </p>
                 </div>
               </div>
-
               <p class="mb-0 preserve-lines">
                 <strong>Notes:</strong> {{ request.quotation.notes || 'None' }}
               </p>
@@ -1748,19 +1721,14 @@ onUnmounted(() => {
                 class="btn btn-sm btn-outline-danger"
                 :disabled="dashboardBusy"
                 @click="loadLatestPriceList"
-              >
-                {{ priceListLoading ? 'Loading...' : 'Retry Loading' }}
-              </button>
+              >{{ priceListLoading ? 'Loading...' : 'Retry Loading' }}</button>
             </div>
 
             <div v-if="priceListNotice" class="alert alert-success" role="status">
               {{ priceListNotice }}
             </div>
 
-            <div
-              v-if="priceListLoaded && latestPriceList"
-              class="saved-list-summary p-3 p-md-4"
-            >
+            <div v-if="priceListLoaded && latestPriceList" class="saved-list-summary p-3 p-md-4">
               <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
                 <div class="d-flex align-items-start gap-3 file-summary">
                   <span class="pdf-icon" aria-hidden="true">PDF</span>
@@ -1782,9 +1750,7 @@ onUnmounted(() => {
                     :aria-expanded="showPriceList"
                     aria-controls="saved-price-list-viewer"
                     @click="showPriceList = !showPriceList"
-                  >
-                    {{ showPriceList ? 'Hide Price List' : 'View Price List' }}
-                  </button>
+                  >{{ showPriceList ? 'Hide Price List' : 'View Price List' }}</button>
                   <button
                     type="button"
                     class="btn btn-outline-success"
@@ -1792,9 +1758,7 @@ onUnmounted(() => {
                     :aria-expanded="showUpload"
                     aria-controls="price-list-upload"
                     @click="replacePriceList"
-                  >
-                    Replace Price List
-                  </button>
+                  >Replace Price List</button>
                 </div>
               </div>
             </div>
@@ -1854,9 +1818,7 @@ onUnmounted(() => {
                               <span
                                 v-if="entry.price != null && entry.priceBasis === 'unspecified'"
                                 class="d-block small text-muted fw-normal"
-                              >
-                                Price basis not specified
-                              </span>
+                              >Price basis not specified</span>
                             </td>
                             <td>{{ entry.unit || 'Not specified' }}</td>
                           </tr>
@@ -1892,7 +1854,6 @@ onUnmounted(() => {
                   }}
                 </p>
 
-                <!-- Always retain general terms while searching prices -->
                 <div class="row g-3 mt-1">
                   <div
                     v-for="section in informationSections"
@@ -1994,9 +1955,7 @@ onUnmounted(() => {
                   class="btn btn-outline-secondary"
                   :disabled="dashboardBusy"
                   @click="cancelPDFSelection"
-                >
-                  Cancel
-                </button>
+                >Cancel</button>
               </div>
             </div>
 
@@ -2270,9 +2229,7 @@ onUnmounted(() => {
 }
 
 .upload-panel input[type="file"] {
-  transition:
-    border-color 0.3s ease,
-    box-shadow 0.3s ease;
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
 }
 
 #upload-heading:focus {
@@ -2337,6 +2294,12 @@ onUnmounted(() => {
   cursor: pointer;
 }
 
+.layout-view {
+  height: 420px;
+  border-radius: 0.75rem;
+  overflow: hidden;
+}
+
 fieldset {
   min-width: 0;
 }
@@ -2372,6 +2335,10 @@ fieldset {
   .notification-region {
     top: 80px;
     right: 16px;
+  }
+
+  .layout-view {
+    height: 340px;
   }
 }
 </style>
