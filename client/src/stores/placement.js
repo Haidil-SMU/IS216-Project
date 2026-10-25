@@ -150,7 +150,6 @@ export function findSpot(room, spec, others) {
   return null
 }
 
-
 export function wallPieces(room, items, trimStart = []) {
   const out = []
   const add = (wall, t0, t1, y0, y1) => { if (t1 - t0 > 0.01 && y1 - y0 > 0.01) out.push({ wall, t0, t1, y0, y1 }) }
@@ -187,7 +186,6 @@ export function sharedRange(room, other, wall) {
 }
 
 export const sameSpotOn = (room, wall, t, other, otherWall) => fromFlat(other, otherWall, toFlat(room, wall, t))
-
 
 const rectOf = (r) => ({ x: r.origin.x, z: r.origin.z, w: r.dimension.w, d: r.dimension.d })
 const tAlong = (r, wall, g) => [g - r.x, g - r.z, r.x + r.w - g, r.z + r.d - g][wall]

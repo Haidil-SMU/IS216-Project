@@ -76,7 +76,7 @@
               <div class="text-truncate me-2">
                 <div class="fw-bold text-truncate">{{ item.name }}</div>
                 <div class="text-muted fs-7">
-                  <span v-if="item.tick" class="badge bg-warning text-dark me-1">{{ item.tick.replace('_tick', '✔') }}</span>
+                  <span v-if="item.brand" class="me-1">{{ item.brand }}<span v-if="item.ticks" class="badge bg-warning text-dark ms-1">{{ item.ticks }}✔</span> {{ item.model }} ·</span>
                   <span>{{ rowOf(item.id) ? Math.round(rowOf(item.id).kwh) : item.kwh }} kWh/yr</span>
                 </div>
                 <div v-for="f in rowOf(item.id)?.factors || []" :key="f.key" class="fs-7 text-warning-emphasis">
@@ -108,7 +108,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import AppliancesList from '../components/AppliancesList.vue'
 import FloorPlan3D from '../components/FloorPlan3D.vue'
 import { resolveSpec } from '../stores/applianceModels.js'
-import { OPENING_KEYS, isBuild, isOpening, isCountertop, newPlacementDoc, tariff, typeOf } from '../stores/catalog.js'
+import { OPENING_KEYS, isBuild, isOpening, isCountertop, newPlacementDoc, tariff, typeOf, productOf, kwhOfPlacement, loadCatalogue } from '../stores/catalog.js'
 import { findSpot } from '../stores/placement.js'
 import { analyse } from '../stores/energy.js'
 import {
@@ -121,6 +121,7 @@ const needsHousehold = ref(false)
 
 onMounted(async () => {
   try {
+    await loadCatalogue()
     applyLoaded(await getCurrentHousehold())
   } catch (e) {
     needsHousehold.value = e.response?.data?.code === 'NO_HOUSEHOLD'
@@ -156,10 +157,7 @@ watch(selectedRoomId, (id) => {
   if (selectedItemId.value && !r?.placements.some((p) => String(p._id) === selectedItemId.value)) selectedItemId.value = null
 })
 
-const kwhOf = (p) => {
-  const t = typeOf(p.category, p.applianceTypeKey)
-  return t?.ticks?.[p.tick]?.kwhYear ?? t?.kwhYear ?? 0
-}
+const kwhOf = kwhOfPlacement
 const nameOf = (p) => typeOf(p.category, p.applianceTypeKey)?.name ?? p.applianceTypeKey
 
 const preview = ref(null)
@@ -176,7 +174,10 @@ const roomItems = computed(() => {
   if (!r) return []
   return r.placements
     .filter((p) => !isOpening(p))
-    .map((p) => ({ id: String(p._id), name: nameOf(p), tick: p.tick, kwh: kwhOf(p) }))
+    .map((p) => {
+      const product = productOf(p.category, p.applianceTypeKey, p.brand, p.model)
+      return { id: String(p._id), name: nameOf(p), brand: product?.brand ?? null, model: product?.model ?? null, ticks: product?.ticks ?? null, kwh: kwhOf(p) }
+    })
 })
 
 const analyses = computed(() => plan.value.rooms.map((r) => ({
@@ -408,7 +409,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 }
 
 .bottom-sidebar {
-  height: 260px;
+  height: 310px;
 }
 
 .min-h-0 {

@@ -1,7 +1,7 @@
 <template>
-  <div class="d-flex flex-column justify-content-between h-100 w-100 px-3 py-2 text-white overflow-hidden">
+  <div class="d-flex flex-column h-100 w-100 px-3 py-2 text-white overflow-hidden">
     <div class="d-flex align-items-center justify-content-between pb-1 border-bottom border-secondary flex-shrink-0">
-      <ul class="nav nav-pills gap-1 flex-nowrap overflow-x-auto">
+      <ul class="nav nav-pills gap-1 flex-nowrap overflow-x-auto pb-1">
         <li v-for="tab in tabs" :key="tab.id" class="nav-item">
           <button 
             class="nav-link nav-link-sm py-1 px-3 text-capitalize fw-semibold text-nowrap"
@@ -18,15 +18,15 @@
       </span>
     </div>
 
-    <div class="d-flex align-items-center flex-grow-1 min-h-0 py-1">
-      <div class="d-flex gap-2 overflow-x-auto align-items-stretch w-100 py-1">
+    <div class="flex-grow-1 min-h-0 pt-2">
+      <div class="card-row d-flex gap-2 overflow-x-auto overflow-y-hidden align-items-stretch w-100 h-100">
         <template v-for="group in visibleGroups" :key="group.name">
         <div class="group-label flex-shrink-0 text-uppercase fw-semibold text-white-50" :title="group.name">{{ group.name }}</div>
         <div
           v-for="item in group.items"
           :key="item.typeKey"
-          class="card bg-black text-white border-secondary p-2 text-center flex-shrink-0 shadow-sm d-flex flex-column justify-content-between"
-          style="min-width: 165px; max-width: 165px;"
+          class="card bg-black text-white border-secondary p-2 text-center flex-shrink-0 shadow-sm d-flex flex-column justify-content-between overflow-hidden"
+          style="width: 165px;"
         >
 
           <Appliance3D :type="item.typeKey" :category="item.categoryKey" />
@@ -37,19 +37,20 @@
 
           <template v-if="item.categoryKey !== 'build'">
 
-            <div class="d-flex justify-content-center gap-1 my-1" style="min-height: 20px;">
-              <template v-if="hasTicks(item.typeData)">
-                <button
-                  v-for="(tickData, tickKey) in item.typeData.ticks"
-                  :key="tickKey"
-                  class="btn btn-xs py-0 px-1 border-0"
-                  :class="selectedTicks[item.typeKey] === tickKey ? 'btn-warning text-dark fw-bold' : 'btn-outline-secondary text-white-50'"
-                  style="font-size: 0.65rem;"
-                  @click.stop="setTick(item.typeKey, tickKey)"
-                >
-                  {{ tickKey.replace('_tick', '✔').replace('standard', '✔') }}
-                </button>
-              </template>
+            <div class="my-1">
+              <select
+                class="form-select form-select-sm bg-dark text-white border-secondary py-0 px-1"
+                style="font-size: 0.7rem;"
+                :value="productOf(item).brand"
+                :aria-label="`Brand for ${item.typeData.name}`"
+                @click.stop
+                @change="setBrand(item.typeKey, $event.target.value)"
+              >
+                <option v-for="p in item.typeData.products" :key="p.brand" :value="p.brand">{{ brandLabel(p) }}</option>
+              </select>
+              <div class="text-white-50 text-truncate mt-1" style="font-size: 0.6rem;" :title="`${productOf(item).model} · ${productOf(item).spec}`">
+                {{ productOf(item).model }}<template v-if="productOf(item).spec"> · {{ productOf(item).spec }}</template>
+              </div>
             </div>
 
             <div class="lh-1 my-1">
@@ -59,6 +60,9 @@
               </div>
               <div class="text-success fw-semibold" style="font-size: 0.65rem;">
                 ~${{ Math.round(getKwhYear(item) * tariff) }}/yr
+              </div>
+              <div v-if="productOf(item).priceSgd != null" class="text-white-50" style="font-size: 0.65rem;">
+                S${{ productOf(item).priceSgd.toLocaleString() }}
               </div>
             </div>
           </template>
@@ -83,10 +87,10 @@ import { isBuild, catalogue, tariff } from '../stores/catalog.js'
 
 const emit = defineEmits(['tab-changed', 'add-appliance'])
 
-const tabs = Object.entries(catalogue.categories).map(([id, c]) => ({ id, label: c.name }))
+const tabs = computed(() => Object.entries(catalogue.categories).map(([id, c]) => ({ id, label: c.name })))
 
-const activeTab = ref(tabs.some((t) => t.id === 'kitchen') ? 'kitchen' : tabs[0].id)
-const selectedTicks = ref({})
+const activeTab = ref('kitchen')
+const selectedBrands = ref({})
 
 const visibleGroups = computed(() => {
   const groups = new Map()
@@ -99,43 +103,38 @@ const visibleGroups = computed(() => {
   return [...groups.values()]
 })
 
-const hasTicks = (typeData) => {
-  return typeData.ticks && Object.keys(typeData.ticks).length > 0
+const productOf = (item) => {
+  const list = item.typeData.products
+  return list?.find((p) => p.brand === selectedBrands.value[item.typeKey]) ?? list?.[0]
 }
 
-const getKwhYear = (item) => {
-  const ticksMap = item.typeData.ticks
-  if (ticksMap && Object.keys(ticksMap).length > 0) {
-    const availableTickKeys = Object.keys(ticksMap)
-    const currentTickKey = selectedTicks.value[item.typeKey] || availableTickKeys[0]
-    return ticksMap[currentTickKey]?.kwhYear || 0
-  }
-  return item.typeData.kwhYear || 0
+const brandLabel = (p) => (p.ticks ? `${p.brand} · ${p.ticks}✔` : p.brand)
+
+const setBrand = (typeKey, brand) => {
+  selectedBrands.value[typeKey] = brand
 }
 
-const setTick = (typeKey, tickKey) => {
-  selectedTicks.value[typeKey] = tickKey
-}
+const getKwhYear = (item) => (productOf(item) ? productOf(item).kwhYear : item.typeData.kwhYear || 0)
 
 const selectTab = (tabId) => {
   activeTab.value = tabId
-  const currentCategory = catalogue.categories[tabId] || catalogue.categories.kitchen
+  const currentCategory = catalogue.categories[tabId]
   emit('tab-changed', {
     tabId,
-    applianceName: currentCategory.name
+    applianceName: currentCategory?.name
   })
 }
 
 const handleAddAppliance = (item) => {
   const build = isBuild(item.categoryKey)
-  const tick = !build && hasTicks(item.typeData) ? (selectedTicks.value[item.typeKey] || Object.keys(item.typeData.ticks)[0]) : null
+  const product = build ? null : productOf(item)
   const kwhYear = build ? 0 : getKwhYear(item)
 
   emit('add-appliance', {
     applianceTypeKey: item.typeKey,
     category: item.categoryKey,
     name: item.typeData.name,
-    tick,
+    ...(product ? { brand: product.brand, model: product.model } : {}),
     kwhYear,
     annualCost: Math.round(kwhYear * tariff)
   })
@@ -198,6 +197,10 @@ const handleAddAppliance = (item) => {
 
 .min-h-0 {
   min-height: 0;
+}
+
+.card-row {
+  padding-bottom: 6px;
 }
 
 .fs-7 {

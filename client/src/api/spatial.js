@@ -6,6 +6,7 @@ const data = (response) => response.data
 const household = (id) => `${API_URL}/households/${id}`
 const room = (id) => `${API_URL}/rooms/${id}`
 
+export const getCatalogue = () => axios.get(`${API_URL}/catalogue`).then(data)
 export const getCurrentHousehold = () => axios.get(`${API_URL}/current`).then(data)
 export const getFloorplan = (householdId) => axios.get(`${household(householdId)}/floorplan`).then(data)
 export const restoreLayout = (householdId, rooms) => axios.put(`${household(householdId)}/layout`, { rooms }).then(data)

@@ -147,7 +147,6 @@ function cornerDistance(room, a) {
   return Math.min(...[[0, 0], [room.w, 0], [0, room.d], [room.w, room.d]].map(([cx, cz]) => Math.hypot(a.x - cx, a.z - cz)))
 }
 
-
 export function factors(room, others, a, { ownOnly = false } = {}) {
   const kind = a.spec.kind, p = [a.x, a.z], f = {}
   if (!MOVABLE.includes(kind)) return f
@@ -256,7 +255,7 @@ export function analyse(room, items, tariff) {
       }
     }
     const avoidFraction = sumOf(avoidable)
-    const knockSaved = best ? Math.max(0, now.knock - best.knock) : 0 
+    const knockSaved = best ? Math.max(0, now.knock - best.knock) : 0
     const avoidKwh = a.kwh * avoidFraction + knockSaved
 
     rows.push({

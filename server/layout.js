@@ -297,7 +297,6 @@ function moveOpening(rooms, roomId, placementId, wall, t) {
   }
   if (!slotIsFree(room, wall, tc, width, p._id)) throw new LayoutError('There is already a door or window there');
 
-  // A door on an outside wall is a front door, whatever it was before.
   if (isDoor(p) && p.connectsTo !== 'outside') p.connectsTo = 'outside';
   repositionOpening(room, p, wall, tc);
   return work;
@@ -313,7 +312,7 @@ function addOpening(rooms, roomId, applianceTypeKey, wall = null, t = null) {
   if ([0, 1, 2, 3].includes(wall) && Number.isFinite(t)) spots.push([wall, t]);
   for (const w of [0, 1, 2, 3].sort((a, b) => wallLen(R, b) - wallLen(R, a)))
     for (let i = 0; i <= wallLen(R, w) / 0.3; i++) {
-      const pos = wallLen(R, w) / 2 + Math.ceil(i / 2) * 0.3 * (i % 2 ? -1 : 1); // middle first, then outwards
+      const pos = wallLen(R, w) / 2 + Math.ceil(i / 2) * 0.3 * (i % 2 ? -1 : 1);
       if (pos > 0 && pos < wallLen(R, w)) spots.push([w, pos]);
     }
 
