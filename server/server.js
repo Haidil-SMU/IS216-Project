@@ -9,7 +9,6 @@ const { ObjectId } = require('mongodb');
 const { connectDb, getClient, getDb, DB_NAME } = require('./db');
 const auth = require('./auth');
 const Planner = require('./energyplanner-model');
-const Appliances = require('./appliance-model');
 const singpass = require('./singpass');
 const myinfo = require('./myinfo');
 const corppass = require('./corppass');
@@ -870,19 +869,19 @@ async function duplicatePlanName(req, exceptId = '') {
   return false;
 }
 
-// GET: return the catalogue plus this account's households and plans.
-app.get("/api/planner", auth.requireClient, async (req, res) => {
-  const catalogue = await Appliances.retrieveAppliances();
-  for (const appliance of catalogue) {
-    appliance.type = appliance.type || appliance.name;
-    appliance.location = appliance.location || "Not specified";
-  }
+// GET: read this account's existing households and saved energy plans.
+app.get('/api/planner', auth.requireClient, async (req, res) => {
   res.json({
-    appliances: catalogue,
-    flatTypes: readJson("hdb_rooms.json").flatTypes,
     users: await Planner.retrieveHouseholds(req.session.userId),
     plans: await Planner.retrievePlans(req.session.userId),
   });
+});
+
+// Resolve saved 3D placements only for a household owned by this account.
+app.get('/api/planner/households/:id/rooms', auth.requireClient, async (req, res) => {
+  const household = await Planner.findHousehold(req.session.userId, req.params.id);
+  if (!household) return res.status(404).json({ error: 'Household not found.' });
+  res.json({ rooms: await Planner.retrieveRooms(household) });
 });
 
 // POST: add this account's household. Each account has only one.
@@ -922,9 +921,6 @@ app.post("/api/plans", auth.requireClient, async (req, res) => {
   const household = await Planner.findHousehold(req.session.userId, req.body.householdId);
   if (!household) {
     return res.status(404).json({ error: "Household not found." });
-  }
-  if (!Array.isArray(household.appliances) || household.appliances.length === 0) {
-    return res.status(400).json({ error: "Save the household's appliances before creating a plan." });
   }
   if (await duplicatePlanName(req)) {
     return res.status(409).json({ error: "A plan with this name already exists in this household. Choose a different name." });

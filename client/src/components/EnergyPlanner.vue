@@ -5,11 +5,9 @@ import axios from 'axios'
 import Chart from 'chart.js/auto'
 
 const API_URL = '/api'
-const households = ref([])
+const household = ref(null)
 const plans = ref([])
-const householdId = ref('')
-const activePanel = ref('dashboard')
-const dashboardHouseholdId = ref('')
+const householdId = computed(() => household.value?.id || '')
 const editingPlan = ref(false)
 const editor = ref(null)
 const compareIds = ref([])
@@ -36,13 +34,6 @@ const comparison = computed(() => {
 })
 const totals = computed(() => estimate(plan.value))
 
-const dashboardPlans = computed(() => {
-  const result = []
-  for (const saved of plans.value) {
-    if (saved.householdId === dashboardHouseholdId.value) result.push(saved)
-  }
-  return result
-})
 // Each plan gets a 30px bar plus space for its label and a gap; reserve room for the y-axis.
 const barChartWidth = computed(() => Math.max(200, 100 + comparison.value.length * 70) + 'px')
 const energyBars = ref(null)
@@ -113,7 +104,7 @@ function destroyCharts() {
 }
 function renderCharts() {
   destroyCharts()
-  if (activePanel.value !== 'planner' || !comparison.value.length) return
+  if (!comparison.value.length) return
   const definitions = [
     [energyBars.value, 'kwh', false],
     [costBars.value, 'cost', false],
@@ -160,13 +151,12 @@ function renderCharts() {
     )
   }
 }
-watch([comparison, activePanel, householdId, loading], renderCharts, {
+watch([comparison, householdId, loading], renderCharts, {
   deep: true,
   flush: 'post',
 })
 onBeforeUnmount(destroyCharts)
 async function showEditor() {
-  activePanel.value = 'planner'
   await nextTick()
   editor.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
@@ -175,7 +165,8 @@ function money(value) {
 }
 async function getData() {
   const response = await axios.get(API_URL + '/planner')
-  households.value = response.data.users
+  household.value = response.data.users[0] || null
+  profile.value = household.value ? { ...household.value } : {}
   plans.value = response.data.plans
 }
 async function load() {
@@ -226,9 +217,7 @@ async function startPlan() {
         })
       }
     }
-    for (const household of households.value) {
-      if (household.id === householdId.value) profile.value = { ...household }
-    }
+    profile.value = { ...household.value }
     plan.value = { id: '', name: 'Everyday plan', days: 30, tariff: 0.32, items }
     editingPlan.value = true
     await showEditor()
@@ -245,8 +234,6 @@ function checkInputs(section) {
   return true
 }
 
-// POST creates a household; PUT updates the selected household.
-// The calling save function handles request errors.
 // POST /plans creates a new plan. PUT /plans/:id updates an existing plan.
 async function savePlan(copy = false) {
   if (!plan.value.items.length) {
@@ -302,7 +289,6 @@ async function savePlan(copy = false) {
     compareIds.value = []
     await getData()
     editingPlan.value = false
-    dashboardHouseholdId.value = householdId.value
     window.alert('Your plan has been saved.')
   } catch (err) {
     console.log(err.message)
@@ -329,18 +315,8 @@ async function deletePlan(saved) {
   busy.value = false
 }
 
-function changeHousehold(event) {
-  householdId.value = event.target.value
-  editingPlan.value = false
-  compareIds.value = []
-  profile.value = {}
-  for (const household of households.value) {
-    if (household.id === householdId.value) profile.value = { ...household }
-  }
-}
 function loadPlan(saved) {
-  householdId.value = saved.householdId
-  dashboardHouseholdId.value = saved.householdId
+  if (saved.householdId !== householdId.value) return
   editingPlan.value = true
   compareIds.value = []
   plan.value = JSON.parse(JSON.stringify(saved))
@@ -411,113 +387,20 @@ function estimate(currentPlan) {
           Use your household’s saved rooms to estimate energy use and compare electricity plans.
         </p>
       </header>
-      <nav class="d-flex justify-content-center gap-2 mb-4" aria-label="Energy planner sections">
-        <button
-          class="btn rounded-pill px-4"
-          :class="activePanel === 'dashboard' ? 'btn-success' : 'btn-light'"
-          :aria-pressed="activePanel === 'dashboard'"
-          @click="activePanel = 'dashboard'"
-        >
-          My dashboard
-        </button>
-        <button
-          class="btn rounded-pill px-4"
-          :class="activePanel === 'planner' ? 'btn-success' : 'btn-light'"
-          :aria-pressed="activePanel === 'planner'"
-          @click="activePanel = 'planner'"
-        >
-          Plan my energy
-        </button>
-      </nav>
       <div v-if="!loading && loadFailed" class="mb-3">
         <p>The planner could not load.</p>
         <button class="btn btn-outline-secondary" :disabled="busy" @click="load">Retry</button>
       </div>
       <p v-if="loading" role="status">Loading your planner…</p>
       <template v-else-if="!loadFailed">
-        <section v-if="activePanel === 'dashboard'" aria-labelledby="dashboard-title">
-          <h2 id="dashboard-title" class="h3 fw-bold mb-3">Your household’s saved plans</h2>
-          <div class="dashboard-selector mb-4">
-            <label for="dashboard-household" class="form-label fw-bold"
-              >Select your household</label
-            >
-            <select id="dashboard-household" v-model="dashboardHouseholdId" class="form-select">
-              <option value="" disabled>Choose a household</option>
-              <option v-for="household in households" :key="household.id" :value="household.id">
-                {{ household.name }}
-              </option>
-            </select>
-          </div>
-          <template v-if="dashboardHouseholdId && dashboardPlans.length">
-            <div class="row g-4">
-              <div
-                v-for="(saved, index) in dashboardPlans"
-                :key="saved.id"
-                class="col-md-6 col-xl-4"
-              >
-                <article class="saved-plan-card">
-                  <div class="saved-photo">
-                    <img
-                      :src="
-                        index % 2 === 0
-                          ? 'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=850&q=85'
-                          : 'https://images.unsplash.com/photo-1600607687920-4e2a09cf159d?auto=format&fit=crop&w=850&q=85'
-                      "
-                      alt=""
-                      loading="lazy"
-                    />
-                    <span class="saved-photo-tag"
-                      >{{ saved.profile.flatType }} · {{ saved.profile.occupants }} occupants</span
-                    >
-                  </div>
-                  <div class="p-4 d-flex flex-column flex-grow-1">
-                    <span class="small text-success fw-bold mb-2">{{ saved.profile.name }}</span>
-                    <h3 class="h4 fw-bold">{{ saved.name }}</h3>
-                    <div class="d-flex flex-wrap gap-3 my-3">
-                      <span
-                        ><strong>{{ saved.estimate.kwh.toFixed(1) }}</strong> kWh/month</span
-                      ><strong class="text-success">{{ money(saved.estimate.cost) }}/month</strong>
-                    </div>
-                    <p class="small text-secondary">
-                      {{ saved.items.length }} appliance entries · {{ saved.days }} days
-                    </p>
-                    <button
-                      class="saved-open mt-auto"
-                      :aria-label="'Open saved plan ' + saved.name"
-                      @click="loadPlan(saved)"
-                    >
-                      View plan <span>↗</span>
-                    </button>
-                  </div>
-                </article>
-              </div>
-            </div>
-          </template>
-          <p v-else-if="dashboardHouseholdId" class="empty-dashboard p-4">
-            No plans saved for this household yet. Open “Plan my energy” to create one.
-          </p>
-          <p v-else-if="!households.length" class="empty-dashboard p-4">
-            No households are linked to your account yet. Save a household and its rooms before
-            using the planner.
-          </p>
-        </section>
-        <div v-show="activePanel === 'planner'" ref="editor" class="planner-editor">
+        <p v-if="!household" class="empty-dashboard p-4">
+          No household is linked to your account yet. Save your household in
+          <RouterLink to="/MyProfile">My Profile</RouterLink> and its rooms before using the
+          planner.
+        </p>
+        <div v-else class="planner-editor">
           <fieldset ref="plannerForm" :disabled="busy">
             <legend class="visually-hidden">Energy planner</legend>
-            <div class="dashboard-selector mb-4">
-              <label for="household" class="form-label fw-bold">Select your household</label>
-              <select
-                id="household"
-                class="form-select"
-                :value="householdId"
-                @change="changeHousehold"
-              >
-                <option value="" disabled>Choose a household</option>
-                <option v-for="household in households" :key="household.id" :value="household.id">
-                  {{ household.name }}
-                </option>
-              </select>
-            </div>
             <template v-if="householdId">
               <section
                 class="card border-0 shadow-sm mb-4"
@@ -528,11 +411,11 @@ function estimate(currentPlan) {
                     <div>
                       <span class="planner-eyebrow">YOUR HOUSEHOLD</span>
                       <h2 id="household-summary-title" class="h4 fw-bold mt-2">
-                        {{ profile.name }}
+                        {{ household.name }}
                       </h2>
                       <p class="text-secondary mb-0">
-                        {{ profile.flatType }} · {{ profile.occupants }} occupants · Electricity
-                        budget: {{ money(profile.budget) }}/month
+                        {{ household.flatType }} · {{ household.occupants }} occupants · Electricity
+                        budget: {{ money(household.budget) }}/month
                       </p>
                     </div>
                   </div>
@@ -546,7 +429,12 @@ function estimate(currentPlan) {
                   + Add plan
                 </button>
               </div>
-              <section v-if="editingPlan" class="mb-4" aria-labelledby="plan-title">
+              <section
+                v-if="editingPlan"
+                ref="editor"
+                class="mb-4 planner-editor"
+                aria-labelledby="plan-title"
+              >
                 <div class="card border-0 shadow-sm mb-4">
                   <div class="card-body p-4">
                     <div class="d-flex flex-wrap justify-content-between gap-2 mb-3">

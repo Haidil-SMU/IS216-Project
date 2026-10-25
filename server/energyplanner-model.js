@@ -13,7 +13,6 @@ const householdSchema = new mongoose.Schema({
   pattern: String,
   address: String,
   myinfo: Object,
-  appliances: { type: Array, default: [] },
 }, { versionKey: false });
 
 const planSchema = new mongoose.Schema({
@@ -32,6 +31,8 @@ const planSchema = new mongoose.Schema({
 
 const Household = mongoose.model('PlannerHousehold', householdSchema, 'households');
 const Plan = mongoose.model('EnergyPlan', planSchema, 'plans');
+const Room = mongoose.model('PlannerRoom', new mongoose.Schema({ householdId: mongoose.Schema.Types.Mixed }, { strict: false }), 'rooms');
+const CatalogueItem = mongoose.model('PlannerRoomCatalogue', new mongoose.Schema({ typeKey: String }, { strict: false }), 'catalogue_items');
 
 exports.connectDB = async function () {
   // Use the same database as login. db.js already manages collection indexes.
@@ -48,12 +49,47 @@ exports.connectDB = async function () {
 };
 
 // userId always comes from the server's login session, never from the form.
-exports.retrieveHouseholds = function (userId) {
-  return Household.find({ userId: userId }, { _id: 0, userId: 0 });
+exports.retrieveHouseholds = async function (userId) {
+  const households = await Household.find({ userId }, { userId: 0, appliances: 0 }).lean();
+  for (const household of households) {
+    household.id = household.id || String(household._id);
+    household.flatType = household.flatType || household.flatTypeId;
+    delete household._id;
+  }
+  return households;
 };
 
 exports.findHousehold = function (userId, id) {
-  return Household.findOne({ userId: userId, id: id });
+  const filter = { userId, id };
+  if (mongoose.isObjectIdOrHexString(id)) {
+    delete filter.id;
+    filter.$or = [{ id }, { _id: new mongoose.Types.ObjectId(id) }];
+  }
+  return Household.findOne(filter);
+};
+
+exports.retrieveRooms = async function (household) {
+  const links = [{ householdId: household._id }, { householdId: String(household._id) }];
+  if (household.id) links.push({ householdId: household.id });
+  const rooms = await Room.find({ $or: links }).lean();
+  const typeKeys = [];
+  for (const room of rooms) {
+    for (const placement of room.placements || []) {
+      if (typeof placement.applianceTypeKey === 'string' && !typeKeys.includes(placement.applianceTypeKey)) typeKeys.push(placement.applianceTypeKey);
+    }
+  }
+  const catalogue = await CatalogueItem.find({ typeKey: { $in: typeKeys } }, { _id: 0 }).lean();
+  for (const room of rooms) {
+    for (const placement of room.placements || []) {
+      for (const item of catalogue) {
+        if (item.typeKey === placement.applianceTypeKey) {
+          placement.energyInfo = { name: item.name, category: item.category, ticks: item.ticks, kwhYear: item.kwhYear };
+          break;
+        }
+      }
+    }
+  }
+  return rooms;
 };
 
 exports.addHousehold = function (household) {

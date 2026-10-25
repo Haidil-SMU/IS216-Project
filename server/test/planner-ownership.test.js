@@ -8,7 +8,6 @@ const { randomUUID } = require('node:crypto');
 const { ObjectId } = require('mongodb');
 const auth = require('../auth');
 const Planner = require('../energyplanner-model');
-const Appliances = require('../appliance-model');
 const mongoose = require('mongoose');
 
 const alice = new ObjectId().toString();
@@ -16,8 +15,10 @@ const bob = new ObjectId().toString();
 const profile = { name: 'Home', flatType: '4-room', bedrooms: 3, occupants: 4, budget: 150, pattern: 'Evenings', appliances: [{ type: 'Lights', room: 'Living Room', location: 'Desk', quantity: 1, hours: 6, daysPerWeek: 7, loadPercent: 100 }] };
 
 function setup() {
-  const records = { households: [], plans: [], appliances: [] };
+  const records = { households: [], plans: [], rooms: [], catalogue_items: [] };
   const matches = (document, filter) => Object.entries(filter).every(([key, value]) => {
+    if (key === '$or') return value.some(condition => matches(document, condition));
+    if (value?.$in) return value.$in.includes(document[key]);
     if (value instanceof ObjectId) return document[key] instanceof ObjectId && document[key].equals(value);
     return document[key] === value;
   });
@@ -25,13 +26,14 @@ function setup() {
     collection(name) {
       const list = records[name];
       return {
+        async countDocuments(filter) { return list.filter(record => matches(record, filter)).length; },
         async insertOne(document) { list.push(document); return { insertedId: new ObjectId() }; },
         async findOne(filter) { return list.find(record => matches(record, filter)) || null; },
         find(filter, options) {
           return { async toArray() {
             return list.filter(record => matches(record, filter)).map(record => {
               const copy = { ...record };
-              for (const key of Object.keys(options.projection)) delete copy[key];
+              for (const key of Object.keys(options.projection || {})) delete copy[key];
               return copy;
             });
           } };
@@ -52,7 +54,7 @@ function setup() {
     },
   };
   // Exercise the real Mongoose schemas and queries, replacing only database I/O.
-  for (const [modelName, collectionName] of [['PlannerHousehold', 'households'], ['EnergyPlan', 'plans'], ['PlannerAppliance', 'appliances']]) {
+  for (const [modelName, collectionName] of [['PlannerHousehold', 'households'], ['EnergyPlan', 'plans'], ['PlannerRoom', 'rooms'], ['PlannerRoomCatalogue', 'catalogue_items']]) {
     const collection = mongoose.model(modelName).collection;
     Object.assign(collection, db.collection(collectionName));
   }
@@ -66,7 +68,7 @@ function setup() {
   const end = source.indexOf('// One error handler', start);
   assert.ok(start >= 0 && end > start);
   vm.runInNewContext(source.slice(start, end), {
-    app, auth, Planner, Appliances, ObjectId, randomUUID, fs, path,
+    app, auth, Planner, getDb: () => db, ObjectId, randomUUID, fs, path,
     __dirname: path.join(__dirname, '..'),
   });
   async function request(method, url, account, body = {}, id) {
@@ -165,34 +167,31 @@ test('Mongoose validates numeric household fields before writing', async () => {
 test('plan names are unique per account and household, ignoring case and outer spaces', async () => {
   const { request } = setup();
   const home = (await request('post', '/api/users', alice, profile)).data;
-  const other = (await request('post', '/api/users', alice, profile)).data;
+  const other = (await request('post', '/api/users', bob, profile)).data;
   const first = (await request('post', '/api/plans', alice, plan(home.id))).data;
   assert.equal((await request('post', '/api/plans', alice, { ...plan(home.id), name: ' DAILY PLAN ' })).status, 409);
   assert.equal((await request('post', '/api/plans', alice, { ...plan(home.id), name: ' ' })).status, 400);
-  assert.equal((await request('post', '/api/plans', alice, plan(other.id))).status, 201);
+  assert.equal((await request('post', '/api/plans', bob, plan(other.id))).status, 201);
   assert.equal((await request('put', '/api/plans/:id', alice, plan(home.id), first.id)).status, 200);
   const second = (await request('post', '/api/plans', alice, { ...plan(home.id), name: 'Second' })).data;
   assert.equal((await request('put', '/api/plans/:id', alice, plan(home.id), second.id)).status, 409);
 });
 
 
-test('household appliance setup persists and is required before creating a plan', async () => {
-  const { request, records } = setup();
-  const empty = (await request('post', '/api/users', alice, { ...profile, appliances: [] })).data;
-  assert.equal((await request('post', '/api/plans', alice, plan(empty.id))).status, 400);
-  await request('put', '/api/users/:id', alice, profile, empty.id);
-  assert.deepEqual(records.households[0].appliances, profile.appliances);
-  assert.equal((await request('post', '/api/plans', alice, plan(empty.id))).status, 201);
+test('households do not need a manual appliance inventory to save plans', async () => {
+  const { request } = setup();
+  const home = (await request('post', '/api/users', alice, profile)).data;
+  assert.equal((await request('post', '/api/plans', alice, plan(home.id))).status, 201);
+  assert.equal((await request('post', '/api/users', alice, profile)).status, 409);
 });
-
- test('planner reads current model information from MongoDB appliances', async () => {
+test('room energy references are returned only to the household owner', async () => {
   const { request, records } = setup();
-  records.appliances.push({ id: 900, name: 'Database model', type: 'Lights', brand: 'Test brand', power: 0.008, purchasePrice: 25, defaultHours: 6, currency: 'SGD' });
-  let response = await request('get', '/api/planner', alice);
-  assert.equal(response.data.appliances.length, 1);
-  assert.equal(response.data.appliances[0].id, 900);
-  assert.equal(response.data.appliances[0].purchasePrice, 25);
-  records.appliances[0].power = 0.006;
-  response = await request('get', '/api/planner', alice);
-  assert.equal(response.data.appliances[0].power, 0.006);
+  const home = (await request('post', '/api/users', alice, profile)).data;
+  records.rooms.push({ householdId: records.households[0]._id, placements: [{ applianceTypeKey: 'led', tick: '3_tick' }] });
+  records.rooms.push({ householdId: new ObjectId(), placements: [] });
+  records.catalogue_items.push({ typeKey: 'led', name: 'LED', category: 'lights', ticks: { '3_tick': { kwhYear: 365 } } });
+  const result = await request('get', '/api/planner/households/:id/rooms', alice, {}, home.id);
+  assert.equal(result.data.rooms.length, 1);
+  assert.equal(result.data.rooms[0].placements[0].energyInfo.ticks['3_tick'].kwhYear, 365);
+  assert.equal((await request('get', '/api/planner/households/:id/rooms', bob, {}, home.id)).status, 404);
 });
