@@ -14,6 +14,7 @@ const corppass = require('./corppass');
 const contractor = require('./contractor');
 const profile = require('./profile');
 const spatialRoutes = require('./spatialRoutes');
+const { loadLayouts } = require('./floorplan');
 
 const PORT = process.env.PORT || 8000;
 const SCENARIO_FILE = path.join(__dirname, 'gameScenarios.json');
@@ -49,7 +50,10 @@ function loadGameData() {
 
 
 const app = express();
-const dbReady = connectDb();
+const dbReady = connectDb().then(async (db) => {
+  await loadLayouts(db);
+  return db;
+});
 const isProduction = process.env.NODE_ENV === 'production';
 
 if (!process.env.SESSION_SECRET && isProduction) {
@@ -858,6 +862,7 @@ app.get('/api/dev/simulator', auth.requireClient, async (req, res) => {
     }
 });
 
+
 // GET: return the catalogue plus this account's households and plans.
 app.get("/api/planner", auth.requireClient, async (req, res) => {
   const catalogue = readJson("appliances.json");
@@ -865,12 +870,33 @@ app.get("/api/planner", auth.requireClient, async (req, res) => {
     appliance.type = appliance.type || appliance.name;
     appliance.location = appliance.location || "Not specified";
   }
-  res.json({
-    appliances: catalogue.appliances,
-    flatTypes: readJson("hdb_rooms.json").flatTypes,
-    users: await getDb().collection("households").find(ownedBy(req), HIDDEN).toArray(),
-    plans: await getDb().collection("plans").find(ownedBy(req), HIDDEN).toArray(),
-  });
+  const db = getDb();
+
+  const flats = await db
+  .collection("flat_types")
+  .find()
+  .sort({ _id: 1 })
+  .toArray();
+
+  const flatTypes = flats.map((flat) => ({
+    id: flat._id,
+    name: flat.name,
+    bedrooms: flat.bedrooms,
+    rooms: (flat.roomTemplate?.rooms || []).map((room) => room.name),
+  }));
+
+    res.json({
+      appliances: catalogue.appliances,
+      flatTypes,
+      users: await db
+        .collection("households")
+        .find(ownedBy(req), HIDDEN)
+        .toArray(),
+      plans: await db
+        .collection("plans")
+        .find(ownedBy(req), HIDDEN)
+        .toArray(),
+    });
 });
 
 // POST: add this account's household. Each account has only one.
@@ -985,6 +1011,7 @@ dbReady
         app.listen(PORT, '127.0.0.1', () => {
             console.log(`Server running at http://127.0.0.1:${PORT}/`);
         });
+        loadLayouts(getDb())
     })
     .catch((error) => {
         console.error("MongoDB error:", error.message);
