@@ -301,6 +301,39 @@ app.get('/api/quotation-requests', async (req, res) => {
   }
 });
 // ============================================================
+// GET - 3D FLOOR PLAN OF A QUOTATION REQUEST (contractor, read-only)
+// ============================================================
+
+app.get('/api/quotation-requests/:requestId/floorplan', auth.requireContractor, async (req, res) => {
+  try {
+    const db = getDb();
+    const profile = await contractor.findProfile(req);
+    if (!profile) return res.status(403).json({ error: 'Please set up your business profile first.' });
+    if (!ObjectId.isValid(req.params.requestId)) return res.status(400).json({ error: 'Invalid request ID' });
+
+    // Only requests that were sent to this contractor.
+    const request = await db.collection('quotationRequests').findOne({
+      _id: new ObjectId(req.params.requestId),
+      contractorId: profile._id
+    });
+    if (!request) return res.status(404).json({ error: 'Quotation request not found' });
+    if (!request.householdId) {
+      return res.status(404).json({ error: "The homeowner didn't attach a saved 3D layout to this request." });
+    }
+
+    // The household must belong to the homeowner who sent the request.
+    const plan = await spatialRoutes.floorplanOf(db, request.householdId, request.userId);
+    if (!plan) {
+      return res.status(404).json({ error: 'The 3D layout is no longer available.' });
+    }
+    res.json(plan);
+  } catch (error) {
+    console.error('Error loading quotation request floor plan:', error);
+    res.status(500).json({ error: 'Unable to load the 3D layout' });
+  }
+});
+
+// ============================================================
 // PUT - UPDATE PENDING QUOTATION REQUEST
 // ============================================================
 

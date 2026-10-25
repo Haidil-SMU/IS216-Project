@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import axios from 'axios'
 import { useAuthStore } from '@/stores/auth'
+import FloorPlan3D from '@/components/FloorPlan3D.vue'
 
 const API = '/api'
 const auth = useAuthStore()
@@ -198,7 +199,11 @@ async function loadData() {
       pdfText: '',
       uploading: false,
       generating: false,
-      aiDraft: null
+      aiDraft: null,
+      showLayout: false,
+      plan: null,
+      layoutLoading: false,
+      layoutError: ''
     }))
 
 
@@ -515,6 +520,29 @@ async function rejectRequest(request) {
   } finally {
     savingId.value = ''
   }
+}
+
+async function toggleLayout(request) {
+  if (request.showLayout) {
+    request.showLayout = false
+    return
+  }
+  requests.value.forEach(r => { r.showLayout = false })
+
+  request.layoutError = ''
+  if (!request.plan) {
+    request.layoutLoading = true
+    try {
+      const { data } = await axios.get(`${API}/quotation-requests/${getId(request)}/floorplan`)
+      request.plan = data
+    } catch (error) {
+      request.layoutError = error.response?.data?.error || 'Unable to load the 3D layout.'
+      return
+    } finally {
+      request.layoutLoading = false
+    }
+  }
+  request.showLayout = true
 }
 
 onMounted(loadData)
@@ -885,9 +913,7 @@ onMounted(loadData)
              submitted household's 3D layout in read-only mode.
              Do not allow contractors to edit the customer's layout. -->
         <div class="border rounded-3 p-3 mb-3 bg-light">
-          <div
-            class="d-flex flex-wrap justify-content-between align-items-center gap-3"
-          >
+          <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
             <div>
               <p class="fw-semibold mb-1">Customer's 3D Property Layout</p>
               <p class="small text-muted mb-0">
@@ -898,16 +924,25 @@ onMounted(loadData)
             <button
               type="button"
               class="btn btn-outline-success fw-semibold"
-      
-              title="3D layout integration coming soon"
+              :disabled="request.layoutLoading"
+              @click="toggleLayout(request)"
             >
-              View 3D Layout
+              {{ request.layoutLoading ? 'Loading...' : request.showLayout ? 'Hide 3D Layout' : 'View 3D Layout' }}
             </button>
           </div>
 
-          <p class="small text-muted mt-2 mb-0">
-            3D layout viewing will be available soon.
+          <p v-if="request.layoutError" class="small text-danger mt-3 mb-0">
+            {{ request.layoutError }}
           </p>
+
+          <div v-if="request.showLayout && request.plan" class="layout-view mt-3">
+            <FloorPlan3D
+              :rooms="request.plan.rooms"
+              :footprint="request.plan.footprint"
+              :overlays="{ sun: false, heat: false, air: false }"
+              readonly
+            />
+          </div>
         </div>
 
         <!-- SERVICES -->
@@ -1321,5 +1356,11 @@ onMounted(loadData)
   max-height: 250px;
   overflow-y: auto;
   font-size: 13px;
+}
+
+.layout-view {
+  height: 420px;
+  border-radius: 0.75rem;
+  overflow: hidden;
 }
 </style>

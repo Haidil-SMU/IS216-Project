@@ -203,8 +203,6 @@ router.get('/households/:id/floorplan', async (req, res) => {
   res.json({ household: publicHousehold(household), ...answer(await loadRooms(db, id)) });
 });
 
-// Adds a door or window. The server finds where it fits, and a door on a wall two rooms share
-// joins them.
 router.post('/households/:id/openings', guard(async (req, res) => {
   const hid = oid(req.params.id), roomId = oid(req.body?.roomId), key = String(req.body?.applianceTypeKey ?? '');
   if (!hid || !roomId || !key) return bad(res, 'householdId, roomId and applianceTypeKey are required');
@@ -313,7 +311,22 @@ router.delete('/rooms/:roomId/placements/:pid', async (req, res) => {
   r.matchedCount ? res.sendStatus(204) : bad(res, 'Room not found', 404);
 });
 
+async function floorplanOf(db, ref, userId) {
+  const col = db.collection('households');
+  const text = String(ref ?? '');
+  const matches = [{ id: text }, { id: ref }];
+  if (oid(text)) matches.push({ _id: oid(text) });
+  let household = await col.findOne({ userId, $or: matches });
+  if (!household) {
+    const all = await col.find({ userId }).limit(2).toArray();
+    if (all.length === 1) household = all[0];
+  }
+  if (!household) return null;
+  return { household: publicHousehold(household), ...answer(await loadRooms(db, household._id)) };
+}
+
 module.exports = router;
+module.exports.floorplanOf = floorplanOf;
 module.exports.sanitizePlacements = sanitizePlacements;
 module.exports.resolveHousehold = resolveHousehold;
 module.exports.syncRoomsToFlatType = syncRoomsToFlatType;
