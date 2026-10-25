@@ -311,9 +311,7 @@ function travel(from, to) {
 const undo = () => travel(undoStack, redoStack)
 const redo = () => travel(redoStack, undoStack)
 
-
 const near = (a, b) => Math.abs(a - b) < 0.02
-
 function sharedWall(A, B) {
   const a = { x: A.origin.x, z: A.origin.z, w: A.dimension.w, d: A.dimension.d }
   const b = { x: B.origin.x, z: B.origin.z, w: B.dimension.w, d: B.dimension.d }
@@ -336,7 +334,7 @@ function sharedWall(A, B) {
 }
 const isConnected = (a, b) =>
   a.placements.some((p) => isOpening(p) && p.connectsTo === b.name) || (a.openWalls || []).some((o) => o.to === b.name)
-const DOOR_FIT = 1.1 // a door needs 0.9 m of wall plus a little either side
+const DOOR_FIT = 1.1
 const unconnectedNeighbours = (room) => plan.value.rooms.filter((o) => {
   if (o === room || isConnected(room, o)) return false
   const s = sharedWall(room, o)
@@ -549,7 +547,6 @@ onBeforeUnmount(() => {
 </script>
 
 <style>
-
 html.no-page-scroll,
 html.no-page-scroll body {
   overflow: hidden;
@@ -558,7 +555,7 @@ html.no-page-scroll body {
 </style>
 
 <style scoped>
-
+/* Same palette as the rest of EcoHome: green #168b59, ink #19352a, soft mint backgrounds. */
 .spatial-page {
   --eco: #168b59;
   --eco-dark: #116a42;
@@ -587,7 +584,7 @@ html.no-page-scroll body {
 
 .min-w-0 { min-width: 0; }
 
-
+/* Toolbar */
 .spatial-toolbar {
   flex: 0 0 auto;
   display: flex;

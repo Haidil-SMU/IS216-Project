@@ -6,7 +6,7 @@
       <button type="button" class="vbtn" title="Top-down floor plan" @click="setView('top')">Plan</button>
       <button type="button" class="vbtn" title="Front elevation" @click="setView('front')">Front</button>
     </div>
-    <div class="hint position-absolute top-0 start-50 translate-middle-x mt-2 px-3 py-1 rounded-pill text-center">
+    <div v-if="!readonly" class="hint position-absolute top-0 start-50 translate-middle-x mt-2 px-3 py-1 rounded-pill text-center">
       <template v-if="selectedItemId">Drag to move it (doors and windows slide along their wall) · R rotates floor items · Delete removes appliances</template>
       <template v-else-if="selectedId">Drag an item to move it · drag the room's edges or corners to resize · drag the room floor to move the room</template>
       <template v-else>Right-drag to orbit · left-drag to pan · scroll to zoom · click a room to select it, then drag items or edges</template>
@@ -28,6 +28,7 @@ const props = defineProps({
   footprint: { type: Object, default: null },
   selectedId: { type: String, default: null },
   selectedItemId: { type: String, default: null },
+  readonly: { type: Boolean, default: false },
   overlays: { type: Object, default: () => ({ sun: false, heat: true, air: true }) },
 })
 const emit = defineEmits(['select-room', 'select-item', 'edit-rect', 'move-items', 'move-opening', 'drag-preview', 'rotate-blocked', 'door-blocked'])
@@ -870,12 +871,14 @@ function init() {
   controls.maxDistance = 45
 
   const el = renderer.domElement
-  el.addEventListener('pointermove', onMove)
-  el.addEventListener('pointerdown', onDown)
-  el.addEventListener('pointerup', onUp)
-  el.addEventListener('pointerleave', () => { if (!bd) hoverHandle = null })
-  el.addEventListener('pointercancel', () => { bd = null; idrag = null; controls.enabled = true; emit('drag-preview', null); build() })
-  window.addEventListener('keydown', onKey)
+  if (!props.readonly) {
+    el.addEventListener('pointermove', onMove)
+    el.addEventListener('pointerdown', onDown)
+    el.addEventListener('pointerup', onUp)
+    el.addEventListener('pointerleave', () => { if (!bd) hoverHandle = null })
+    el.addEventListener('pointercancel', () => { bd = null; idrag = null; controls.enabled = true; emit('drag-preview', null); build() })
+    window.addEventListener('keydown', onKey)
+  }
 
   showGrid()
   build()
