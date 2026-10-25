@@ -177,7 +177,18 @@ const BLOCKS = [
   { x: 804, top: 118, w: 220, cols: 5, rows: 8, main: true, no: '130' },
   { x: 1046, top: 172, w: 130, cols: 3, rows: 7, stripe: 'right' },
 ]
-const blocks = BLOCKS.map((b) => ({ ...b, bottom: b.main ? GROUND - 40 : GROUND }))
+// Each block shows the side wall that faces the middle of the estate, so it reads as solid.
+function sideWall(b) {
+  const depth = b.main ? 22 : 12
+  return { x: b.x + b.w / 2 < 600 ? b.x + b.w : b.x - depth, w: depth }
+}
+const blocks = BLOCKS.map((b) => {
+  const bottom = b.main ? GROUND - 40 : GROUND
+  const y0 = b.top + (b.main ? 12 : 14)
+  // One floor slab per storey, just under each row of windows
+  const ledges = Array.from({ length: b.rows }, (_, f) => y0 + (f + 1) * 27 - 6).filter((y) => y < bottom - 3)
+  return { ...b, bottom, ledges, side: sideWall(b) }
+})
 
 function blockWindows(b) {
   const [dx, w, h] = b.main ? [36, 24, 13] : [38, 22, 12]
@@ -185,7 +196,7 @@ function blockWindows(b) {
   const y0 = b.top + (b.main ? 12 : 14)
   const cells = []
   for (let r = 0; r < b.rows; r++) {
-    for (let c = 0; c < b.cols; c++) cells.push({ x: x0 + c * dx, y: y0 + r * 27, w, h })
+    for (let c = 0; c < b.cols; c++) cells.push({ x: x0 + c * dx, y: y0 + r * 27, w, h, main: b.main })
   }
   return cells
 }
@@ -196,6 +207,7 @@ function seededRandom(seed) {
     return seed / 4294967296
   }
 }
+const LIT_TONES = ['#ffd27a', '#ffe2a6', '#fff0cf', '#ffc764', '#ffdba0']
 const windows = (() => {
   const cells = blocks.flatMap(blockWindows)
   // Fisher-Yates shuffle of the lighting order.
@@ -205,7 +217,16 @@ const windows = (() => {
     const j = Math.floor(random() * (i + 1))
     ;[order[i], order[j]] = [order[j], order[i]]
   }
-  return cells.map((cell, i) => ({ ...cell, rank: order.indexOf(i) }))
+  // Every home looks a little different: the colour of its lights, half-drawn
+  // blinds, and an air-con unit on the ledge.
+  const looks = seededRandom(13)
+  return cells.map((cell, i) => ({
+    ...cell,
+    rank: order.indexOf(i),
+    tone: LIT_TONES[Math.floor(looks() * LIT_TONES.length)],
+    blind: looks() < 0.3 ? Math.round(cell.h * (0.3 + looks() * 0.4)) : 0,
+    ac: cell.main && looks() < 0.4,
+  }))
 })()
 const stars = (() => {
   const random = seededRandom(42)
@@ -216,11 +237,23 @@ const stars = (() => {
     d: (random() * 4).toFixed(1),
   }))
 })()
+// Two layers of distant towers; the farther one fades into the haze.
+const SKYLINE_FAR = [
+  [-380, 196, 90], [-260, 168, 70], [-150, 204, 80], [-40, 180, 60], [430, 188, 50], [520, 160, 44],
+  [600, 196, 60], [700, 172, 48], [1120, 176, 70], [1230, 150, 60], [1340, 190, 90], [1460, 166, 70],
+]
 const SKYLINE = [
   [-420, 250, 160], [-240, 214, 120], [-100, 236, 110], [400, 262, 70], [480, 232, 60],
   [560, 250, 90], [670, 226, 70], [740, 258, 60], [1190, 232, 110], [1320, 206, 130], [1470, 248, 160],
 ]
-const TREES = [12, 164, 420, 452, 512, 548, 652, 688, 748, 786, 1036, 1190]
+const TREES = (() => {
+  const random = seededRandom(5)
+  return [12, 164, 420, 452, 512, 548, 652, 688, 748, 786, 1036, 1190].map((x) => ({
+    x,
+    s: (1.05 + random() * 0.45).toFixed(2),
+  }))
+})()
+const LAMPS = [96, 470, 736, 1112]
 
 const progress = computed(() => {
   const fields = isSignup.value ? ['name', 'email', 'password', 'confirm'] : ['email', 'password']
@@ -301,7 +334,9 @@ async function submit() {
     celebrate.value = true
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
     await new Promise((resolve) => setTimeout(resolve, reduceMotion ? 0 : 900))
-    router.replace(redirect.value || (isSignup.value ? '/EnergyPlanner/' : homeFor(user)))
+    // A new account sets up its household before anything else.
+    if (isSignup.value) router.replace({ path: '/MyProfile', query: { setup: 'household' } })
+    else router.replace(redirect.value || homeFor(user))
   } catch (err) {
     error.value = err.response?.data?.error || 'Something went wrong. Please try again.'
     busy.value = false
@@ -332,11 +367,16 @@ async function submit() {
         <span v-for="n in 3" :key="n" class="shooting-star"></span>
       </div>
       <div v-else class="clouds">
-        <svg v-for="n in 4" :key="n" class="cloud" viewBox="0 0 120 52">
-          <circle cx="36" cy="32" r="16" />
-          <circle cx="60" cy="24" r="22" />
-          <circle cx="86" cy="32" r="15" />
-          <rect x="20" y="30" width="82" height="18" rx="9" />
+        <svg v-for="n in 4" :key="n" class="cloud" viewBox="0 0 140 60">
+          <!-- the same puffs twice: a grey underside, then the sunlit tops -->
+          <g v-for="layer in ['cloud-shade', 'cloud-lit']" :key="layer" :class="layer">
+            <ellipse cx="30" cy="40" rx="20" ry="13" />
+            <ellipse cx="52" cy="30" rx="20" ry="18" />
+            <ellipse cx="76" cy="24" rx="22" ry="20" />
+            <ellipse cx="98" cy="33" rx="18" ry="15" />
+            <ellipse cx="116" cy="41" rx="14" ry="10" />
+            <ellipse cx="70" cy="44" rx="52" ry="10" />
+          </g>
         </svg>
       </div>
 
@@ -346,6 +386,35 @@ async function submit() {
             <stop offset="0" stop-color="var(--facade-top)" />
             <stop offset="1" stop-color="var(--facade-bottom)" />
           </linearGradient>
+          <!-- weathering: façades darken towards the ground -->
+          <linearGradient id="grime" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0.55" stop-color="#000" stop-opacity="0" />
+            <stop offset="1" stop-color="#000" stop-opacity="0.12" />
+          </linearGradient>
+          <linearGradient id="haze" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0.35" stop-color="var(--haze)" stop-opacity="0" />
+            <stop offset="1" stop-color="var(--haze)" stop-opacity="0.75" />
+          </linearGradient>
+          <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#fff" stop-opacity="0.55" />
+            <stop offset="0.45" stop-color="#fff" stop-opacity="0.08" />
+            <stop offset="0.5" stop-color="#fff" stop-opacity="0" />
+          </linearGradient>
+          <linearGradient id="grass" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="var(--ground)" />
+            <stop offset="1" stop-color="var(--ground-dark)" />
+          </linearGradient>
+          <radialGradient id="lamp-glow">
+            <stop offset="0" stop-color="#ffe9b0" stop-opacity="0.75" />
+            <stop offset="1" stop-color="#ffe9b0" stop-opacity="0" />
+          </radialGradient>
+          <pattern id="skyline-windows" width="7" height="9" patternUnits="userSpaceOnUse">
+            <rect x="2" y="3" width="3" height="4" />
+          </pattern>
+          <pattern id="solar-cells" width="6" height="6" patternUnits="userSpaceOnUse">
+            <rect width="6" height="6" />
+            <path d="M6 0V6M0 6H6" />
+          </pattern>
         </defs>
 
         <g class="stars">
@@ -360,49 +429,85 @@ async function submit() {
         </g>
 
         <!-- distant skyline, wider than the frame so it never ends at the edges -->
-        <g class="skyline">
-          <rect v-for="([x, y, w], i) in SKYLINE" :key="i" :x="x" :y="y" :width="w" :height="GROUND - y" />
+        <g class="skyline skyline-far">
+          <rect v-for="([x, y, w], i) in SKYLINE_FAR" :key="i" :x="x" :y="y" :width="w" :height="GROUND - y" />
         </g>
+        <rect class="haze" x="-1000" y="0" width="3200" :height="GROUND" fill="url(#haze)" />
+        <g class="skyline">
+          <template v-for="([x, y, w], i) in SKYLINE" :key="i">
+            <rect :x="x" :y="y" :width="w" :height="GROUND - y" />
+            <rect class="skyline-lights" :x="x + 3" :y="y + 4" :width="w - 6" :height="GROUND - y - 4" fill="url(#skyline-windows)" />
+          </template>
+        </g>
+        <rect class="haze" x="-1000" y="0" width="3200" :height="GROUND" fill="url(#haze)" opacity="0.5" />
 
         <g v-for="(b, i) in blocks" :key="i">
+          <!-- shadow cast on the grass -->
+          <ellipse class="ground-shadow" :cx="b.x + b.w / 2" :cy="GROUND + 2" :rx="b.w * 0.62" ry="5" />
+          <rect class="side-wall" :x="b.side.x" :y="b.top" :width="b.side.w" :height="b.bottom - b.top" />
+          <g class="ledges side-ledges">
+            <rect v-for="y in b.ledges" :key="y" :x="b.side.x" :y="y" :width="b.side.w" height="2" />
+          </g>
           <rect class="block" :class="{ 'block-far': !b.main }" :x="b.x" :y="b.top" :width="b.w" :height="b.bottom - b.top" />
           <template v-if="b.main">
-            <rect class="roof" :x="b.x - 6" :y="b.top - 8" :width="b.w + 12" height="10" rx="2" />
-            <rect class="tank" :x="b.x + b.w / 2 - 32" :y="b.top - 32" width="64" height="24" rx="2" />
-            <g class="solar">
-              <rect :x="b.x + 6" :y="b.top - 22" width="60" height="12" rx="1.5" />
-              <rect :x="b.x + b.w - 66" :y="b.top - 22" width="60" height="12" rx="1.5" />
-              <line v-for="o in [26, 46, b.w - 46, b.w - 26]" :key="o" :x1="b.x + o" :y1="b.top - 22" :x2="b.x + o" :y2="b.top - 10" />
+            <!-- roof: slab, lift motor room, solar panels on stands -->
+            <rect class="tank" :x="b.x + b.w / 2 - 30" :y="b.top - 30" width="60" height="24" />
+            <rect class="tank-cap" :x="b.x + b.w / 2 - 33" :y="b.top - 33" width="66" height="4" />
+            <rect class="tank-door" :x="b.x + b.w / 2 - 5" :y="b.top - 20" width="10" height="14" />
+            <g class="louvres">
+              <rect v-for="n in 3" :key="n" :x="b.x + b.w / 2 - 24" :y="b.top - 26 + n * 4" width="14" height="1.5" />
             </g>
+            <g class="solar">
+              <line v-for="o in [12, 60, b.w - 60, b.w - 12]" :key="'leg' + o" class="solar-leg" :x1="b.x + o" :y1="b.top - 12" :x2="b.x + o" :y2="b.top - 6" />
+              <rect :x="b.x + 6" :y="b.top - 22" width="60" height="11" />
+              <rect :x="b.x + b.w - 66" :y="b.top - 22" width="60" height="11" />
+            </g>
+            <rect class="roof" :x="b.x - 4" :y="b.top - 7" :width="b.w + 8" height="7" />
+            <rect class="roof-shadow" :x="b.x" :y="b.top" :width="b.w" height="3" />
             <rect class="stripe" :x="b.x" :y="b.top" width="14" :height="b.bottom - b.top" />
             <rect class="stripe" :x="b.x + b.w - 14" :y="b.top" width="14" :height="b.bottom - b.top" />
             <text class="blk-no" :x="b.x + 7" :y="b.top + 20" text-anchor="middle" :transform="`rotate(-90 ${b.x + 7} ${b.top + 20})`" dy="3">{{ b.no }}</text>
             <g class="ledges">
-              <rect v-for="f in b.rows" :key="f" :x="b.x + 14" :y="b.top + 6 + f * 27" :width="b.w - 28" height="2" />
+              <rect v-for="y in b.ledges" :key="y" :x="b.x + 14" :y="y" :width="b.w - 28" height="3" />
             </g>
-            <!-- void deck -->
+            <g class="ledge-shadows">
+              <rect v-for="y in b.ledges" :key="y" :x="b.x + 14" :y="y + 3" :width="b.w - 28" height="2" />
+            </g>
+            <!-- void deck: open ground floor, lit by fluorescent tubes at night -->
             <rect class="void-deck" :x="b.x" :y="b.bottom" :width="b.w" :height="GROUND - b.bottom" />
+            <rect class="void-ceiling" :x="b.x" :y="b.bottom" :width="b.w" height="5" />
+            <g class="void-lights">
+              <rect v-for="p in 4" :key="p" :x="b.x + 30 + (p - 1) * 49" :y="b.bottom + 6" width="18" height="2" rx="1" />
+            </g>
             <g class="pillars">
               <rect v-for="p in 5" :key="p" :x="b.x + 8 + (p - 1) * 49" :y="b.bottom" width="10" :height="GROUND - b.bottom" />
             </g>
           </template>
-          <rect v-else class="stripe" :x="b.stripe === 'left' ? b.x : b.x + b.w - 8" :y="b.top" width="8" :height="b.bottom - b.top" />
+          <template v-else>
+            <rect class="roof" :x="b.x - 3" :y="b.top - 5" :width="b.w + 6" height="5" />
+            <g class="ledges">
+              <rect v-for="y in b.ledges" :key="y" :x="b.x" :y="y" :width="b.w" height="2" />
+            </g>
+            <rect class="stripe" :x="b.stripe === 'left' ? b.x : b.x + b.w - 8" :y="b.top" width="8" :height="b.bottom - b.top" />
+          </template>
+          <rect class="grime" :x="Math.min(b.x, b.side.x)" :y="b.top" :width="b.w + b.side.w" :height="GROUND - b.top" fill="url(#grime)" />
         </g>
 
-        <!-- windows -->
+        <!-- windows: framed glass, some with blinds half down, AC units on the ledges -->
         <g class="windows">
-          <rect
+          <g
             v-for="(win, i) in windows"
             :key="i"
-            class="win"
             :class="{ lit: win.rank < litCount }"
-            :x="win.x"
-            :y="win.y"
-            :width="win.w"
-            :height="win.h"
-            rx="1.5"
-            :style="{ '--rank': win.rank }"
-          />
+            :style="{ '--rank': win.rank, '--lit': win.tone }"
+          >
+            <rect class="win" :x="win.x" :y="win.y" :width="win.w" :height="win.h" />
+            <rect v-if="win.blind" class="blind" :x="win.x" :y="win.y" :width="win.w" :height="win.blind" />
+            <rect class="sheen" :x="win.x" :y="win.y" :width="win.w" :height="win.h" fill="url(#sheen)" />
+            <line class="mullion" :x1="win.x + win.w / 2" :y1="win.y" :x2="win.x + win.w / 2" :y2="win.y + win.h" />
+            <rect class="sill" :x="win.x - 1" :y="win.y + win.h" :width="win.w + 2" height="1.5" />
+            <rect v-if="win.ac" class="ac" :x="win.x + win.w - 9" :y="win.y + win.h + 2" width="8" height="5" />
+          </g>
         </g>
 
         <!-- Contractor mode: scaffolding and a tower crane appear -->
@@ -439,14 +544,45 @@ async function submit() {
           </g>
         </g>
 
-        <!-- ground and trees -->
-        <rect class="ground" x="-1000" :y="GROUND" width="3200" height="400" />
-        <rect class="path" x="570" :y="GROUND" width="60" height="28" />
+        <!-- ground: grass verge, kerb and an estate road -->
+        <rect class="ground" x="-1000" :y="GROUND" width="3200" height="12" fill="url(#grass)" />
+        <rect class="kerb" x="-1000" :y="GROUND + 12" width="3200" height="2" />
+        <rect class="road" x="-1000" :y="GROUND + 14" width="3200" height="400" />
+        <line class="lane" x1="-1000" :y1="GROUND + 21" x2="2200" :y2="GROUND + 21" />
+
+        <!-- street lamps -->
+        <g class="lamps">
+          <g v-for="x in LAMPS" :key="x" :transform="`translate(${x} ${GROUND})`">
+            <circle class="lamp-glow" cx="7" cy="-44" r="22" fill="url(#lamp-glow)" />
+            <rect class="lamp-pole" x="-1" y="-46" width="2" height="46" />
+            <path class="lamp-arm" d="M0 -46q0 -3 4 -3h6" />
+            <rect class="lamp-head" x="4" y="-47" width="8" height="3" rx="1" />
+          </g>
+        </g>
+
+        <!-- rain trees: clustered canopies lit from above -->
         <g class="trees">
-          <g v-for="(x, i) in TREES" :key="i" :transform="`translate(${x} 0)`">
-            <rect class="trunk" x="-2.5" y="372" width="5" height="22" />
-            <ellipse class="leaf" cx="0" cy="366" rx="22" ry="14" />
-            <ellipse class="leaf leaf-light" cx="-6" cy="360" rx="11" ry="7" />
+          <g v-for="(t, i) in TREES" :key="i" :transform="`translate(${t.x} ${GROUND}) scale(${t.s})`">
+            <ellipse class="tree-shadow" cx="4" cy="1" rx="22" ry="3" />
+            <path class="trunk" d="M-2.5 0L-1.6 -17L1.6 -17L2.5 0Z" />
+            <path class="branch" d="M0 -15L-7 -25M0 -16L7 -27" />
+            <g class="leaf leaf-dark">
+              <circle cx="-13" cy="-27" r="10" />
+              <circle cx="13" cy="-27" r="10" />
+              <circle cx="0" cy="-30" r="13" />
+              <circle cx="-5" cy="-22" r="8" />
+              <circle cx="6" cy="-22" r="8" />
+            </g>
+            <g class="leaf">
+              <circle cx="-8" cy="-32" r="9" />
+              <circle cx="8" cy="-33" r="9" />
+              <circle cx="0" cy="-37" r="9" />
+            </g>
+            <g class="leaf leaf-light">
+              <circle cx="-9" cy="-36" r="5" />
+              <circle cx="-1" cy="-41" r="5" />
+              <circle cx="7" cy="-38" r="4" />
+            </g>
           </g>
         </g>
       </svg>
