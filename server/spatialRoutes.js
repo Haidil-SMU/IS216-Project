@@ -1,10 +1,15 @@
 const express = require('express');
 const { ObjectId } = require('mongodb');
 const { getDb } = require('./db');
+const { requireClient } = require('./auth');
 const { generateRooms, LAYOUTS } = require('./floorplan');
 const L = require('./layout');
+const { reconcileRooms } = require('./roomSync');
 
 const router = express.Router();
+
+// Every spatial route is for a logged-in homeowner, and only for their own flat.
+router.use(requireClient);
 
 const oid = (s) => (ObjectId.isValid(s) && String(new ObjectId(s)) === String(s) ? new ObjectId(s) : null);
 const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
@@ -15,6 +20,12 @@ const guard = (fn) => async (req, res, next) => {
   catch (e) { if (e instanceof L.LayoutError) return bad(res, e.message, 409); next(e); }
 };
 
+const CATEGORIES = new Set(['build', 'kitchen', 'cooling', 'entertainment', 'laundry', 'lighting', 'bathroom']);
+
+// A tick is the efficiency rating of an appliance. Builds (doors, windows, countertops) have none,
+// and appliances without a rating have none either, so no tick is stored in those cases.
+const cleanTick = (category, tick) => (category === 'build' || tick == null || tick === '' || tick === 'none' ? null : String(tick));
+
 function sanitizePlacements(list) {
   const idMap = new Map();
   const idFor = (raw) => {
@@ -23,21 +34,24 @@ function sanitizePlacements(list) {
     if (!idMap.has(key)) idMap.set(key, oid(key) || new ObjectId());
     return idMap.get(key);
   };
-  const out = list.map((p) => ({
-    _id: idFor(p._id ?? p.id) ?? new ObjectId(),
-    applianceTypeKey: String(p.applianceTypeKey ?? p.type ?? ''),
-    category: String(p.category ?? ''),
-    tick: p.tick == null ? null : String(p.tick),
-    x: finite(p.x), z: finite(p.z), rotY: finite(p.rotY),
-    wall: Math.max(-1, Math.min(3, Math.trunc(finite(p.wall, -1)))),
-    t: finite(p.t), cu: finite(p.cu),
-    onPlacementId: p.onPlacementId ?? p.on ?? null,
-    connectsTo: p.connectsTo ?? null,
-  }));
-  for (const p of out) {
-    p.onPlacementId = p.onPlacementId == null ? null : idMap.get(String(p.onPlacementId)) || null;
-    if (!p.applianceTypeKey || !p.category) throw Object.assign(new Error('Each placement needs applianceTypeKey and category'), { status: 400 });
-  }
+  const out = list.map((p) => {
+    const applianceTypeKey = String(p.applianceTypeKey ?? '').trim();
+    const category = String(p.category ?? '').trim();
+    if (!applianceTypeKey) throw Object.assign(new Error('Each placement needs an applianceTypeKey (e.g. "refrigerator_freezer_400l")'), { status: 400 });
+    if (!CATEGORIES.has(category)) throw Object.assign(new Error(`Unknown appliance category "${category}"`), { status: 400 });
+    const tick = cleanTick(category, p.tick);
+    return {
+      _id: idFor(p._id) ?? new ObjectId(),
+      applianceTypeKey, category,
+      ...(tick ? { tick } : {}),
+      x: finite(p.x), z: finite(p.z), rotY: finite(p.rotY),
+      wall: Math.max(-1, Math.min(3, Math.trunc(finite(p.wall, -1)))),
+      t: finite(p.t), cu: finite(p.cu),
+      onPlacementId: p.onPlacementId ?? null,
+      connectsTo: p.connectsTo ?? null,
+    };
+  });
+  for (const p of out) p.onPlacementId = p.onPlacementId == null ? null : idMap.get(String(p.onPlacementId)) || null;
   return out;
 }
 
@@ -70,39 +84,134 @@ async function insertRooms(db, householdId, flatTypeId) {
   const { rooms } = generateRooms(flatTypeId);
   const docs = rooms.map((r) => ({ ...r, householdId }));
   await db.collection('rooms').insertMany(docs);
-  return answer(docs);
+  return docs;
 }
 
-router.post('/households', async (req, res) => {
-  const { userId, flatTypeId, name } = req.body || {};
-  if (!userId || !name) return bad(res, 'userId and name are required');
-  if (!LAYOUTS[flatTypeId]) return bad(res, `flatTypeId must be one of ${Object.keys(LAYOUTS).join(', ')}`);
+// One job at a time per household, so two quick page loads cannot create the rooms twice and a
+// flat-type change cannot run in the middle of room generation.
+const locks = new Map();
+function withLock(key, job) {
+  const run = (locks.get(key) || Promise.resolve()).catch(() => {}).then(job);
+  const tail = run.catch(() => {});
+  locks.set(key, tail);
+  tail.then(() => { if (locks.get(key) === tail) locks.delete(key); });
+  return run;
+}
 
-  const db = await getDb();
-  const household = {
-    userId: String(userId), flatTypeId, name: String(name),
-    occupants: req.body.occupants != null ? Math.trunc(finite(req.body.occupants)) : null,
-    monthlyBudget: finite(req.body.monthlyBudget), tariff: finite(req.body.tariff),
-    usagePattern: req.body.usagePattern ?? null, updatedAt: new Date(),
-  };
-  const { insertedId } = await db.collection('households').insertOne(household);
+// Rooms are made the first time a household is opened in 3D Spatial (households come from
+// My Profile, which does not create rooms).
+function ensureRooms(db, household) {
+  return withLock(String(household._id), async () => {
+    if (await db.collection('rooms').countDocuments({ householdId: household._id })) return;
+    if (!LAYOUTS[household.flatTypeId]) {
+      throw new L.LayoutError(`No floor plan for flat type "${household.flatTypeId}". Choose a flat type in My Profile.`);
+    }
+    await insertRooms(db, household._id, household.flatTypeId);
+  });
+}
+
+// Called when the household's flat type changes: rooms that exist in both flat types are kept
+// (reset to the new standard layout, appliances carried over), rooms only in the old one are
+// deleted for good, and rooms only in the new one are added. Households that have never opened
+// 3D Spatial have no rooms yet, so there is nothing to change.
+function syncRoomsToFlatType(db, householdId, flatTypeId) {
+  return withLock(String(householdId), async () => {
+    if (!LAYOUTS[flatTypeId]) throw new L.LayoutError(`Unknown flat type "${flatTypeId}"`);
+    const old = await loadRooms(db, householdId);
+    if (!old.length) return { updated: false, added: [], removed: [], dropped: 0, adjusted: 0 };
+    const plan = reconcileRooms(old, flatTypeId, householdId);
+    L.validateLayout([...plan.keep, ...plan.add]);
+    // rooms has a unique index on (householdId, order). Kept rooms get new `order` values (e.g. going
+    // from 2-room to 4-room moves Bedroom 1 from order 0 to 2, which the Kitchen still holds), so
+    // writing them one by one collides. Delete first, park every kept room on a free negative order,
+    // then write the final documents, and insert new rooms last. The batch is ordered, so each step
+    // sees the result of the one before.
+    await db.collection('rooms').bulkWrite([
+      { deleteMany: { filter: { householdId, _id: { $in: plan.remove.map((r) => r._id) } } } },
+      ...plan.keep.map((r, i) => ({ updateOne: { filter: { _id: r._id }, update: { $set: { order: -(i + 1) } } } })),
+      ...plan.keep.map((r) => ({ replaceOne: { filter: { _id: r._id }, replacement: r } })),
+      ...plan.add.map((r) => ({ insertOne: { document: r } })),
+    ], { ordered: true });
+    return {
+      updated: true,
+      added: plan.add.map((r) => r.name), removed: plan.remove.map((r) => r.name),
+      dropped: plan.dropped, adjusted: plan.adjusted,
+    };
+  });
+}
+
+const userObjectId = (req) => new ObjectId(req.session.userId);
+const ownHousehold = (db, req, id) => db.collection('households').findOne({ _id: id, userId: userObjectId(req) });
+
+// The household 3D Spatial should show, taken from the session: the one remembered in
+// req.session.householdId, else (or if it is not theirs any more) their newest household.
+// `wanted` lets the page ask for a specific one. The result is stored back in the session.
+async function resolveHousehold(req, wanted = null) {
+  const db = getDb();
+  let household = null;
+  for (const id of [wanted, oid(req.session.householdId)]) {
+    if (id && !household) household = await ownHousehold(db, req, id);
+  }
+  household ??= await db.collection('households').findOne({ userId: userObjectId(req) }, { sort: { _id: -1 } });
+  req.session.householdId = household ? String(household._id) : undefined;
+  return household;
+}
+
+const publicHousehold = ({ userId, ...rest }) => rest;
+
+// Ownership checks for every route that has :id (household) or :roomId in its path.
+router.param('id', async (req, res, next, value) => {
   try {
-    const { footprint, rooms } = await insertRooms(db, insertedId, flatTypeId);
-    res.status(201).json({ household: { ...household, _id: insertedId }, footprint, rooms });
+    const id = oid(value);
+    if (!id) return bad(res, 'Invalid household id');
+    if (!(await ownHousehold(getDb(), req, id))) return bad(res, 'Household not found', 404);
+    next();
+  } catch (e) { next(e); }
+});
+router.param('roomId', async (req, res, next, value) => {
+  try {
+    const id = oid(value);
+    if (!id) return bad(res, 'Invalid room id');
+    const room = await getDb().collection('rooms').findOne({ _id: id }, { projection: { householdId: 1 } });
+    if (!room || !(await ownHousehold(getDb(), req, room.householdId))) return bad(res, 'Room not found', 404);
+    next();
+  } catch (e) { next(e); }
+});
+
+// GET: the logged-in user's household with its rooms (created on first visit if it has none).
+router.get('/current', async (req, res) => {
+  const db = getDb();
+  const household = await resolveHousehold(req, oid(req.query.household));
+  if (!household) {
+    return res.status(404).json({ code: 'NO_HOUSEHOLD', error: 'Set up your household in My Profile first, then come back here.' });
+  }
+  try {
+    await ensureRooms(db, household);
   } catch (e) {
-    await db.collection('households').deleteOne({ _id: insertedId });
+    if (e instanceof L.LayoutError) return bad(res, e.message, 409);
     throw e;
   }
+  res.json({ household: publicHousehold(household), ...answer(await loadRooms(db, household._id)) });
 });
 
 router.get('/households/:id/floorplan', async (req, res) => {
   const id = oid(req.params.id);
-  if (!id) return bad(res, 'Invalid household id');
-  const db = await getDb();
-  const household = await db.collection('households').findOne({ _id: id });
-  if (!household) return bad(res, 'Household not found', 404);
-  res.json({ household, ...answer(await loadRooms(db, id)) });
+  const db = getDb();
+  const household = await ownHousehold(db, req, id);
+  req.session.householdId = String(id);
+  res.json({ household: publicHousehold(household), ...answer(await loadRooms(db, id)) });
 });
+
+// Adds a door or window. The server finds where it fits, and a door on a wall two rooms share
+// joins them.
+router.post('/households/:id/openings', guard(async (req, res) => {
+  const hid = oid(req.params.id), roomId = oid(req.body?.roomId), key = String(req.body?.applianceTypeKey ?? '');
+  if (!hid || !roomId || !key) return bad(res, 'householdId, roomId and applianceTypeKey are required');
+  const db = await getDb();
+  const rooms = L.addOpening(await loadRooms(db, hid), roomId, key);
+  await saveRooms(db, rooms);
+  res.status(201).json(answer(rooms));
+}));
 
 router.put('/households/:id/openings/:pid', guard(async (req, res) => {
   const hid = oid(req.params.id), pid = oid(req.params.pid), roomId = oid(req.body?.roomId);
@@ -161,7 +270,8 @@ router.put('/rooms/:roomId/placements', async (req, res) => {
   const id = oid(req.params.roomId);
   if (!id) return bad(res, 'Invalid room id');
   if (!Array.isArray(req.body?.placements)) return bad(res, 'placements must be an array');
-  const placements = sanitizePlacements(req.body.placements);
+  let placements;
+  try { placements = sanitizePlacements(req.body.placements); } catch (e) { if (e.status === 400) return bad(res, e.message); throw e; }
   const { matchedCount } = await (await getDb()).collection('rooms').updateOne({ _id: id }, { $set: { placements } });
   matchedCount ? res.json({ placements }) : bad(res, 'Room not found', 404);
 });
@@ -169,7 +279,8 @@ router.put('/rooms/:roomId/placements', async (req, res) => {
 router.post('/rooms/:roomId/placements', async (req, res) => {
   const id = oid(req.params.roomId);
   if (!id) return bad(res, 'Invalid room id');
-  const [placement] = sanitizePlacements([{ ...req.body, _id: null }]);
+  let placement;
+  try { [placement] = sanitizePlacements([{ ...req.body, _id: null }]); } catch (e) { if (e.status === 400) return bad(res, e.message); throw e; }
   placement.onPlacementId = oid(req.body.onPlacementId);
   const { matchedCount } = await (await getDb()).collection('rooms').updateOne({ _id: id }, { $push: { placements: placement } });
   matchedCount ? res.status(201).json(placement) : bad(res, 'Room not found', 404);
@@ -181,7 +292,7 @@ router.put('/rooms/:roomId/placements/:pid', async (req, res) => {
   const b = req.body || {}, set = {};
   for (const k of ['x', 'z', 'rotY', 't', 'cu']) if (b[k] !== undefined) set[`placements.$[p].${k}`] = finite(b[k]);
   if (b.wall !== undefined) set['placements.$[p].wall'] = Math.max(-1, Math.min(3, Math.trunc(finite(b.wall, -1))));
-  if (b.tick !== undefined) set['placements.$[p].tick'] = b.tick == null ? null : String(b.tick);
+  if (b.tick !== undefined) set['placements.$[p].tick'] = cleanTick('', b.tick);
   if (!Object.keys(set).length) return bad(res, 'Nothing to update');
   const r = await (await getDb()).collection('rooms').updateOne({ _id: roomId }, { $set: set }, { arrayFilters: [{ 'p._id': pid }] });
   r.matchedCount ? res.json({ ok: true }) : bad(res, 'Room not found', 404);
@@ -199,3 +310,5 @@ router.delete('/rooms/:roomId/placements/:pid', async (req, res) => {
 
 module.exports = router;
 module.exports.sanitizePlacements = sanitizePlacements;
+module.exports.resolveHousehold = resolveHousehold;
+module.exports.syncRoomsToFlatType = syncRoomsToFlatType;

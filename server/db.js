@@ -101,8 +101,32 @@ async function connectDb() {
   await db.collection('quotationRequests').createIndex({ contractorId: 1, createdAt: -1 });
   await db.collection('quotationRequests').createIndex({ userId: 1 });
 
+  await tidyPlacementTicks(db);
+
   console.log('MongoDB connected successfully!');
   return db;
+}
+
+// Older placements stored tick: 'none' for appliances without a rating and a tick on doors, windows
+// and countertops. Neither means anything, so remove the field.
+async function tidyPlacementTicks(db) {
+  try {
+    const rooms = db.collection('rooms');
+    const builds = await rooms.updateMany(
+      { 'placements.category': 'build', 'placements.tick': { $exists: true } },
+      { $unset: { 'placements.$[p].tick': '' } },
+      { arrayFilters: [{ 'p.category': 'build', 'p.tick': { $exists: true } }] },
+    );
+    const empty = await rooms.updateMany(
+      { 'placements.tick': { $in: [null, '', 'none'] } },
+      { $unset: { 'placements.$[p].tick': '' } },
+      { arrayFilters: [{ 'p.tick': { $in: [null, '', 'none'] } }] },
+    );
+    const n = builds.modifiedCount + empty.modifiedCount;
+    if (n) console.log(`Removed meaningless placement ticks from ${n} rooms.`);
+  } catch (error) {
+    console.log('Could not tidy placement ticks:', error.message);
+  }
 }
 
 function getDb() {

@@ -1,4 +1,4 @@
-const { opening, wallPoint, NORMAL } = require('./floorplan');
+const { opening, wallPoint, NORMAL, isOpeningKey } = require('./floorplan');
 
 const EPS = 0.02;
 const MIN = { living: 3.0, kitchen: 1.8, bedroom: 2.4, bathroom: 1.2 };
@@ -65,8 +65,8 @@ function addLink(a, b, kind, g) {
   if (kind === 'door') {
     if (len < DOOR_W + 0.2) throw new LayoutError('The shared wall is too short for a door');
     const c = clamp(g ?? (s.lo + s.hi) / 2, s.lo + DOOR_W / 2 + 0.1, s.hi - DOOR_W / 2 - 0.1);
-    a.placements.push(opening(a.dimension, DOOR, '3_tick', s.wallA, tAlong(A, s.wallA, c), b.name));
-    b.placements.push(opening(b.dimension, DOOR, '3_tick', s.wallB, tAlong(B, s.wallB, c), a.name));
+    a.placements.push(opening(a.dimension, DOOR, s.wallA, tAlong(A, s.wallA, c), b.name));
+    b.placements.push(opening(b.dimension, DOOR, s.wallB, tAlong(B, s.wallB, c), a.name));
   } else if (kind === 'open') {
     if (len < 0.6) throw new LayoutError('The shared wall is too short to open up');
     const g0 = s.lo + 0.1, g1 = s.hi - 0.1;
@@ -133,7 +133,7 @@ function relink(rooms) {
       .map((p) => {
         if (!isOutside(p)) return p;
         const t = clamp(p.t, 0.6, Math.max(0.6, wallLen(R, p.wall) - 0.6));
-        return { ...opening(r.dimension, p.applianceTypeKey, p.tick, p.wall, t, p.connectsTo), _id: p._id };
+        return { ...opening(r.dimension, p.applianceTypeKey, p.wall, t, p.connectsTo), _id: p._id };
       });
   }
 
@@ -142,7 +142,7 @@ function relink(rooms) {
     const R = rect(r);
     for (const wall of [2, 1, 3, 0]) {
       if (wallLen(R, wall) < 1.6 || !rooms.every((o) => o === r || !touching(r, o) || touching(r, o).wallA !== wall)) continue;
-      r.placements.push(opening(r.dimension, DOOR, '3_tick', wall, wallLen(R, wall) * 0.33, 'outside'));
+      r.placements.push(opening(r.dimension, DOOR, wall, wallLen(R, wall) * 0.33, 'outside'));
       break;
     }
   }
@@ -209,7 +209,7 @@ function setRoomRect(rooms, id, rect) {
 }
 
 const widthOfPlacement = (p) => (/window/.test(p.applianceTypeKey) ? 1.2 : /glass/.test(p.applianceTypeKey) ? 1.6 : DOOR_W);
-const isOpeningPlacement = (p) => p.category === 'build' && p.wall >= 0 && /window|door/.test(p.applianceTypeKey);
+const isOpeningPlacement = (p) => p.category === 'build' && p.wall >= 0 && isOpeningKey(p.applianceTypeKey);
 
 const exteriorSpan = (room, wall, g0, g1, rooms) =>
   !rooms.some((o) => { if (o === room) return false; const s = touching(room, o); return s && s.wallA === wall && span(g0, g1, s.lo, s.hi) > EPS; });
@@ -224,8 +224,34 @@ function slotIsFree(room, wall, t, width, ignoreId) {
 }
 
 function repositionOpening(room, p, wall, t) {
-  const moved = { ...opening(room.dimension, p.applianceTypeKey, p.tick, wall, t, p.connectsTo), _id: p._id };
+  const moved = { ...opening(room.dimension, p.applianceTypeKey, wall, t, p.connectsTo), _id: p._id };
   room.placements = room.placements.map((q) => (q === p ? moved : q));
+}
+
+// The room that shares this stretch of wall (all of it, from g-half to g+half), if there is one.
+function neighbourAt(room, wall, g, half, rooms) {
+  for (const o of rooms) {
+    if (o === room) continue;
+    const s = touching(room, o);
+    if (s && s.wallA === wall && g > s.lo - EPS && g < s.hi + EPS) return { o, s };
+  }
+  return null;
+}
+
+// A door dropped on a wall that two rooms share becomes a doorway between them: this door in the
+// room, and its twin on the other side, both linked by name (that is what "has a door to another
+// room" means). Keeps the door's id. Throws when it cannot sit there.
+function joinRooms(work, room, p, o, g) {
+  const width = widthOfPlacement(p);
+  room.placements = room.placements.filter((q) => q !== p);
+  addLink(room, o, 'door', g);
+  const mine = room.placements[room.placements.length - 1];
+  const theirs = o.placements[o.placements.length - 1];
+  mine._id = p._id;
+  if (!slotIsFree({ ...room, placements: room.placements.filter((q) => q !== mine) }, mine.wall, mine.t, width, mine._id))
+    throw new LayoutError('There is already a door or window there');
+  if (!slotIsFree({ ...o, placements: o.placements.filter((q) => q !== theirs) }, theirs.wall, theirs.t, width, theirs._id))
+    throw new LayoutError('Something on the other side is in the way');
 }
 
 function moveOpening(rooms, roomId, placementId, wall, t) {
@@ -265,12 +291,50 @@ function moveOpening(rooms, roomId, placementId, wall, t) {
   if (len < 2 * margin) throw new LayoutError('That wall is too short');
   const tc = snap(clamp(t, margin, len - margin));
   const ga = gAlong(R, wall, tc - half), gb = gAlong(R, wall, tc + half);
-  if (!exteriorSpan(room, wall, Math.min(ga, gb), Math.max(ga, gb), work))
-    throw new LayoutError('That part of the wall faces another room - windows and front doors belong on an outside wall');
+  if (!exteriorSpan(room, wall, Math.min(ga, gb), Math.max(ga, gb), work)) {
+    // Not an outside wall. A window cannot go here, but a door joins the two rooms.
+    const next = isDoor(p) ? neighbourAt(room, wall, gAlong(R, wall, tc), half, work) : null;
+    if (!next) throw new LayoutError(isDoor(p)
+      ? 'That part of the wall faces another room, but the wall they share is too short for a door'
+      : 'That part of the wall faces another room - windows belong on an outside wall');
+    joinRooms(work, room, p, next.o, gAlong(R, wall, tc));
+    return work;
+  }
   if (!slotIsFree(room, wall, tc, width, p._id)) throw new LayoutError('There is already a door or window there');
 
+  // A door on an outside wall is a front door, whatever it was before.
+  if (isDoor(p) && p.connectsTo !== 'outside') p.connectsTo = 'outside';
   repositionOpening(room, p, wall, tc);
   return work;
+}
+
+// Adds a door or window to a room. Tries `wall`/`t` first when given, otherwise (or if that spot
+// does not work) the first place on any wall where it fits. A door that lands on a wall shared with
+// another room joins the two rooms.
+function addOpening(rooms, roomId, applianceTypeKey, wall = null, t = null) {
+  if (!isOpeningKey(applianceTypeKey)) throw new LayoutError('Only doors and windows can be added this way');
+  const room = rooms.find((r) => key(r) === String(roomId));
+  if (!room) throw new LayoutError('Room not found');
+  const R = rect(room);
+
+  const spots = [];
+  if ([0, 1, 2, 3].includes(wall) && Number.isFinite(t)) spots.push([wall, t]);
+  for (const w of [0, 1, 2, 3].sort((a, b) => wallLen(R, b) - wallLen(R, a)))
+    for (let i = 0; i <= wallLen(R, w) / 0.3; i++) {
+      const pos = wallLen(R, w) / 2 + Math.ceil(i / 2) * 0.3 * (i % 2 ? -1 : 1); // middle first, then outwards
+      if (pos > 0 && pos < wallLen(R, w)) spots.push([w, pos]);
+    }
+
+  let lastError = null;
+  for (const [w, at] of spots) {
+    const work = rooms.map(cloneRoom);
+    const target = work.find((r) => key(r) === String(roomId));
+    const made = opening(target.dimension, applianceTypeKey, w, at, null);
+    target.placements.push(made);
+    try { return moveOpening(work, roomId, made._id, w, at); }
+    catch (e) { if (!(e instanceof LayoutError)) throw e; lastError ||= e; }
+  }
+  throw lastError || new LayoutError(`There is no room on the ${room.name} walls for that`);
 }
 
 function removeOpening(rooms, roomId, placementId) {
@@ -306,4 +370,4 @@ function validateLayout(rooms) {
   return rooms;
 }
 
-module.exports = { LayoutError, footprintOf, warnings, setRoomRect, moveOpening, removeOpening, validateLayout };
+module.exports = { LayoutError, footprintOf, warnings, setRoomRect, moveOpening, addOpening, removeOpening, validateLayout };
