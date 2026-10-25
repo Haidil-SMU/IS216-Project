@@ -4,7 +4,7 @@ import SimulatorView from '../components/Simulator.vue';
 import EnergyPlannerView from '../components/EnergyPlanner.vue';
 import Contractors from '@/views/Contractors.vue';
 import MyProfile from '@/views/MyProfile.vue';
-import ThreeDSpatial from '@/views/ThreeDSpatial.vue';
+import ThreeDSpacial from '@/views/ThreeDSpacial.vue';
 import QuotationRequest from '@/views/QuotationRequest.vue';
 import ContractorDashboard from '@/views/ContractorDashboard.vue';
 import AuthView from '@/views/AuthView.vue';
@@ -46,7 +46,7 @@ const router = createRouter({
 
   {
     path: '/3d',
-    component: ThreeDSpatial,
+    component: ThreeDSpacial,
     meta: { requiresAuth: true, role: 'client', requiresHousehold: true }
   },
     {

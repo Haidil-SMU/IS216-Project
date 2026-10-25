@@ -1,5 +1,3 @@
-import { sinkSpan } from './applianceModels.js'
-
 export const WALL_THICKNESS = 0.1
 const GAP = 0.02
 const SNAP = 0.45 
@@ -38,31 +36,12 @@ export function onWall(room, spec, i, t) {
   return { x: px + n[0] * offset, z: pz + n[1] * offset, rotY: Math.atan2(n[0], n[1]), wall: i, t }
 }
 
-const COUNTER_EDGE = 0.03
-const SINK_MARGIN = 0.03
-
-// Where an item with sideways offset `cu` along the counter sits on it (no sink check).
-export function counterPose(counter, spec, cu) {
-  const u = TANGENT[counter.wall], n = NORMAL[counter.wall]
-  const back = -(counter.spec.d / 2 - spec.d / 2 - COUNTER_EDGE)
-  return { x: counter.x + u[0] * cu + n[0] * back, z: counter.z + u[1] * cu + n[1] * back, rotY: counter.rotY, wall: -1, t: 0, on: counter.id, cu }
-}
-
-// Puts an item on a counter as close to `cu` as it can go: inside the counter's ends, and never on
-// top of the sink. Returns null when there is no room for it on this counter.
 export function onCounter(counter, spec, cu) {
-  const lim = Math.max(0, counter.spec.w / 2 - spec.w / 2 - COUNTER_EDGE)
+  const lim = Math.max(0, counter.spec.w / 2 - spec.w / 2 - 0.03)
   cu = clamp(cu, -lim, lim)
-  const sink = sinkSpan(counter.spec)
-  if (sink) {
-    const lo = sink[0] - spec.w / 2 - SINK_MARGIN, hi = sink[1] + spec.w / 2 + SINK_MARGIN
-    if (cu > lo && cu < hi) {
-      const beside = [lo, hi].filter((v) => v >= -lim - 1e-9 && v <= lim + 1e-9)
-      if (!beside.length) return null
-      cu = beside.reduce((best, v) => (Math.abs(v - cu) < Math.abs(best - cu) ? v : best))
-    }
-  }
-  return counterPose(counter, spec, cu)
+  const u = TANGENT[counter.wall], n = NORMAL[counter.wall]
+  const back = -(counter.spec.d / 2 - spec.d / 2 - 0.03)
+  return { x: counter.x + u[0] * cu + n[0] * back, z: counter.z + u[1] * cu + n[1] * back, rotY: counter.rotY, wall: -1, t: 0, on: counter.id, cu }
 }
 
 function counterAt(items, p) {
@@ -153,15 +132,12 @@ export function findSpot(room, spec, others) {
   return null
 }
 
-// `trimStart[i]` drops the corner overlap a wall normally has at its start. A room's wall is built
-// just outside its floor and runs one wall-thickness past its start so the outside corners close;
-// where another room sits in that corner, the overlap would stick out into it, so it is left off.
-export function wallPieces(room, items, trimStart = []) {
+export function wallPieces(room, items) {
   const out = []
   const add = (wall, t0, t1, y0, y1) => { if (t1 - t0 > 0.01 && y1 - y0 > 0.01) out.push({ wall, t0, t1, y0, y1 }) }
   for (let i = 0; i < 4; i++) {
     const ops = items.filter((o) => o.spec.mode === 'opening' && o.wall === i).sort((a, b) => a.t - b.t)
-    let t = trimStart[i] ? 0 : -WALL_THICKNESS
+    let t = -WALL_THICKNESS
     for (const o of ops) {
       const t0 = o.t - o.spec.w / 2, t1 = o.t + o.spec.w / 2
       add(i, t, t0, 0, room.h)
@@ -192,43 +168,3 @@ export function sharedRange(room, other, wall) {
 }
 
 export const sameSpotOn = (room, wall, t, other, otherWall) => fromFlat(other, otherWall, toFlat(room, wall, t))
-
-// Client port of `refit()` in server/layout.js: where a room's placements end up when the room is
-// resized or moved from `oldR` to `newR` (both shaped { origin, dimension, placements }). `carry` is
-// true for a pure move, where items travel with the room; otherwise items keep their world position
-// (clamped inside the new room) and wall items keep their spot along the wall they were on.
-const rectOf = (r) => ({ x: r.origin.x, z: r.origin.z, w: r.dimension.w, d: r.dimension.d })
-const tAlong = (r, wall, g) => [g - r.x, g - r.z, r.x + r.w - g, r.z + r.d - g][wall]
-const gAlong = (r, wall, t) => [r.x + t, r.z + t, r.x + r.w - t, r.z + r.d - t][wall]
-
-export function refitPlacements(oldR, newR, carry) {
-  const od = oldR.dimension, nd = newR.dimension, oo = oldR.origin, no = newR.origin
-  const out = (oldR.placements || []).map((p) => ({ ...p }))
-  const delta = new Map()
-  const margin = 0.3
-  for (const p of out) {
-    if (p.onPlacementId) continue
-    let nx, nz
-    if (p.wall >= 0) {
-      const n = NORMAL[p.wall], [px, pz] = wallPoint(od, p.wall, p.t)
-      const off = (p.x - px) * n[0] + (p.z - pz) * n[1]
-      const g = gAlong(rectOf(oldR), p.wall, p.t)
-      const nt = clamp(carry ? p.t : tAlong(rectOf(newR), p.wall, g), margin, Math.max(margin, wallLength(nd, p.wall) - margin))
-      const [qx, qz] = wallPoint(nd, p.wall, nt)
-      nx = qx + n[0] * off; nz = qz + n[1] * off; p.t = nt
-    } else {
-      const lx = carry ? p.x : p.x + oo.x - no.x, lz = carry ? p.z : p.z + oo.z - no.z
-      nx = clamp(lx, margin, Math.max(margin, nd.w - margin)); nz = clamp(lz, margin, Math.max(margin, nd.d - margin))
-    }
-    delta.set(String(p._id), { dx: nx - p.x, dz: nz - p.z })
-    p.x = nx; p.z = nz
-  }
-  for (const p of out) {
-    if (!p.onPlacementId) continue
-    const d = delta.get(String(p.onPlacementId)) || { dx: 0, dz: 0 }
-    const sx = carry ? 0 : oo.x - no.x, sz = carry ? 0 : oo.z - no.z
-    p.x = clamp(p.x + sx + d.dx, margin, Math.max(margin, nd.w - margin))
-    p.z = clamp(p.z + sz + d.dz, margin, Math.max(margin, nd.d - margin))
-  }
-  return out
-}

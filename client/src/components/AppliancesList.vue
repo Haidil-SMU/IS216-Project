@@ -8,7 +8,7 @@
             :class="{ 'active bg-success text-white': activeTab === tab.id, 'text-light': activeTab !== tab.id }"
             @click="selectTab(tab.id)"
           >
-            {{ tab.label }}
+            {{ tab.icon }} {{ tab.label }}
           </button>
         </li>
       </ul>
@@ -20,10 +20,8 @@
 
     <div class="d-flex align-items-center flex-grow-1 min-h-0 py-1">
       <div class="d-flex gap-2 overflow-x-auto align-items-stretch w-100 py-1">
-        <template v-for="group in visibleGroups" :key="group.name">
-        <div class="group-label flex-shrink-0 text-uppercase fw-semibold text-white-50" :title="group.name">{{ group.name }}</div>
-        <div
-          v-for="item in group.items"
+        <div 
+          v-for="item in visibleApplianceTypes" 
           :key="item.typeKey"
           class="card bg-black text-white border-secondary p-2 text-center flex-shrink-0 shadow-sm d-flex flex-column justify-content-between"
           style="min-width: 165px; max-width: 165px;"
@@ -31,7 +29,7 @@
 
           <Appliance3D :type="item.typeKey" :category="item.categoryKey" />
 
-          <div class="fw-bold fs-7 text-light my-1 name-clamp" :title="item.typeData.name">
+          <div class="fw-bold fs-7 text-truncate text-light my-1" :title="item.typeData.name">
             {{ item.typeData.name }}
           </div>
 
@@ -58,7 +56,7 @@
                 <span class="text-white-50" style="font-size: 0.65rem;">kWh/yr</span>
               </div>
               <div class="text-success fw-semibold" style="font-size: 0.65rem;">
-                ~${{ Math.round(getKwhYear(item) * tariff) }}/yr
+                ~${{ Math.round(getKwhYear(item) * energyData.electricityTariff) }}/yr
               </div>
             </div>
           </template>
@@ -70,7 +68,6 @@
             + Add
           </button>
         </div>
-        </template>
       </div>
     </div>
   </div>
@@ -78,27 +75,38 @@
 
 <script setup>
 import { ref, computed } from 'vue'
+import energyData from '../data/energyData.json'
 import Appliance3D from './Appliance3D.vue'
-import { isBuild, catalogue, tariff } from '../stores/catalog.js'
 
 const emit = defineEmits(['tab-changed', 'add-appliance'])
 
-// One tab per catalogue category (build, kitchen, cooling...). Inside a tab, appliances are
-// grouped by their `group` (Refrigerators, Cooking, Fans...) so similar things sit together.
-const tabs = Object.entries(catalogue.categories).map(([id, c]) => ({ id, label: c.name }))
+const tabs = [
+  { id: 'build', label: 'Build'},
+  { id: 'kitchen', label: 'Kitchen'},
+  { id: 'living', label: 'Living'},
+  { id: 'television', label: 'TV'},
+  { id: 'laundry', label: 'Laundry'},
+  { id: 'lights', label: 'Lights'},
+  { id: 'fans', label: 'Fans'},
+  { id: 'bathroom', label: 'Bathroom'},
+  { id: 'home', label: 'Home & Office'}
+]
 
-const activeTab = ref(tabs.some((t) => t.id === 'kitchen') ? 'kitchen' : tabs[0].id)
+const activeTab = ref('kitchen')
 const selectedTicks = ref({})
 
-const visibleGroups = computed(() => {
-  const groups = new Map()
-  const category = catalogue.categories[activeTab.value]
-  for (const [typeKey, typeData] of Object.entries(category?.types ?? {})) {
-    const name = typeData.group || category.name
-    if (!groups.has(name)) groups.set(name, { name, items: [] })
-    groups.get(name).items.push({ categoryKey: activeTab.value, typeKey, typeData })
-  }
-  return [...groups.values()]
+const visibleApplianceTypes = computed(() => {
+  const result = []
+  Object.entries(energyData.categories).forEach(([categoryKey, categoryData]) => {
+    if (activeTab.value === 'all' || activeTab.value === categoryKey) {
+      if (categoryData.types) {
+        Object.entries(categoryData.types).forEach(([typeKey, typeData]) => {
+          result.push({ categoryKey, typeKey, typeData })
+        })
+      }
+    }
+  })
+  return result
 })
 
 const hasTicks = (typeData) => {
@@ -121,7 +129,7 @@ const setTick = (typeKey, tickKey) => {
 
 const selectTab = (tabId) => {
   activeTab.value = tabId
-  const currentCategory = catalogue.categories[tabId] || catalogue.categories.kitchen
+  const currentCategory = energyData.categories[tabId] || energyData.categories.kitchen
   emit('tab-changed', {
     tabId,
     applianceName: currentCategory.name
@@ -129,18 +137,20 @@ const selectTab = (tabId) => {
 }
 
 const handleAddAppliance = (item) => {
-  const build = isBuild(item.categoryKey)
-  // Builds (doors, windows, countertops) have no efficiency rating and use no electricity.
-  const tick = !build && hasTicks(item.typeData) ? (selectedTicks.value[item.typeKey] || Object.keys(item.typeData.ticks)[0]) : null
-  const kwhYear = build ? 0 : getKwhYear(item)
+  const isBuild = item.categoryKey === 'build'
+  const kwh = isBuild ? 0 : getKwhYear(item)
+  const ticksMap = item.typeData.ticks || {}
+  const activeTickKey = !isBuild && hasTicks(item.typeData) 
+    ? (selectedTicks.value[item.typeKey] || Object.keys(ticksMap)[0]) 
+    : 'none'
 
   emit('add-appliance', {
-    applianceTypeKey: item.typeKey,
     category: item.categoryKey,
+    type: item.typeKey,
     name: item.typeData.name,
-    tick,
-    kwhYear,
-    annualCost: Math.round(kwhYear * tariff)
+    tick: activeTickKey,
+    kwhYear: kwh,
+    annualCost: isBuild ? 0 : Math.round(kwh * energyData.electricityTariff)
   })
 }
 </script>
@@ -171,32 +181,6 @@ const handleAddAppliance = (item) => {
 .overflow-x-auto::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.2);
   border-radius: 4px;
-}
-
-.name-clamp {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  min-height: 2.4em;
-  line-height: 1.2;
-}
-
-.group-label {
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
-  font-size: 0.6rem;
-  letter-spacing: 0.08em;
-  max-height: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  align-self: stretch;
-  text-align: center;
-  padding: 2px 0;
-  border-right: 1px solid rgba(255, 255, 255, 0.2);
-  margin-left: 2px;
 }
 
 .min-h-0 {

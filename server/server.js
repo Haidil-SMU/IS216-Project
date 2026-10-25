@@ -13,7 +13,6 @@ const myinfo = require('./myinfo');
 const corppass = require('./corppass');
 const contractor = require('./contractor');
 const profile = require('./profile');
-const spatialRoutes = require('./spatialRoutes');
 
 const PORT = process.env.PORT || 8000;
 const SCENARIO_FILE = path.join(__dirname, 'gameScenarios.json');
@@ -882,11 +881,9 @@ app.post("/api/users", auth.requireClient, async (req, res) => {
     return res.status(409).json({ error: "This account already has a household. Edit it instead." });
   }
   const user = householdBody(req, randomUUID());
-  const { insertedId } = await getDb()
+  await getDb()
     .collection("households")
     .insertOne({ ...user, ...ownedBy(req) });
-  // 3D Spatial opens this household (its rooms are made on the first visit).
-  req.session.householdId = String(insertedId);
   delete req.session.myinfoDraft;
   res.status(201).json(user);
 });
@@ -897,31 +894,14 @@ app.put("/api/users/:id", auth.requireClient, async (req, res) => {
     return res.status(400).json({ error: "Household name is required." });
   }
   const user = householdBody(req, req.params.id);
-  const households = getDb().collection("households");
-  const mine = { ...ownedBy(req), id: req.params.id };
-  const before = await households.findOne(mine);
-  if (!before) {
+  const result = await getDb()
+    .collection("households")
+    .replaceOne({ ...ownedBy(req), id: req.params.id }, { ...user, ...ownedBy(req) });
+  if (result.matchedCount === 0) {
     return res.status(404).json({ error: "Household not found." });
   }
-
-  // A different flat type means different rooms: add or delete them in the 3D floor plan first,
-  // so if that fails nothing has changed and the person can simply try again.
-  const flatChanged = user.flatTypeId && user.flatTypeId !== (before.flatTypeId || before.flatType);
-  let roomChanges;
-  if (flatChanged) {
-    try {
-      roomChanges = await spatialRoutes.syncRoomsToFlatType(getDb(), before._id, user.flatTypeId);
-    } catch (error) {
-      console.log("Could not update rooms:", error.message);
-      return res.status(500).json({
-        error: "Could not update the 3D floor plan for the new flat type, so nothing was changed. Please try again.",
-      });
-    }
-  }
-  await households.replaceOne(mine, { ...user, ...ownedBy(req) });
-  req.session.householdId = String(before._id);
   delete req.session.myinfoDraft;
-  res.json(roomChanges ? { ...user, roomChanges } : user);
+  res.json(user);
 });
 
 // POST: save a plan and the estimate calculated in EnergyPlanner.vue.
@@ -961,9 +941,6 @@ app.delete("/api/plans/:id", auth.requireClient, async (req, res) => {
   }
   res.sendStatus(204);
 });
-
-// 3D Spatial: the floor plan, rooms and placements of the logged-in homeowner's household.
-app.use('/api/spatial', spatialRoutes);
 
 // One error handler for file or request errors across these routes.
 app.use((error, req, res, next) => {
