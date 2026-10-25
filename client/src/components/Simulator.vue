@@ -30,7 +30,7 @@ let timer = null
 let toastTimer = null
 
 //only electrical appliances allowed.
-const allowedCategories = ['kitchen', 'living', 'television', 'laundry', 'lights']
+const allowedCategories = ['kitchen', 'cooling', 'entertainment', 'laundry', 'lighting']
 
 function getCatalogueItem(key) {
   return catalogue.value.find(item => item.typeKey === key)
@@ -90,8 +90,8 @@ function controlTypeFor(name, category) {
   const text = String(name).toLowerCase()
   if (/air.?con|air condition|split unit|system[_ -]?[234]|vrf/.test(text)) return 'aircon'
   if (/fan|circulator/.test(text) && !/extractor|hood/.test(text)) return 'fan'
-  if (category === 'lights' || /lamp|light bulb|ceiling light|led light/.test(text)) return 'light'
-  if (category === 'television' || /television|\btv\b/.test(text)) return 'tv'
+  if (category === 'lighting' || /lamp|light bulb|ceiling light|led light/.test(text)) return 'light'
+  if (/television|\btv\b/.test(text)) return 'tv'
   if (/washing machine|washer/.test(text)) return 'washer'
   if (/tumble dryer|clothes dryer|drying machine/.test(text)) return 'dryer'
   if (/water heater|instant heater|storage heater/.test(text)) return 'heater'
@@ -377,19 +377,19 @@ function isEssential(item) {
   return item.controlType === 'fridge'
 }
 
-// The catalogue's categories describe the kind of appliance, NOT its room.
+// The catalogue's categories group appliances by use (kitchen, cooling, laundry...), NOT by room.
 // Match missions to electrical appliances that the household actually placed.
 function isLight(item) {
-  return item.category === 'lights'
+  return item.category === 'lighting'
 }
 function isTelevision(item) {
-  return item.category === 'television'
+  return item.controlType === 'tv'
 }
 function isCooling(item) {
   return item.controlType === 'aircon' || item.controlType === 'fan'
 }
 function isCooking(item) {
-  return item.category === 'kitchen' && !isEssential(item)
+  return item.category === 'kitchen' && !isEssential(item) && item.controlType !== 'fan'
 }
 function isLaundry(item) {
   return item.category === 'laundry'
