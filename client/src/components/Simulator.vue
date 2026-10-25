@@ -3,14 +3,13 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
 
 // Temporary test household: the Express API retrieves this household from MongoDB.
-const householdId = '6ad89eaa947d323d4c2b0ac0'
+const householdId = ref('')
 const rooms = ref([])
 const catalogue = ref([])
 const selectedRoomId = ref('')
 const settingsApplianceId = ref('')
 const loading = ref(false)
 const error = ref('')
-
 const playing = ref(false)
 const finished = ref(false)
 const minute = ref(480)
@@ -217,7 +216,9 @@ async function loadRooms() {
   selectedRoomId.value = ''
 
   try {
-    const response = await axios.get('/api/dev/simulator')
+    const response = await axios.get('/api/simulator')
+
+    householdId.value = response.data.householdId
     const records = response.data.rooms
     const items = response.data.items
 

@@ -819,40 +819,52 @@ function validPlan(body) {
 }
 
 // GET - Retrieve simulator data from MongoDB
-app.get('/api/dev/simulator', async (req, res) => {
+app.get('/api/simulator', auth.requireClient, async (req, res) => {
     try {
-        const db = getDb();
+        const db = getDb()
 
-        const householdId = '6ad89eaa947d323d4c2b0ac0';
+        const userId = new ObjectId(req.session.userId)
 
-        const rooms = await db.collection('rooms')
-            .find({
-                householdId: new ObjectId(householdId)
+        const households = await db.collection('households')
+            .find({ userId: userId })
+            .sort({ _id: -1 })
+            .toArray()
+
+        for (const household of households) {
+            const rooms = await db.collection('rooms')
+                .find({ householdId: household._id })
+                .sort({ order: 1 })
+                .toArray()
+
+            if (rooms.length === 0) continue
+
+            const items = await db.collection('catalogue_items')
+                .find({
+                    category: {
+                        $in: ['kitchen', 'living', 'television', 'laundry', 'lights']
+                    }
+                })
+                .toArray()
+
+            return res.status(200).json({
+                householdId: String(household._id),
+                rooms: rooms,
+                items: items
             })
-            .sort({ order: 1 })
-            .toArray();
+        }
 
-        const items = await db.collection('catalogue_items')
-            .find({
-                category: {
-                    $in: ['kitchen', 'living', 'television', 'laundry', 'lights']
-                }
-            })
-            .toArray();
-
-        res.status(200).json({
-            rooms: rooms,
-            items: items
-        });
+        res.status(404).json({
+            error: 'Please add a household first.'
+        })
 
     } catch (error) {
-        console.log(error);
+        console.log(error)
 
         res.status(500).json({
             error: 'Unable to retrieve simulator data'
-        });
+        })
     }
-});
+})
 
 // GET: return the catalogue plus this account's households and plans.
 app.get("/api/planner", auth.requireClient, async (req, res) => {
