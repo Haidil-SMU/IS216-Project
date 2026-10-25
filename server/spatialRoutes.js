@@ -209,7 +209,7 @@ router.post('/households/:id/openings', guard(async (req, res) => {
   const hid = oid(req.params.id), roomId = oid(req.body?.roomId), key = String(req.body?.applianceTypeKey ?? '');
   if (!hid || !roomId || !key) return bad(res, 'householdId, roomId and applianceTypeKey are required');
   const db = await getDb();
-  const rooms = L.addOpening(await loadRooms(db, hid), roomId, key);
+  const rooms = L.addOpening(await loadRooms(db, hid), roomId, key, null, null, req.body?.spots);
   await saveRooms(db, rooms);
   res.status(201).json(answer(rooms));
 }));

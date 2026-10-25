@@ -1,10 +1,15 @@
 <template>
   <div class="floorplan w-100 h-100 position-relative">
     <div ref="host" class="w-100 h-100"></div>
-    <div class="hint position-absolute top-0 start-50 translate-middle-x mt-2 px-3 py-1 small rounded-pill">
+    <div class="view-controls" role="group" aria-label="Camera view">
+      <button type="button" class="vbtn" title="Isometric view" @click="setView('iso')">3D</button>
+      <button type="button" class="vbtn" title="Top-down floor plan" @click="setView('top')">Plan</button>
+      <button type="button" class="vbtn" title="Front elevation" @click="setView('front')">Front</button>
+    </div>
+    <div class="hint position-absolute top-0 start-50 translate-middle-x mt-2 px-3 py-1 rounded-pill text-center">
       <template v-if="selectedItemId">Drag to move it (doors and windows slide along their wall) · R rotates floor items · Delete removes appliances</template>
       <template v-else-if="selectedId">Drag an item to move it · drag the room's edges or corners to resize · drag the room floor to move the room</template>
-      <template v-else>Drag to orbit · scroll to zoom · click a room to select it, then drag items or edges</template>
+      <template v-else>Right-drag to orbit · left-drag to pan · scroll to zoom · click a room to select it, then drag items or edges</template>
     </div>
   </div>
 </template>
@@ -13,8 +18,9 @@
 import { watch, ref, onMounted, onBeforeUnmount } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { createAppliance3DModel, resolveSpec } from '../stores/applianceModels.js'
-import { wallPieces, wallPoint, placeAt, onWall, counterPose, isBlocked, sharedRange, sameSpotOn, refitPlacements, NORMAL, WALL_THICKNESS } from '../stores/placement.js'
+import { wallPieces, wallPoint, wallLength, placeAt, onWall, counterPose, isBlocked, sharedRange, sameSpotOn, refitPlacements, itemsOfRoom, doorBlockedBeyond, roomBehindOpening, needsOutsideWall, outsideOnlyMessage, nearestWall, NORMAL, WALL_THICKNESS } from '../stores/placement.js'
 import { sunAt, heatAt, throwOf, airDirection } from '../stores/energy.js'
 
 const props = defineProps({
@@ -24,9 +30,10 @@ const props = defineProps({
   selectedItemId: { type: String, default: null },
   overlays: { type: Object, default: () => ({ sun: false, heat: true, air: true }) },
 })
-const emit = defineEmits(['select-room', 'select-item', 'edit-rect', 'move-items', 'move-opening', 'drag-preview', 'rotate-blocked'])
+const emit = defineEmits(['select-room', 'select-item', 'edit-rect', 'move-items', 'move-opening', 'drag-preview', 'rotate-blocked', 'door-blocked'])
 
-const FLOOR = { living: 0xf3e9d2, kitchen: 0xdcebf5, bedroom: 0xf0e2ee, bathroom: 0xd8efe4 }
+const ACCENT = { living: '#f59e0b', kitchen: '#0ea5e9', bedroom: '#8b5cf6', bathroom: '#10b981' }
+const FLOOR_TILE = { living: 0.6, bedroom: 0.6, kitchen: 1.2, bathroom: 1.2 }
 const ARCH_H = 2.1
 const MIN = { living: 3.0, kitchen: 1.8, bedroom: 2.4, bathroom: 1.2 }
 const MAX = 15
@@ -47,11 +54,13 @@ outline.visible = false
 const floors = new Map()
 const tags = new Map()
 let wallMeshes = []
-// While a room is being resized or moved, `live` holds its in-progress copy so the rest of the scene
-// (neighbours' corner trims, handles) sees it where it is now rather than where it was.
 let live = null
 
-const wallMats = [0, 1, 2, 3].map(() => new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, transparent: true }))
+const wallMats = [0, 1, 2, 3].map(() => new THREE.MeshStandardMaterial({ color: 0xf8f4ec, roughness: 0.92, transparent: true }))
+const capMats = [0, 1, 2, 3].map(() => new THREE.MeshStandardMaterial({ color: 0xcfc6b6, roughness: 0.8, transparent: true }))
+const base = new THREE.Group()
+let envTexture = null, tween = null
+const floorTextures = new Map()
 const ray = new THREE.Raycaster()
 let hoverId = null
 let downAt = null
@@ -59,19 +68,99 @@ let downAt = null
 const snap = (v) => Math.round(v * 10) / 10
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v))
 
-function label(text, sub) {
+function label(text, sub, type) {
   const c = document.createElement('canvas')
-  c.width = 256; c.height = 96
+  c.width = 512; c.height = 176
   const g = c.getContext('2d')
-  g.fillStyle = 'rgba(15,23,42,0.75)'
-  g.beginPath(); g.roundRect(4, 4, 248, 88, 14); g.fill()
-  g.fillStyle = '#fff'; g.textAlign = 'center'
-  g.font = 'bold 30px sans-serif'; g.fillText(text, 128, 44)
-  g.font = '20px sans-serif'; g.fillStyle = '#cbd5e1'; g.fillText(sub, 128, 74)
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false, transparent: true }))
-  sprite.scale.set(1.6, 0.6, 1)
+  g.shadowColor = 'rgba(15,40,28,0.28)'; g.shadowBlur = 18; g.shadowOffsetY = 6
+  g.fillStyle = 'rgba(255,255,255,0.94)'
+  g.beginPath(); g.roundRect(16, 12, 480, 128, 30); g.fill()
+  g.shadowColor = 'transparent'
+  g.fillStyle = ACCENT[type] ?? '#168b59'
+  g.beginPath(); g.roundRect(16, 12, 16, 128, [30, 0, 0, 30]); g.fill()
+  g.fillStyle = '#19352a'; g.textAlign = 'center'
+  g.font = '700 54px "Segoe UI", system-ui, sans-serif'
+  g.fillText(text, 264, 70, 430)
+  g.font = '500 33px "Segoe UI", system-ui, sans-serif'; g.fillStyle = '#5d6f65'
+  g.fillText(sub, 264, 116, 430)
+  const map = new THREE.CanvasTexture(c)
+  map.colorSpace = THREE.SRGBColorSpace
+  map.anisotropy = 4
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map, depthTest: false, transparent: true, toneMapped: false }))
+  sprite.scale.set(1.9, 0.653, 1)
   sprite.renderOrder = 10
   return sprite
+}
+
+function rng(seed) { return () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296 } }
+const shade = ([r, g, b], k) => `rgb(${Math.round(r * k)},${Math.round(g * k)},${Math.round(b * k)})`
+
+const TILE_STYLE = {
+  living:   { n: 1, base: [226, 228, 229], grout: '#b4babe' },
+  bedroom:  { n: 1, base: [222, 225, 227], grout: '#b4babe' },
+  kitchen:  { n: 4, base: [190, 196, 200], grout: '#8f979c' },
+  bathroom: { n: 4, base: [214, 222, 226], grout: '#9aa7ad' },
+}
+
+function paintFloor(type) {
+  const S = 512, c = document.createElement('canvas')
+  c.width = c.height = S
+  const g = c.getContext('2d'), rand = rng(type.length * 977 + type.charCodeAt(0))
+  const { n, base, grout } = TILE_STYLE[type] ?? TILE_STYLE.living
+  const tile = S / n, line = 3
+  g.fillStyle = grout; g.fillRect(0, 0, S, S)
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+    g.fillStyle = shade(base, 0.97 + rand() * 0.06)
+    g.fillRect(i * tile + line / 2, j * tile + line / 2, tile - line, tile - line)
+    const sheen = g.createLinearGradient(i * tile, j * tile, (i + 1) * tile, (j + 1) * tile)
+    sheen.addColorStop(0, 'rgba(255,255,255,0.22)'); sheen.addColorStop(0.7, 'rgba(255,255,255,0)')
+    g.fillStyle = sheen; g.fillRect(i * tile + line / 2, j * tile + line / 2, tile - line, tile - line)
+  }
+  const tex = new THREE.CanvasTexture(c)
+  tex.colorSpace = THREE.SRGBColorSpace
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+  tex.anisotropy = 8
+  return tex
+}
+
+function floorMaterial(type) {
+  if (!floorTextures.has(type)) floorTextures.set(type, paintFloor(type))
+  const map = floorTextures.get(type).clone()
+  map.needsUpdate = true
+  return new THREE.MeshStandardMaterial({ map, color: 0xffffff, roughness: type === 'kitchen' || type === 'bathroom' ? 0.55 : 0.4, metalness: 0 })
+}
+
+function fitFloor(floor, type, w, d) {
+  const m = FLOOR_TILE[type] ?? 2
+  floor.material.map?.repeat.set(w / m, d / m)
+}
+
+function skyTexture() {
+  const c = document.createElement('canvas')
+  c.width = 4; c.height = 512
+  const g = c.getContext('2d'), grad = g.createLinearGradient(0, 0, 0, 512)
+  grad.addColorStop(0, '#cfe7dc'); grad.addColorStop(0.5, '#e4f0e9'); grad.addColorStop(1, '#eef4f0')
+  g.fillStyle = grad; g.fillRect(0, 0, 4, 512)
+  const tex = new THREE.CanvasTexture(c)
+  tex.colorSpace = THREE.SRGBColorSpace
+  return tex
+}
+
+function buildBase() {
+  disposeGroup(base)
+  const fp = props.footprint ?? { x: 0, z: 0, w: 10, d: 8 }
+  const pad = 1.0
+  const slab = new THREE.Mesh(
+    new THREE.BoxGeometry(fp.w + pad * 2, 0.24, fp.d + pad * 2),
+    new THREE.MeshStandardMaterial({ color: 0xf3f6f3, roughness: 0.9 }),
+  )
+  slab.position.set(fp.x + fp.w / 2, -0.055 - 0.12, fp.z + fp.d / 2)
+  slab.receiveShadow = slab.castShadow = true
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), new THREE.MeshStandardMaterial({ color: 0xe6efe9, roughness: 1 }))
+  ground.rotation.x = -Math.PI / 2
+  ground.position.set(fp.x + fp.w / 2, -0.3, fp.z + fp.d / 2)
+  ground.receiveShadow = true
+  base.add(ground, slab)
 }
 
 function buildWalls(r, moved = {}) {
@@ -106,7 +195,8 @@ function buildWalls(r, moved = {}) {
     const [px, pz] = wallPoint({ w, d }, pc.wall, (pc.t0 + pc.t1) / 2)
     const n = NORMAL[pc.wall]
     const geo = pc.wall % 2 ? new THREE.BoxGeometry(WALL_THICKNESS, hh, len) : new THREE.BoxGeometry(len, hh, WALL_THICKNESS)
-    const mesh = new THREE.Mesh(geo, wallMats[pc.wall])
+    const wm = wallMats[pc.wall]
+    const mesh = new THREE.Mesh(geo, [wm, wm, capMats[pc.wall], wm, wm, wm])
     mesh.position.set(px - (n[0] * WALL_THICKNESS) / 2, (pc.y0 + pc.y1) / 2, pz - (n[1] * WALL_THICKNESS) / 2)
     mesh.castShadow = true
     mesh.receiveShadow = false
@@ -123,10 +213,8 @@ function buildRoom(r) {
   group.position.set(r.origin.x, 0, r.origin.z)
   group.userData = { roomId: id }
 
-  const floor = new THREE.Mesh(
-    new THREE.BoxGeometry(w, 0.05, d),
-    new THREE.MeshStandardMaterial({ color: FLOOR[r.type] ?? 0xeeeeee, roughness: 0.85 }),
-  )
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(w, 0.05, d), floorMaterial(r.type))
+  fitFloor(floor, r.type, w, d)
   floor.position.set(w / 2, -0.025, d / 2)
   floor.receiveShadow = true
   floor.userData.roomId = id
@@ -158,7 +246,7 @@ function setTag(id, r) {
   const old = tags.get(id)
   if (old) { group.remove(old); old.material.map.dispose(); old.material.dispose() }
   const { w, d } = r.dimension
-  const tag = label(r.name, `${tenth(w)} × ${tenth(d)} m · ${tenth(w * d)} m²`)
+  const tag = label(r.name, `${tenth(w)} × ${tenth(d)} m · ${tenth(w * d)} m²`, r.type)
   tag.position.set(w / 2, 0.4, d / 2)
   group.add(tag)
   tags.set(id, tag)
@@ -268,6 +356,7 @@ function refreshOverlays(roomId) {
 
 function clearWorld() {
   disposeOverlays()
+  for (const f of floors.values()) { f.material.map?.dispose(); f.material.dispose() }
   world.traverse((o) => o.geometry?.dispose?.())
   world.clear()
   floors.clear(); groups.clear(); itemModels.clear(); tags.clear()
@@ -279,6 +368,7 @@ function build() {
   if (!scene) return
   live = null
   clearWorld()
+  buildBase()
   props.rooms.forEach(buildRoom)
   props.rooms.forEach((r) => refreshOverlays(String(r._id)))
   highlight()
@@ -296,22 +386,48 @@ function setTint(id, hex, strength = 0.35) {
 function highlight() {
   for (const id of floors.keys()) {
     const on = id === props.selectedId, hov = id === hoverId
-    setTint(id, on ? 0x2563eb : hov ? 0x64748b : 0x000000, on ? 0.35 : 0.25)
+    setTint(id, on ? 0x16a34a : hov ? 0x64748b : 0x000000, on ? 0.3 : 0.2)
   }
 }
 
-function frameCamera() {
+function viewPose(kind) {
   const fp = props.footprint ?? { x: 0, z: 0, w: 10, d: 8 }
   const cx = fp.x + fp.w / 2, cz = fp.z + fp.d / 2, reach = Math.max(fp.w, fp.d) * 1.2
-  controls.target.set(cx, 0, cz)
-  camera.position.set(cx + reach * 0.3, reach * 0.95, fp.z + fp.d + reach * 0.75)
+  const target = new THREE.Vector3(cx, 0, cz)
+  if (kind === 'top') return { target, pos: new THREE.Vector3(cx, reach * 1.9, cz + 0.001) }
+  if (kind === 'front') return { target, pos: new THREE.Vector3(cx, reach * 0.42, fp.z + fp.d + reach * 1.25) }
+  return { target, pos: new THREE.Vector3(cx + reach * 0.3, reach * 0.95, fp.z + fp.d + reach * 0.75) }
+}
+
+function frameCamera() {
+  const { target, pos } = viewPose('iso')
+  controls.target.copy(target)
+  camera.position.copy(pos)
+}
+
+function setView(kind) {
+  const { target, pos } = viewPose(kind)
+  tween = { t: 0, fromPos: camera.position.clone(), toPos: pos, fromTarget: controls.target.clone(), toTarget: target }
+}
+
+function stepTween() {
+  if (!tween) return
+  tween.t = Math.min(1, tween.t + 0.05)
+  const k = 1 - Math.pow(1 - tween.t, 3)
+  camera.position.lerpVectors(tween.fromPos, tween.toPos, k)
+  controls.target.lerpVectors(tween.fromTarget, tween.toTarget, k)
+  if (tween.t >= 1) tween = null
 }
 
 function fadeWalls() {
+  if (controls.getPolarAngle() < 0.3) { wallMats.forEach((m, i) => { m.opacity = capMats[i].opacity = 1; m.depthWrite = capMats[i].depthWrite = true }); return }
   const fp = props.footprint ?? { x: 0, z: 0, w: 10, d: 8 }
   const dx = camera.position.x - (fp.x + fp.w / 2), dz = camera.position.z - (fp.z + fp.d / 2)
   const facing = [dz < 0, dx > 0, dz > 0, dx < 0]
-  wallMats.forEach((m, i) => { m.opacity = facing[i] ? 0.1 : 1; m.depthWrite = !facing[i] })
+  wallMats.forEach((m, i) => {
+    m.opacity = capMats[i].opacity = facing[i] ? 0.1 : 1
+    m.depthWrite = capMats[i].depthWrite = !facing[i]
+  })
 }
 
 function aim(e) {
@@ -336,13 +452,13 @@ const roomById = (id) => liveRooms().find((r) => String(r._id) === id)
 
 function disposeGroup(g) { g.traverse((o) => { o.geometry?.dispose?.(); o.material?.dispose?.() }); g.clear() }
 
-const HANDLE_BLUE = 0x2563eb, HANDLE_HOT = 0xf59e0b
+const HANDLE_BLUE = 0x168b59, HANDLE_HOT = 0xf59e0b
 let hoverHandle = null
 
 function makeGrip(geometry, rimScale) {
   const grip = new THREE.Group()
-  const body = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false }))
-  const rim = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: HANDLE_BLUE, side: THREE.BackSide, depthTest: false }))
+  const body = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, toneMapped: false }))
+  const rim = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: HANDLE_BLUE, side: THREE.BackSide, depthTest: false, toneMapped: false }))
   rim.scale.setScalar(rimScale)
   body.renderOrder = 7; rim.renderOrder = 6
   grip.add(rim, body)
@@ -360,7 +476,7 @@ function drawHandles() {
   for (const [cx, cz, lw, ld] of [[w / 2, 0, w, line], [w / 2, d, w, line], [0, d / 2, line, d], [w, d / 2, line, d]]) {
     const edge = new THREE.Mesh(
       new THREE.BoxGeometry(lw + (lw > line ? line : 0), 0.01, ld + (ld > line ? line : 0)),
-      new THREE.MeshBasicMaterial({ color: HANDLE_BLUE, transparent: true, opacity: 0.85, depthTest: false }),
+      new THREE.MeshBasicMaterial({ color: HANDLE_BLUE, transparent: true, opacity: 0.9, depthTest: false, toneMapped: false }),
     )
     edge.position.set(x + cx, 0.02, z + cz)
     edge.renderOrder = 5
@@ -469,6 +585,7 @@ function showRect(id, rect) {
   floor.geometry.dispose()
   floor.geometry = new THREE.BoxGeometry(rect.w, 0.05, rect.d)
   floor.position.set(rect.w / 2, -0.025, rect.d / 2)
+  fitFloor(floor, room.type, rect.w, rect.d)
   for (const p of room.placements) {
     const model = itemModels.get(String(p._id))?.model
     if (model) model.position.set(p.x, modelY(model.userData.spec, room.dimension.h), p.z)
@@ -492,23 +609,21 @@ function pickHandle(e) {
 
 const modelY = (spec, h) => (spec.mode === 'ceiling' ? h - spec.h : spec.y)
 
-function itemsOf(r) {
-  return (r.placements || []).map((p) => ({
-    id: String(p._id), spec: resolveSpec(p.applianceTypeKey, p.category),
-    x: p.x, z: p.z, rotY: p.rotY, wall: p.wall, t: p.t, cu: p.cu ?? 0,
-    on: p.onPlacementId ? String(p.onPlacementId) : undefined,
-    connectsTo: p.connectsTo ?? null,
-  }))
-}
+const itemsOf = itemsOfRoom
 function pickItem(e) {
   aim(e)
   const entries = [...itemModels.entries()]
-  const hit = ray.intersectObjects(entries.map(([, v]) => v.model), true)[0]
-  if (!hit) return null
-  let obj = hit.object
-  while (obj.parent && !entries.some(([, v]) => v.model === obj)) obj = obj.parent
-  const found = entries.find(([, v]) => v.model === obj)
-  return found ? { id: found[0], roomId: found[1].roomId } : null
+  const hits = ray.intersectObjects(entries.map(([, v]) => v.model), true)
+  if (!hits.length) return null
+  const ownerOf = (hit) => {
+    let obj = hit.object
+    while (obj.parent && !entries.some(([, v]) => v.model === obj)) obj = obj.parent
+    const found = entries.find(([, v]) => v.model === obj)
+    return found ? { id: found[0], roomId: found[1].roomId } : null
+  }
+  const first = hits[0]
+  const mine = props.selectedId && hits.find((h) => h.distance - first.distance < 0.35 && ownerOf(h)?.roomId === props.selectedId)
+  return ownerOf(mine || first)
 }
 const poseModel = (it, h) => {
   const m = itemModels.get(it.id)?.model
@@ -541,13 +656,42 @@ function onMove(e) {
   if (id !== hoverId) { hoverId = id; highlight() }
 }
 
+const SLIDE_STEP = 0.1, SLIDE_REACH = 1.2
+
 function openingPos(r, d, local, others) {
-  if (!d.shared) return placeAt(r.dimension, d.item.spec, local, d.item, others)
-  const room = r.dimension, wall = d.item.wall
+  const room = r.dimension, spec = d.item.spec
+  const wall = nearestWall(room, local).i
   const along = [local[0], local[1], room.w - local[0], room.d - local[1]][wall]
-  const margin = d.item.spec.w / 2 + 0.1
-  if (d.shared.t1 - d.shared.t0 < 2 * margin) return null
-  return onWall(room, d.item.spec, wall, Math.max(d.shared.t0 + margin, Math.min(d.shared.t1 - margin, along)))
+  const end = Math.max(0.6, spec.w / 2 + 0.15)
+  let lo = end, hi = wallLength(room, wall) - end
+  const linked = !!d.shared && wall === d.wall0
+  if (linked) {
+    const margin = spec.w / 2 + 0.1
+    lo = d.shared.t0 + margin; hi = d.shared.t1 - margin
+    if (hi < lo) return { pos: null, why: 'The wall these rooms share is too short for this door to slide.' }
+  }
+  const want = clamp(snap(along), lo, hi)
+  const ts = []
+  for (let t = lo; t <= hi + 1e-9; t += SLIDE_STEP) ts.push(Math.round(t * 10) / 10)
+  ts.push(want)
+  ts.sort((a, b) => Math.abs(a - want) - Math.abs(b - want))
+
+  let blocker = null
+  for (const t of ts) {
+    if (Math.abs(t - want) > SLIDE_REACH) break
+    const pos = onWall(room, spec, wall, t)
+    if (!pos || isBlocked({ spec, ...pos }, others)) continue
+    if (others.some((o) => o.spec.mode === 'opening' && o.wall === wall && Math.abs(o.t - t) < (o.spec.w + spec.w) / 2 + 0.1)) continue
+    if (needsOutsideWall(spec)) {
+      const facing = roomBehindOpening(liveRooms(), r, spec, pos)
+      if (facing) { blocker ||= { name: facing.name, outsideOnly: true }; continue }
+    } else if (spec.kind === 'door') {
+      const behind = doorBlockedBeyond(liveRooms(), r, spec, pos, { ignoreId: d.partner ? d.partner.placement._id : null, cache: d.beyond })
+      if (behind) { blocker ||= behind; continue }
+    }
+    return { pos }
+  }
+  return { pos: null, why: !blocker ? 'There is no clear space for it there.' : blocker.outsideOnly ? outsideOnlyMessage(spec, blocker.name) : blocker.straddle ? 'A door needs a clear stretch of wall, and that part sits between two rooms.' : `Something in the ${blocker.name} is in the way of a door there.`, key: `${wall}:${blocker?.name ?? ''}` }
 }
 
 function poseDoorPartner(d) {
@@ -580,11 +724,27 @@ function dragItem(e) {
   if (!d.moved) return
   const room = r.dimension, others = d.all.filter((o) => o !== d.item)
   const local = [p.x - r.origin.x + d.dx, p.z - r.origin.z + d.dz]
-  const pos = d.item.spec.mode === 'opening' ? openingPos(r, d, local, others) : placeAt(room, d.item.spec, local, d.item, others)
-  if (!pos || isBlocked({ spec: d.item.spec, ...pos }, others)) return
+  let pos
+  if (d.item.spec.mode === 'opening') {
+    const found = openingPos(r, d, local, others)
+    pos = found.pos
+    if (!pos) {
+      if (d.warnedFor !== found.key) { d.warnedFor = found.key; emit('door-blocked', found.why) }
+      return
+    }
+    d.warnedFor = null
+  } else {
+    pos = placeAt(room, d.item.spec, local, d.item, others)
+    if (!pos || isBlocked({ spec: d.item.spec, ...pos }, others)) return
+  }
   Object.assign(d.item, pos)
   poseModel(d.item, room.h)
-  if (d.partner) d.partnerPos = poseDoorPartner(d)
+  if (d.partner) {
+    const stays = d.item.wall === d.wall0
+    const partnerModel = itemModels.get(String(d.partner.placement._id))?.model
+    if (partnerModel) partnerModel.visible = stays
+    d.partnerPos = stays ? poseDoorPartner(d) : { wall: -1, t: 0 }
+  }
   if (d.item.spec.mode === 'opening') rebuildDragWalls(d)
   overlayDirtyRoom = d.roomId
   if (d.item.spec.kind === 'counter')
@@ -603,8 +763,9 @@ function onDown(e) {
     const start = groundPoint(e, planeY)
     if (hit.roomId !== props.selectedId) emit('select-room', hit.roomId)
     emit('select-item', hit.id)
+    entry.model.visible = true
     if (!start || !item) return
-    idrag = { roomId: hit.roomId, item, all, planeY, dx: item.x - (start.x - r.origin.x), dz: item.z - (start.z - r.origin.z), moved: false, ...linkedDoorInfo(r, item) }
+    idrag = { beyond: new Map(), roomId: hit.roomId, item, all, planeY, wall0: item.wall, dx: item.x - (start.x - r.origin.x), dz: item.z - (start.z - r.origin.z), moved: false, ...linkedDoorInfo(r, item) }
     controls.enabled = false
     el.setPointerCapture?.(e.pointerId)
     el.style.cursor = 'grabbing'
@@ -670,26 +831,40 @@ function onKey(e) {
 function init() {
   const width = host.value.clientWidth || 800, height = host.value.clientHeight || 500
   scene = new THREE.Scene()
-  scene.background = new THREE.Color(0xf4f6f8)
+  scene.background = skyTexture()
+  scene.fog = new THREE.Fog(0xeaf2ed, 55, 130)
   camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 200)
 
   renderer = new THREE.WebGLRenderer({ antialias: true })
   renderer.setSize(width, height)
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
   renderer.shadowMap.enabled = true
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap
+  renderer.toneMapping = THREE.NeutralToneMapping ?? THREE.NoToneMapping
+  renderer.toneMappingExposure = 1.0
   host.value.appendChild(renderer.domElement)
 
-  const sun = new THREE.DirectionalLight(0xffffff, 1.9)
+  const pmrem = new THREE.PMREMGenerator(renderer)
+  envTexture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
+  pmrem.dispose()
+  scene.environment = envTexture
+  scene.environmentIntensity = 0.35
+
+  const sun = new THREE.DirectionalLight(0xfff1dc, 2.1)
   sun.position.set(8, 16, 10)
   sun.castShadow = true
-  Object.assign(sun.shadow.camera, { left: -16, right: 16, top: 16, bottom: -16, near: 1, far: 60 })
+  Object.assign(sun.shadow.camera, { left: -18, right: 18, top: 18, bottom: -18, near: 1, far: 70 })
   sun.shadow.mapSize.set(2048, 2048)
   sun.shadow.bias = -0.0005
   sun.shadow.normalBias = 0.04
-  scene.add(new THREE.AmbientLight(0xfff6e5, 1.5), sun, grid, world, handles, outline)
+  sun.shadow.radius = 3
+  const fill = new THREE.DirectionalLight(0xdcecff, 0.45)
+  fill.position.set(-10, 9, -8)
+  scene.add(new THREE.HemisphereLight(0xffffff, 0xd5e6dc, 0.55), new THREE.AmbientLight(0xfff6e5, 0.9), sun, fill, grid, base, world, handles, outline)
 
   controls = new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = true
+  controls.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE }
   controls.maxPolarAngle = Math.PI / 2.05
   controls.minDistance = 3
   controls.maxDistance = 45
@@ -706,6 +881,7 @@ function init() {
   build()
   const loop = () => {
     frame = requestAnimationFrame(loop)
+    stepTween()
     controls.update()
     fadeWalls()
     animateHandles()
@@ -745,11 +921,53 @@ onBeforeUnmount(() => {
   controls?.dispose()
   clearWorld()
   disposeGroup(handles)
+  disposeGroup(base)
+  envTexture?.dispose()
+  floorTextures.forEach((t) => t.dispose())
   renderer?.dispose()
   renderer?.domElement.remove()
 })
 </script>
 
 <style scoped>
-.hint { background: rgba(15, 23, 42, 0.75); color: #fff; pointer-events: none; }
+.hint {
+  max-width: calc(100% - 150px);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.78);
+  -webkit-backdrop-filter: blur(10px) saturate(1.4);
+  backdrop-filter: blur(10px) saturate(1.4);
+  color: #264c3b;
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  box-shadow: 0 8px 22px -12px rgba(16, 40, 28, 0.5);
+  pointer-events: none;
+}
+.view-controls {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 4;
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.78);
+  -webkit-backdrop-filter: blur(10px) saturate(1.4);
+  backdrop-filter: blur(10px) saturate(1.4);
+  box-shadow: 0 8px 22px -12px rgba(16, 40, 28, 0.5);
+}
+.vbtn {
+  border: 0;
+  border-radius: 999px;
+  padding: 3px 11px;
+  background: transparent;
+  color: #35604d;
+  font-size: 0.74rem;
+  font-weight: 700;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.vbtn:hover { background: #e3f4ea; color: #116a42; }
+.vbtn:focus-visible { outline: 2px solid #168b59; outline-offset: 1px; }
 </style>

@@ -5,7 +5,7 @@ const MIN = { living: 3.0, kitchen: 1.8, bedroom: 2.4, bathroom: 1.2 };
 const MAX = 15;
 const DOOR_W = 0.9;
 const DOOR = 'timber_flush_door';
-const WINDOW = 'single_glazed_window';
+const OUTSIDE_ONLY = new Set(['single_glazed_window', 'double_glazed_window', 'glass_sliding_door']);
 
 class LayoutError extends Error {}
 
@@ -29,7 +29,8 @@ const cloneRoom = (r) => ({
 
 const isDoor = (p) => p.applianceTypeKey === DOOR;
 const isLink = (p) => isDoor(p) && p.connectsTo && p.connectsTo !== 'outside';
-const isOutside = (p) => p.applianceTypeKey === WINDOW || (isDoor(p) && p.connectsTo === 'outside');
+const isOutside = (p) => OUTSIDE_ONLY.has(p.applianceTypeKey) || (isDoor(p) && p.connectsTo === 'outside');
+const outsideOnlyMessage = (p) => `${p.applianceTypeKey === 'glass_sliding_door' ? 'Balcony sliding doors' : 'Windows'} belong on an outside wall, but that part of the wall faces another room`;
 
 function touching(A, B) {
   const a = rect(A), b = rect(B);
@@ -269,18 +270,22 @@ function moveOpening(rooms, roomId, placementId, wall, t) {
     if (!shared) throw new LayoutError('That door no longer joins two rooms');
     const partner = neighbour.placements.find((q) => isLink(q) && q.connectsTo === room.name && q.wall === shared.wallB);
 
-    const lo = shared.lo + half + 0.1, hi = shared.hi - half - 0.1;
-    if (lo > hi) throw new LayoutError('The shared wall is too short to move this door');
-    const g = clamp(gAlong(R, shared.wallA, t), lo, hi);          // position in flat coordinates
-    const tHere = snap(tAlong(R, shared.wallA, g));
-    const tThere = snap(tAlong(rect(neighbour), shared.wallB, gAlong(R, shared.wallA, tHere)));
+    if (wall === shared.wallA) {
+      const lo = shared.lo + half + 0.1, hi = shared.hi - half - 0.1;
+      if (lo > hi) throw new LayoutError('The shared wall is too short to move this door');
+      const g = clamp(gAlong(R, shared.wallA, t), lo, hi);          // position in flat coordinates
+      const tHere = snap(tAlong(R, shared.wallA, g));
+      const tThere = snap(tAlong(rect(neighbour), shared.wallB, gAlong(R, shared.wallA, tHere)));
 
-    if (!slotIsFree(room, shared.wallA, tHere, width, p._id)) throw new LayoutError('There is already a door or window there');
-    if (partner && !slotIsFree(neighbour, shared.wallB, tThere, width, partner._id)) throw new LayoutError('Something on the other side is in the way');
+      if (!slotIsFree(room, shared.wallA, tHere, width, p._id)) throw new LayoutError('There is already a door or window there');
+      if (partner && !slotIsFree(neighbour, shared.wallB, tThere, width, partner._id)) throw new LayoutError('Something on the other side is in the way');
 
-    repositionOpening(room, p, shared.wallA, tHere);
-    if (partner) repositionOpening(neighbour, partner, shared.wallB, tThere);
-    return work;
+      repositionOpening(room, p, shared.wallA, tHere);
+      if (partner) repositionOpening(neighbour, partner, shared.wallB, tThere);
+      return work;
+    }
+    if (partner) neighbour.placements = neighbour.placements.filter((q) => q !== partner);
+    p.connectsTo = null;
   }
 
   const len = wallLen(R, wall);
@@ -291,7 +296,7 @@ function moveOpening(rooms, roomId, placementId, wall, t) {
     const next = isDoor(p) ? neighbourAt(room, wall, gAlong(R, wall, tc), half, work) : null;
     if (!next) throw new LayoutError(isDoor(p)
       ? 'That part of the wall faces another room, but the wall they share is too short for a door'
-      : 'That part of the wall faces another room - windows belong on an outside wall');
+      : outsideOnlyMessage(p));
     joinRooms(work, room, p, next.o, gAlong(R, wall, tc));
     return work;
   }
@@ -302,19 +307,25 @@ function moveOpening(rooms, roomId, placementId, wall, t) {
   return work;
 }
 
-function addOpening(rooms, roomId, applianceTypeKey, wall = null, t = null) {
+function addOpening(rooms, roomId, applianceTypeKey, wall = null, t = null, candidates = null) {
   if (!isOpeningKey(applianceTypeKey)) throw new LayoutError('Only doors and windows can be added this way');
   const room = rooms.find((r) => key(r) === String(roomId));
   if (!room) throw new LayoutError('Room not found');
   const R = rect(room);
 
   const spots = [];
-  if ([0, 1, 2, 3].includes(wall) && Number.isFinite(t)) spots.push([wall, t]);
-  for (const w of [0, 1, 2, 3].sort((a, b) => wallLen(R, b) - wallLen(R, a)))
-    for (let i = 0; i <= wallLen(R, w) / 0.3; i++) {
-      const pos = wallLen(R, w) / 2 + Math.ceil(i / 2) * 0.3 * (i % 2 ? -1 : 1);
-      if (pos > 0 && pos < wallLen(R, w)) spots.push([w, pos]);
-    }
+  const given = Array.isArray(candidates)
+    ? candidates.slice(0, 300).map((c) => [Math.trunc(Number(c?.[0])), Number(c?.[1])]).filter(([w, at]) => [0, 1, 2, 3].includes(w) && Number.isFinite(at))
+    : [];
+  if (given.length) spots.push(...given);
+  else {
+    if ([0, 1, 2, 3].includes(wall) && Number.isFinite(t)) spots.push([wall, t]);
+    for (const w of [0, 1, 2, 3].sort((a, b) => wallLen(R, b) - wallLen(R, a)))
+      for (let i = 0; i <= wallLen(R, w) / 0.3; i++) {
+        const pos = wallLen(R, w) / 2 + Math.ceil(i / 2) * 0.3 * (i % 2 ? -1 : 1);
+        if (pos > 0 && pos < wallLen(R, w)) spots.push([w, pos]);
+      }
+  }
 
   let lastError = null;
   for (const [w, at] of spots) {
@@ -325,6 +336,7 @@ function addOpening(rooms, roomId, applianceTypeKey, wall = null, t = null) {
     try { return moveOpening(work, roomId, made._id, w, at); }
     catch (e) { if (!(e instanceof LayoutError)) throw e; lastError ||= e; }
   }
+  if (given.length) throw new LayoutError(`There is no clear spot for that on the ${room.name} walls. Move an appliance away from the wall or make the room bigger.`);
   throw lastError || new LayoutError(`There is no room on the ${room.name} walls for that`);
 }
 

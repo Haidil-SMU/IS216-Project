@@ -9,6 +9,7 @@ export const WEIGHTS = {
   fan: 6,     // a stand fan next to / in front of an aircon fights its airflow (charged to the aircon)
   glare: 5,   // NEA: place TV and computer screens perpendicular to windows, so brightness need not go up
   corner: 5,  // NEA: put lamps in corners, where wall reflections add light
+  overlap: 10, // two aircons cooling the same part of a room: the later one mostly adds running cost
 }
 
 export const LABELS = {
@@ -20,6 +21,7 @@ export const LABELS = {
   fan: 'Fan too close to the aircon',
   glare: 'Screen facing the window',
   corner: 'Lamp not in a corner',
+  overlap: 'Another aircon already cools this spot',
 }
 
 const REASONS = {
@@ -31,6 +33,7 @@ const REASONS = {
   fan: "out of the aircon's airflow and away from the unit",
   glare: 'at a right angle to the window, so the screen has less glare',
   corner: 'in a corner, where the walls reflect more of its light',
+  overlap: 'away from the other aircon, so the two are not cooling the same part of the room',
 }
 
 const FRIDGE_REAR_GAP = 0.05
@@ -41,6 +44,12 @@ const FAN_NEAR = 1.0
 const FAN_PATH_REACH = 3.0
 const GLARE_RANGE = 3
 const CORNER_REACH = 0.6
+const AC_OVERLAP_SPREAD = 3.0 // metres: two aircons closer than this mostly cool the same air
+const AC_M2_PER_KW = 5 // NEA rule of thumb: cooling capacity (kW) = floor area (m²) ÷ 5
+const TALL = 1.2 // appliances this tall (fridge, dryer...) block a window if they stand in front of it
+const WINDOW_CLEAR = 0.8 // metres of floor in front of a window to keep clear (NEA: keep windows clear of large furniture)
+const GOOD_TICKS = 3 // NEA checklist: choose a 3-tick air-conditioner, refrigerator or lamp
+const TICKED = ['ac', 'fridge', 'lamp']
 const SAME_SPOT_TOLERANCE = 0.005
 const WORTH_MOVING = 0.01
 
@@ -172,6 +181,10 @@ export function factors(room, others, a, { ownOnly = false } = {}) {
       f.side = (WEIGHTS.side / 100) * Math.max(0, AC_SIDE_GAP - sideSpaceAc) / AC_SIDE_GAP
     }
     if (!ownOnly) f.fan = (WEIGHTS.fan / 100) * fanClash(others, a)
+    // Only the aircon placed later is charged, so a pair is never counted twice.
+    let overlap = 0
+    for (const o of others) if (o.spec.kind === 'ac' && o.rank < a.rank) overlap = Math.max(overlap, gauss(dist(a, o), AC_OVERLAP_SPREAD))
+    f.overlap = (WEIGHTS.overlap / 100) * overlap
   }
 
   if (SCREENS.includes(kind)) f.glare = (WEIGHTS.glare / 100) * glareAt(room, others, a)
@@ -234,9 +247,40 @@ const joinReasons = (list) => (list.length < 2 ? list.join('') : list.slice(0, -
 const money = (v) => `S$${v >= 10 ? v.toFixed(0) : v.toFixed(2)}`
 const howFar = (m) => (m < 0.1 ? `${Math.max(1, Math.round(m * 100))} cm` : `${m.toFixed(1)} m`)
 
-export function analyse(room, items, tariff) {
+function tipsFor(room, items, roomName) {
+  const tips = []
+  const area = room.w * room.d
+  const acs = items.filter((o) => o.spec.kind === 'ac')
+
+  if (acs.length >= 2 && area / AC_M2_PER_KW <= 5)
+    tips.push({ id: acs[acs.length - 1].id, text: `${roomName} is about ${area.toFixed(0)} m², which needs roughly ${(area / AC_M2_PER_KW).toFixed(1)} kW of cooling (NEA rule of thumb: floor area ÷ 5). One aircon is enough here; a second one mostly adds running cost, so consider keeping it for another room.` })
+
+  if (acs.length && !items.some((o) => o.spec.kind === 'standfan'))
+    tips.push({ id: acs[0].id, text: `Add a fan to ${roomName}. NEA says using a fan instead of the aircon can save about $460 a year, so keep the aircon for the hottest hours.` })
+
+  for (const o of items) {
+    if (TICKED.includes(o.spec.kind) && o.ticks && o.ticks < GOOD_TICKS)
+      tips.push({ id: o.id, text: `The ${o.name} is a ${o.ticks}-tick model. NEA suggests ${GOOD_TICKS} ticks or better: it costs more to buy but saves on electricity over its lifespan.` })
+
+    if (o.spec.mode === 'floor' && o.spec.h >= TALL)
+      for (const w of items) {
+        if (w.spec.kind !== 'window') continue
+        const mid = wallPoint(room, w.wall, w.t), along = TANGENT[w.wall], inward = NORMAL[w.wall]
+        const into = (o.x - mid[0]) * inward[0] + (o.z - mid[1]) * inward[1]
+        const side = Math.abs((o.x - mid[0]) * along[0] + (o.z - mid[1]) * along[1])
+        if (into > -0.05 && into < WINDOW_CLEAR + o.spec.d / 2 && side < (w.spec.w + o.spec.w) / 2) {
+          tips.push({ id: o.id, text: `The ${o.name} stands in front of a window. NEA advises keeping windows clear of large furniture so air can flow through the room.` })
+          break
+        }
+      }
+  }
+  return tips
+}
+
+export function analyse(room, items, tariff, roomName = 'room') {
   const rows = []
   const recs = []
+  items.forEach((item, i) => { item.rank = i })
 
   for (const a of items) {
     if (a.kwh <= 0) continue
@@ -290,5 +334,6 @@ export function analyse(room, items, tariff) {
     rows, base, kwh, cost: kwh * tariff, avoidKwh,
     avoidPct: base ? (avoidKwh / base) * 100 : 0,
     recs: recs.sort((x, y) => y.savedKwh - x.savedKwh),
+    tips: tipsFor(room, items, roomName),
   }
 }
