@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="">
+<html lang="en">
   <head>
     <meta charset="UTF-8">
     <link rel="icon" href="/favicon.ico">
@@ -7,10 +7,414 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <title>Vite App</title>
+    <title>HDB EcoHome</title>
+    <!--
+      Styles for the first-load screen. Inlined so it shows before the JS bundle arrives.
+      The scene shows an HDB block becoming greener: the smog clears, solar panels go up,
+      trees grow, green walls climb and balcony planters appear. Each element's resting
+      style is its final "eco" state and the animations only describe where it starts,
+      so with reduced motion the finished scene is shown straight away.
+      The loader sits outside #app; src/splash.js removes it once the first page is ready.
+    -->
+    <style>
+      .app-loader {
+        position: fixed;
+        inset: 0;
+        z-index: 2000;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 20px;
+        padding: 16px;
+        background: #ffffff;
+        color: #19352a;
+        font-family: 'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      }
+      .app-loader-sr {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
+      }
+      .app-loader-brand {
+        font-size: 28px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .app-loader-icon {
+        color: #168b59;
+        font-size: 40px;
+        vertical-align: -3px;
+      }
+      .app-loader-green { color: #168b59; }
+      .app-loader-bar {
+        width: 160px;
+        height: 4px;
+        border-radius: 4px;
+        background: #eaf7ee;
+        overflow: hidden;
+      }
+      .app-loader-bar::after {
+        content: '';
+        display: block;
+        width: 40%;
+        height: 100%;
+        border-radius: 4px;
+        background: #168b59;
+        animation: app-loader-slide 1.2s ease-in-out infinite;
+      }
+      @keyframes app-loader-slide {
+        from { transform: translateX(-100%); }
+        to { transform: translateX(250%); }
+      }
+
+      /* Captions: each step shows for 0.9s, then the last one stays. */
+      .app-loader-captions {
+        position: relative;
+        width: 100%;
+        height: 20px;
+        color: #485950;
+        font-size: 14px;
+        font-weight: 500;
+      }
+      .app-loader-captions span {
+        position: absolute;
+        inset: 0;
+        text-align: center;
+        opacity: 0;
+        animation: eco-caption 0.9s ease both;
+      }
+      .app-loader-captions span:nth-child(2) { animation-delay: 0.9s; }
+      .app-loader-captions span:nth-child(3) { animation-delay: 1.8s; }
+      .app-loader-captions span:nth-child(4) { animation-delay: 2.7s; }
+      .app-loader-captions .eco-caption-final {
+        opacity: 1;
+        animation: eco-caption-in 0.4s ease 3.6s both;
+      }
+      @keyframes eco-caption {
+        0% { opacity: 0; transform: translateY(6px); }
+        15%, 80% { opacity: 1; transform: none; }
+        100% { opacity: 0; transform: translateY(-6px); }
+      }
+      @keyframes eco-caption-in {
+        from { opacity: 0; transform: translateY(6px); }
+      }
+
+      /* Scene */
+      .eco-scene {
+        display: block;
+        width: min(300px, 80vw);
+        height: auto;
+        border-radius: 20px;
+        box-shadow: 0 10px 30px rgba(16, 47, 36, 0.1);
+        animation: eco-color 3.6s ease-out both;
+      }
+      .eco-scene * {
+        transform-box: fill-box;
+        transform-origin: center;
+      }
+      .eco-smog-sky,
+      .eco-ground-dry {
+        opacity: 0;
+        animation: eco-fade-out 1s ease 0.2s both;
+      }
+      .eco-ground-dry { animation-delay: 1.6s; }
+      .eco-smog {
+        opacity: 0;
+        transform: translateX(40px);
+        animation: eco-drift 1.4s ease-in 0.1s both;
+      }
+      .eco-smog-2 { transform: translateX(-40px); }
+      .eco-sun { animation: eco-rise 1.2s ease-out 0.6s both; }
+      .eco-sun-rays { animation: eco-spin 14s linear infinite; }
+      .eco-panel { animation: eco-drop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 1s both; }
+      .eco-panel:nth-of-type(2) { animation-delay: 1.2s; }
+      .eco-panel:nth-of-type(3) { animation-delay: 1.4s; }
+      .eco-glint {
+        transform: translateX(-30px);
+        animation: eco-glint 3.5s ease-in-out 2s infinite;
+      }
+      .eco-tree,
+      .eco-turbine,
+      .eco-bush { transform-origin: bottom center; }
+      .eco-tree-grow,
+      .eco-bush { animation: eco-grow 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) 1.8s both; }
+      .eco-tree-grow { transform-origin: bottom center; }
+      .eco-tree-right .eco-tree-grow { animation-delay: 2s; }
+      .eco-bush { animation-delay: 2.2s; }
+      .eco-tree { animation: eco-sway 4s ease-in-out 2.6s infinite; }
+      .eco-turbine { animation: eco-grow 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) 2.4s both; }
+      .eco-blades {
+        transform-box: view-box;
+        transform-origin: 36px 96px;
+        animation: eco-spin 1.8s linear 2.4s infinite;
+      }
+      /* Keep each blade's rotate() attribute pivoting on the hub */
+      .eco-blades ellipse {
+        transform-box: view-box;
+        transform-origin: 0 0;
+      }
+      .eco-vine {
+        stroke-dasharray: 1;
+        animation: eco-draw 0.9s ease-out 2.6s both;
+      }
+      .eco-leaf { animation: eco-grow 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+      .eco-leaf:nth-of-type(1) { animation-delay: 2.8s; }
+      .eco-leaf:nth-of-type(2) { animation-delay: 2.9s; }
+      .eco-leaf:nth-of-type(3) { animation-delay: 3s; }
+      .eco-leaf:nth-of-type(4) { animation-delay: 3.1s; }
+      .eco-leaf:nth-of-type(5) { animation-delay: 3.2s; }
+      .eco-planters { animation: eco-pop 0.35s ease-out both; }
+      .eco-planters:nth-of-type(1) { animation-delay: 2.8s; }
+      .eco-planters:nth-of-type(2) { animation-delay: 2.95s; }
+      .eco-planters:nth-of-type(3) { animation-delay: 3.1s; }
+      .eco-planters:nth-of-type(4) { animation-delay: 3.25s; }
+      .eco-planters:nth-of-type(5) { animation-delay: 3.4s; }
+      .eco-badge { animation: eco-grow 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 3.6s both; }
+      .eco-badge-ring {
+        opacity: 0;
+        animation: eco-ring 2s ease-out 4.1s infinite;
+      }
+      .eco-birds { animation: eco-fly 11s linear 3.4s infinite; }
+
+      @keyframes eco-color { from { filter: grayscale(0.9) brightness(0.95); } }
+      @keyframes eco-fade-out { from { opacity: 1; } }
+      @keyframes eco-drift { from { opacity: 1; transform: none; } }
+      @keyframes eco-rise { from { opacity: 0; transform: translateY(40px); } }
+      @keyframes eco-drop { from { opacity: 0; transform: translateY(-24px); } }
+      @keyframes eco-grow { from { transform: scale(0); } }
+      @keyframes eco-draw { from { stroke-dashoffset: 1; } }
+      @keyframes eco-pop { from { opacity: 0; transform: translateY(3px); } }
+      @keyframes eco-spin { to { transform: rotate(360deg); } }
+      @keyframes eco-sway {
+        0%, 100% { transform: rotate(-1.5deg); }
+        50% { transform: rotate(1.5deg); }
+      }
+      @keyframes eco-glint {
+        0% { transform: translateX(-30px); }
+        40%, 100% { transform: translateX(110px); }
+      }
+      @keyframes eco-ring {
+        0% { opacity: 0.6; transform: scale(1); }
+        100% { opacity: 0; transform: scale(1.8); }
+      }
+      @keyframes eco-fly { to { transform: translateX(360px); } }
+
+      /*
+        Exit: src/splash.js turns the splash over like a page, pivoting on its left
+        edge, while the app fades in underneath.
+      */
+      .app-flip-page {
+        backface-visibility: hidden;
+        transform-origin: left center;
+        pointer-events: none;
+        animation: app-flip 1.6s cubic-bezier(0.45, 0, 0.55, 1) both;
+      }
+      /* Shade the page as it lifts, darkest at the turning edge */
+      .app-flip-page::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        z-index: 1;
+        background: linear-gradient(to left, rgba(16, 47, 36, 0.3), transparent 70%);
+        animation: app-flip-shade 1.6s ease-in both;
+      }
+      .app-reveal { animation: app-reveal 1s ease-out 0.2s both; }
+      @keyframes app-flip {
+        from { transform: perspective(1800px) rotateY(0); }
+        /* The page is hidden once it passes edge-on, so the turn stops just after */
+        to { transform: perspective(1800px) rotateY(-95deg); }
+      }
+      @keyframes app-flip-shade {
+        from { opacity: 0; }
+        to { opacity: 1; }
+      }
+      @keyframes app-reveal {
+        from { opacity: 0; transform: scale(0.98); }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .app-loader *,
+        .app-loader *::after { animation: none !important; }
+        .app-loader-bar::after { width: 100%; opacity: 0.5; }
+      }
+    </style>
   </head>
   <body>
+    <!-- Sits above the app until src/splash.js unfolds it away once the first page is ready. -->
+    <div id="app-loader" class="app-loader">
+      <span class="app-loader-sr" role="status">Loading HDB EcoHome…</span>
+
+      <svg class="eco-scene" viewBox="0 0 280 180" aria-hidden="true">
+        <defs>
+          <clipPath id="eco-panel-clip">
+            <polygon points="98,49 118,49 122,41 102,41" />
+            <polygon points="128,49 148,49 152,41 132,41" />
+            <polygon points="158,49 178,49 182,41 162,41" />
+          </clipPath>
+        </defs>
+
+        <!-- Sky, clearing from smog -->
+        <rect width="280" height="180" fill="#e3f3ea" />
+        <rect class="eco-smog-sky" width="280" height="180" fill="#cfd3d1" />
+
+        <g class="eco-sun">
+          <g class="eco-sun-rays" stroke="#f2b632" stroke-width="3" stroke-linecap="round">
+            <line x1="236" y1="20" x2="236" y2="14" />
+            <line x1="248.7" y1="25.3" x2="253" y2="21" />
+            <line x1="254" y1="38" x2="260" y2="38" />
+            <line x1="248.7" y1="50.7" x2="253" y2="55" />
+            <line x1="236" y1="56" x2="236" y2="62" />
+            <line x1="223.3" y1="50.7" x2="219" y2="55" />
+            <line x1="218" y1="38" x2="212" y2="38" />
+            <line x1="223.3" y1="25.3" x2="219" y2="21" />
+          </g>
+          <circle cx="236" cy="38" r="13" fill="#f6c445" />
+        </g>
+
+        <g fill="#b6bcb9">
+          <g class="eco-smog">
+            <ellipse cx="60" cy="40" rx="34" ry="11" />
+            <ellipse cx="82" cy="33" rx="20" ry="10" />
+          </g>
+          <g class="eco-smog eco-smog-2">
+            <ellipse cx="200" cy="62" rx="38" ry="10" />
+            <ellipse cx="180" cy="55" rx="18" ry="9" />
+          </g>
+        </g>
+
+        <g transform="translate(-30 30)">
+          <g class="eco-birds" fill="none" stroke="#19352a" stroke-width="1.5" stroke-linecap="round">
+            <path d="M0 0 q4 -4 8 0 q4 -4 8 0" />
+            <path d="M14 8 q3 -3 6 0 q3 -3 6 0" />
+          </g>
+        </g>
+
+        <!-- Ground, turning from dry to green -->
+        <rect y="150" width="280" height="30" fill="#9fd19a" />
+        <rect class="eco-ground-dry" y="150" width="280" height="30" fill="#cdbf9f" />
+
+        <!-- Wind turbine -->
+        <g class="eco-turbine">
+          <polygon points="34.5,150 37.5,150 36.6,98 35.4,98" fill="#ffffff" stroke="#8fa39a" stroke-width="0.8" />
+          <g class="eco-blades" fill="#ffffff" stroke="#8fa39a" stroke-width="0.8">
+            <ellipse cx="36" cy="85" rx="2.2" ry="11" />
+            <ellipse cx="36" cy="85" rx="2.2" ry="11" transform="rotate(120 36 96)" />
+            <ellipse cx="36" cy="85" rx="2.2" ry="11" transform="rotate(240 36 96)" />
+          </g>
+          <circle cx="36" cy="96" r="2.5" fill="#8fa39a" />
+        </g>
+
+        <!-- HDB block -->
+        <rect x="93" y="50" width="94" height="7" rx="1" fill="#dcd2c1" />
+        <rect x="96" y="56" width="88" height="94" fill="#f4eee3" stroke="#d8cdb9" />
+        <rect x="138" y="57" width="4" height="77" fill="#e8dcc8" />
+        <rect x="96" y="134" width="88" height="2" fill="#d8cdb9" />
+        <rect x="96" y="136" width="88" height="14" fill="#ddd3c1" />
+        <g fill="#efe7d8">
+          <rect x="96" y="136" width="4" height="14" />
+          <rect x="116" y="136" width="4" height="14" />
+          <rect x="138" y="136" width="4" height="14" />
+          <rect x="160" y="136" width="4" height="14" />
+          <rect x="180" y="136" width="4" height="14" />
+        </g>
+        <g fill="#bcd7e0">
+          <rect x="103" y="64" width="12" height="8" /><rect x="123" y="64" width="12" height="8" /><rect x="145" y="64" width="12" height="8" /><rect x="165" y="64" width="12" height="8" />
+          <rect x="103" y="78" width="12" height="8" /><rect x="123" y="78" width="12" height="8" /><rect x="145" y="78" width="12" height="8" /><rect x="165" y="78" width="12" height="8" />
+          <rect x="103" y="92" width="12" height="8" /><rect x="123" y="92" width="12" height="8" /><rect x="145" y="92" width="12" height="8" /><rect x="165" y="92" width="12" height="8" />
+          <rect x="103" y="106" width="12" height="8" /><rect x="123" y="106" width="12" height="8" /><rect x="145" y="106" width="12" height="8" /><rect x="165" y="106" width="12" height="8" />
+          <rect x="103" y="120" width="12" height="8" /><rect x="123" y="120" width="12" height="8" /><rect x="145" y="120" width="12" height="8" /><rect x="165" y="120" width="12" height="8" />
+        </g>
+
+        <!-- Balcony planters, bottom floor first -->
+        <g fill="#4ea866">
+          <g class="eco-planters"><rect x="102" y="128" width="14" height="2.5" rx="1" /><rect x="122" y="128" width="14" height="2.5" rx="1" /><rect x="144" y="128" width="14" height="2.5" rx="1" /><rect x="164" y="128" width="14" height="2.5" rx="1" /></g>
+          <g class="eco-planters"><rect x="102" y="114" width="14" height="2.5" rx="1" /><rect x="122" y="114" width="14" height="2.5" rx="1" /><rect x="144" y="114" width="14" height="2.5" rx="1" /><rect x="164" y="114" width="14" height="2.5" rx="1" /></g>
+          <g class="eco-planters"><rect x="102" y="100" width="14" height="2.5" rx="1" /><rect x="122" y="100" width="14" height="2.5" rx="1" /><rect x="144" y="100" width="14" height="2.5" rx="1" /><rect x="164" y="100" width="14" height="2.5" rx="1" /></g>
+          <g class="eco-planters"><rect x="102" y="86" width="14" height="2.5" rx="1" /><rect x="122" y="86" width="14" height="2.5" rx="1" /><rect x="144" y="86" width="14" height="2.5" rx="1" /><rect x="164" y="86" width="14" height="2.5" rx="1" /></g>
+          <g class="eco-planters"><rect x="102" y="72" width="14" height="2.5" rx="1" /><rect x="122" y="72" width="14" height="2.5" rx="1" /><rect x="144" y="72" width="14" height="2.5" rx="1" /><rect x="164" y="72" width="14" height="2.5" rx="1" /></g>
+        </g>
+
+        <!-- Rooftop solar panels -->
+        <g stroke="#6ea6c9" stroke-width="0.6">
+          <g class="eco-panel">
+            <line x1="104" y1="49" x2="104" y2="51" stroke="#8a9aa3" stroke-width="1.5" />
+            <polygon points="98,49 118,49 122,41 102,41" fill="#2c5e80" />
+            <line x1="100" y1="45" x2="120" y2="45" /><line x1="108" y1="49" x2="112" y2="41" />
+          </g>
+          <g class="eco-panel">
+            <line x1="134" y1="49" x2="134" y2="51" stroke="#8a9aa3" stroke-width="1.5" />
+            <polygon points="128,49 148,49 152,41 132,41" fill="#2c5e80" />
+            <line x1="130" y1="45" x2="150" y2="45" /><line x1="138" y1="49" x2="142" y2="41" />
+          </g>
+          <g class="eco-panel">
+            <line x1="164" y1="49" x2="164" y2="51" stroke="#8a9aa3" stroke-width="1.5" />
+            <polygon points="158,49 178,49 182,41 162,41" fill="#2c5e80" />
+            <line x1="160" y1="45" x2="180" y2="45" /><line x1="168" y1="49" x2="172" y2="41" />
+          </g>
+        </g>
+        <g clip-path="url(#eco-panel-clip)">
+          <g transform="skewX(-20)">
+            <rect class="eco-glint" x="90" y="38" width="7" height="14" fill="#ffffff" opacity="0.6" />
+          </g>
+        </g>
+
+        <!-- Green walls -->
+        <g fill="none" stroke="#3f9a5c" stroke-width="2.5" stroke-linecap="round">
+          <path class="eco-vine" pathLength="1" d="M97 150 C 91 138, 103 128, 97 116 S 91 94, 97 82 S 103 66, 97 57" />
+          <path class="eco-vine" pathLength="1" d="M183 150 C 189 138, 177 128, 183 116 S 189 94, 183 82 S 177 66, 183 57" />
+        </g>
+        <g fill="#5db574">
+          <g><ellipse class="eco-leaf" cx="93" cy="140" rx="3.5" ry="2" /><ellipse class="eco-leaf" cx="101" cy="124" rx="3.5" ry="2" /><ellipse class="eco-leaf" cx="93" cy="106" rx="3.5" ry="2" /><ellipse class="eco-leaf" cx="101" cy="90" rx="3.5" ry="2" /><ellipse class="eco-leaf" cx="93" cy="72" rx="3.5" ry="2" /></g>
+          <g><ellipse class="eco-leaf" cx="187" cy="140" rx="3.5" ry="2" /><ellipse class="eco-leaf" cx="179" cy="124" rx="3.5" ry="2" /><ellipse class="eco-leaf" cx="187" cy="106" rx="3.5" ry="2" /><ellipse class="eco-leaf" cx="179" cy="90" rx="3.5" ry="2" /><ellipse class="eco-leaf" cx="187" cy="72" rx="3.5" ry="2" /></g>
+        </g>
+
+        <!-- Trees and bushes -->
+        <g fill="#3f9a5c">
+          <ellipse class="eco-bush" cx="104" cy="150" rx="9" ry="5" />
+          <ellipse class="eco-bush" cx="176" cy="150" rx="9" ry="5" />
+        </g>
+        <g class="eco-tree">
+          <g class="eco-tree-grow">
+            <rect x="60" y="126" width="4" height="24" fill="#8a6a4a" />
+            <circle cx="62" cy="120" r="12" fill="#3f9a5c" /><circle cx="53" cy="127" r="8" fill="#3f9a5c" /><circle cx="71" cy="127" r="8" fill="#3f9a5c" />
+            <circle cx="58" cy="116" r="5" fill="#5db574" />
+          </g>
+        </g>
+        <g class="eco-tree eco-tree-right">
+          <g class="eco-tree-grow">
+            <rect x="220" y="126" width="4" height="24" fill="#8a6a4a" />
+            <circle cx="222" cy="120" r="12" fill="#3f9a5c" /><circle cx="213" cy="127" r="8" fill="#3f9a5c" /><circle cx="231" cy="127" r="8" fill="#3f9a5c" />
+            <circle cx="218" cy="116" r="5" fill="#5db574" />
+          </g>
+        </g>
+
+        <!-- Eco badge -->
+        <circle class="eco-badge-ring" cx="203" cy="80" r="11" fill="none" stroke="#168b59" stroke-width="2" />
+        <g class="eco-badge">
+          <circle cx="203" cy="80" r="11" fill="#168b59" />
+          <path d="M197 86 C 197 77, 203 74, 209 74 C 209 81, 204 86, 197 86 Z" fill="#ffffff" />
+          <line x1="198.5" y1="84.5" x2="205" y2="78" stroke="#168b59" stroke-width="1.2" stroke-linecap="round" />
+        </g>
+      </svg>
+
+      <div class="app-loader-brand" aria-hidden="true">
+        <span class="app-loader-icon">⌂</span> HDB <span class="app-loader-green">EcoHome</span>
+      </div>
+      <div class="app-loader-bar" aria-hidden="true"></div>
+      <div class="app-loader-captions" aria-hidden="true">
+        <span>Clearing the air…</span>
+        <span>Installing solar panels…</span>
+        <span>Planting trees…</span>
+        <span>Growing green walls…</span>
+        <span class="eco-caption-final">Loading your eco home…</span>
+      </div>
+    </div>
     <div id="app"></div>
+    <noscript>HDB EcoHome needs JavaScript to run. Please enable it and reload the page.</noscript>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
