@@ -333,6 +333,7 @@ async function loadRooms() {
     const response = await axios.get('/api/simulator')
 
     householdId.value = response.data.householdId
+
     const records = response.data.rooms
     const items = response.data.items
 
@@ -342,7 +343,7 @@ async function loadRooms() {
 
     catalogue.value = items
 
-    // Ordinary loops are easier to follow than several nested map/filter calls.
+    // Go through every room
     for (const room of records) {
       const newRoom = {
         id: String(room._id?.$oid || room._id),
@@ -352,30 +353,65 @@ async function loadRooms() {
         appliances: []
       }
 
+      // Go through every placement in the room
       for (const placement of room.placements || []) {
-        // Check every placement. The updated catalogue is authoritative for category.
-        if (placement.category === 'build') continue
-        const details = getCatalogueItem(placement.applianceTypeKey)
+
+        // Only include electrical appliances based on category
+        if (!allowedCategories.includes(placement.category)) {
+          continue
+        }
+
+        // Try to find appliance information in catalogue
+        let details = getCatalogueItem(placement.applianceTypeKey)
+
+        // If not found, still include the appliance
         if (!details) {
           if (!missingCatalogueKeys.value.includes(placement.applianceTypeKey)) {
             missingCatalogueKeys.value.push(placement.applianceTypeKey)
           }
-          continue
-        }
-        if (!allowedCategories.includes(details.category)) continue
 
-        const type = controlTypeFor(details.name + ' ' + details.typeKey, details.category, details.typeKey)
+          let applianceName = prettyName(placement.applianceTypeKey)
+
+          if (
+            placement.applianceTypeKey.includes('condenser') ||
+            placement.applianceTypeKey.includes('condensor')
+          ) {
+            applianceName = 'Condenser Clothes Dryer'
+          }
+
+          details = {
+            typeKey: placement.applianceTypeKey,
+            name: applianceName,
+            category: placement.category,
+            kwhYear: null,
+            products: []
+          }
+        }
+
+        // Identify the available appliance settings
+        const type = controlTypeFor(
+          details.name + ' ' + details.typeKey,
+          details.category,
+          details.typeKey
+        )
+
+        // Retrieve electricity information
         const energyDetails = getEnergyDetails(details, placement)
+
         const annualKwh = energyDetails.annualKwh
         const hoursPerYear = typicalHoursPerYear(details.typeKey)
-        const basePowerKw = annualKwh == null ? null : annualKwh / hoursPerYear
 
+        const basePowerKw = annualKwh == null
+          ? null
+          : annualKwh / hoursPerYear
+
+        // Add appliance to its room
         newRoom.appliances.push({
           id: String(placement._id?.$oid || placement._id),
           key: placement.applianceTypeKey,
           typeKey: details.typeKey,
           name: details.name,
-          category: details.category,
+          category: placement.category,
           tick: placement.tick || '',
           annualKwh: annualKwh,
           basePowerKw: basePowerKw,
@@ -393,10 +429,15 @@ async function loadRooms() {
     }
 
     rooms.value.sort((a, b) => a.order - b.order)
+
     selectedRoomId.value = rooms.value[0]?.id || ''
+
     resetGame()
+
   } catch (err) {
-    error.value = err.response?.data?.error || err.message || 'Could not load household'
+    error.value = err.response?.data?.error ||
+                  err.message ||
+                  'Could not load household'
   } finally {
     loading.value = false
   }
