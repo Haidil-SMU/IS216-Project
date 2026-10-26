@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="">
+<html lang="en">
   <head>
     <meta charset="UTF-8">
     <link rel="icon" href="/favicon.ico">
@@ -7,10 +7,75 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <title>Vite App</title>
+    <title>HDB EcoHome</title>
+    <!-- Styles for the first-load screen. Inlined so it shows before the JS bundle arrives. -->
+    <style>
+      .app-loader {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 20px;
+        background: #ffffff;
+        color: #19352a;
+        font-family: 'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      }
+      .app-loader-brand {
+        font-size: 28px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .app-loader-icon {
+        color: #168b59;
+        font-size: 40px;
+        vertical-align: -3px;
+      }
+      .app-loader-green { color: #168b59; }
+      .app-loader-bar {
+        width: 160px;
+        height: 4px;
+        border-radius: 4px;
+        background: #eaf7ee;
+        overflow: hidden;
+      }
+      .app-loader-bar::after {
+        content: '';
+        display: block;
+        width: 40%;
+        height: 100%;
+        border-radius: 4px;
+        background: #168b59;
+        animation: app-loader-slide 1.2s ease-in-out infinite;
+      }
+      .app-loader-text {
+        margin: 0;
+        color: #485950;
+        font-size: 14px;
+        font-weight: 500;
+      }
+      @keyframes app-loader-slide {
+        from { transform: translateX(-100%); }
+        to { transform: translateX(250%); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .app-loader-bar::after { animation: none; width: 100%; opacity: 0.5; }
+      }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <!-- Vue replaces everything in #app when it mounts, which removes this loader. -->
+      <div class="app-loader" role="status" aria-live="polite">
+        <div class="app-loader-brand">
+          <span class="app-loader-icon" aria-hidden="true">⌂</span> HDB <span class="app-loader-green">EcoHome</span>
+        </div>
+        <div class="app-loader-bar" aria-hidden="true"></div>
+        <p class="app-loader-text">Loading your home…</p>
+      </div>
+    </div>
+    <noscript>HDB EcoHome needs JavaScript to run. Please enable it and reload the page.</noscript>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
