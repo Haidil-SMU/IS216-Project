@@ -7,7 +7,7 @@ const SIZES = {
   refrigerator_freezer_400l: [0.7, 1.75, 0.7],
   refrigerator_ice_dispenser: [0.9, 1.8, 0.75],
   commercial_storage_refrigerator: [0.75, 1.9, 0.8],
-  tv_32_inch_wall_mounted: [0.73, 0.45, 0.06],
+  tv_43_inch_wall_mounted: [0.95, 0.54, 0.06],
   tv_55_inch_wall_mounted: [1.23, 0.72, 0.06],
   tv_65_inch_wall_mounted: [1.45, 0.84, 0.06],
   light_led_10w: [0.2, 0.3, 0.2],
@@ -101,7 +101,6 @@ export function resolveSpec(type = '', category = '') {
   let mode = base.mode, y = base.y
   if (kind === 'ac' && variant === 'window') { [w, h, d, y] = [0.6, 0.4, 0.5, 1.6] }
   if (kind === 'ac' && variant === 'portable') { [w, h, d, y, mode] = [0.4, 0.8, 0.4, 0, 'floor'] }
-  if (kind === 'ac' && type === 'aircon_vrf_three_phase') { [w, h] = [1.1, 0.34] }
   if (kind === 'light') y = 0 
   if (kind === 'heater') y = variant === 'storage' ? 1.4 : 1.7
   return { kind, variant, mode, w, h, d, y, gap: base.gap }

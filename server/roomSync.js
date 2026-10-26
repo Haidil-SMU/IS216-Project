@@ -1,4 +1,3 @@
-
 const { ObjectId } = require('mongodb');
 const { generateRooms, wallPoint, NORMAL, isOpeningKey } = require('./floorplan');
 
@@ -7,7 +6,6 @@ const halfWidth = (p) => (p.category === 'build' ? 0.95 : 0.5);
 const FLOOR_MARGIN = 0.3;
 
 const isOpening = (p) => p.category === 'build' && isOpeningKey(p.applianceTypeKey);
-
 
 function carryOver(oldRoom, newRoom) {
   const { w: W, d: D } = newRoom.dimension;
@@ -27,7 +25,7 @@ function carryOver(oldRoom, newRoom) {
     if (p.wall >= 0) {
       const length = p.wall % 2 ? D : W;
       const margin = halfWidth(p);
-      if (length < margin * 2 + 0.1) continue;
+      if (length < margin * 2 + 0.1) continue; 
       const [ox, oz] = wallPoint(oldRoom.dimension, p.wall, p.t), n = NORMAL[p.wall];
       const offset = (p.x - ox) * n[0] + (p.z - oz) * n[1];
       const t = clamp(p.t, margin, length - margin);
@@ -39,7 +37,7 @@ function carryOver(oldRoom, newRoom) {
   }
   for (const p of items.filter((q) => q.onPlacementId)) {
     const moved = shift.get(String(p.onPlacementId));
-    if (!moved) continue;
+    if (!moved) continue; // its countertop did not make it across
     place(p, p.x + moved[0], p.z + moved[1]);
   }
   return { placements: out, adjusted, dropped: items.length - out.length };
@@ -59,6 +57,7 @@ function reconcileRooms(oldRooms, flatTypeId, householdId) {
     adjusted += carried.adjusted; dropped += carried.dropped;
     keep.push({ ...room, _id: old._id, householdId, placements: [...room.placements, ...carried.placements] });
   }
+
   const remove = [...unmatched.values()];
   for (const r of remove) dropped += (r.placements || []).filter((p) => !isOpening(p)).length;
 

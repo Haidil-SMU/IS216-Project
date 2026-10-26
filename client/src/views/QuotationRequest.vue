@@ -20,6 +20,7 @@ const selectedServiceCodes = String(route.query.services || '')
 
 const contractor = ref(null)
 const households = ref([])
+const flatTypes = ref([])
 
 const loading = ref(true)
 const submitting = ref(false)
@@ -40,8 +41,20 @@ const services = [
   { code: 'CR18', name: 'Doors' }
 ]
 
+const fallbackFlatTypes = [
+  { id: '2-room', name: '2-room HDB' },
+  { id: '3-room', name: '3-room HDB' },
+  { id: '4-room', name: '4-room HDB' },
+  { id: '5-room', name: '5-room HDB' },
+  { id: 'executive', name: 'Executive HDB' }
+]
+
 const propertyMode = ref('saved')
 const selectedHouseholdId = ref('')
+
+// Keep the original quotation's property details when editing.
+const originalHouseholdId = ref('')
+const originalHouseholdSnapshot = ref(null)
 
 const form = ref({
   householdName: '',
@@ -52,6 +65,40 @@ const form = ref({
   description: '',
   budget: null,
   preferredStartDate: ''
+})
+
+function getId(value) {
+  return value == null ? '' : String(value?.$oid || value)
+}
+
+const savedHousehold = computed(() => {
+  // Do not silently choose a household for historical accounts
+  // that still contain multiple households.
+  return households.value.length === 1
+    ? households.value[0]
+    : null
+})
+
+const canUseSavedHousehold = computed(() => {
+  return Boolean(
+    savedHousehold.value && getId(savedHousehold.value.id)
+  )
+})
+
+const householdNotice = computed(() => {
+  if (households.value.length === 0) {
+    return 'No saved household was found. Complete your household setup in My Profile. You can also enter property details manually here.'
+  }
+
+  if (households.value.length > 1) {
+    return 'Your account still has multiple saved households. Review them in My Profile. Enter property details manually for this request.'
+  }
+
+  if (!canUseSavedHousehold.value) {
+    return 'Your saved household could not be identified. Review it in My Profile or enter property details manually.'
+  }
+
+  return ''
 })
 
 const contractorServices = computed(() => {
@@ -66,7 +113,62 @@ const contractorServices = computed(() => {
   })
 })
 
-const today = new Date().toLocaleDateString('en-CA')
+const flatTypeOptions = computed(() => {
+  const catalogue = flatTypes.value
+    .filter(item => item && item.id != null)
+    .map(item => ({
+      id: String(item.id),
+      name: String(item.name || item.id)
+    }))
+
+  const options = catalogue.length
+    ? [...catalogue]
+    : [...fallbackFlatTypes]
+
+  // Keep older quotation values visible even if they no longer
+  // appear in the current catalogue.
+  const currentValue = String(form.value.flatType || '')
+
+  if (
+    currentValue &&
+    !options.some(option => option.id === currentValue)
+  ) {
+    options.push({
+      id: currentValue,
+      name: currentValue
+    })
+  }
+
+  return options
+})
+
+function normalizeFlatType(value) {
+  const rawValue = String(value || '').trim()
+  if (!rawValue) return ''
+
+  const catalogue = flatTypes.value.length
+    ? flatTypes.value
+    : fallbackFlatTypes
+
+  const normalizedValue = rawValue.toLowerCase()
+
+  const match = catalogue.find(item => {
+    return (
+      String(item.id || '').toLowerCase() === normalizedValue ||
+      String(item.name || '').toLowerCase() === normalizedValue
+    )
+  })
+
+  return match ? String(match.id) : rawValue
+}
+
+// Use the user's local calendar date.
+const currentDate = new Date()
+const today = [
+  currentDate.getFullYear(),
+  String(currentDate.getMonth() + 1).padStart(2, '0'),
+  String(currentDate.getDate()).padStart(2, '0')
+].join('-')
 
 // ============================================================
 // LOAD DATA
@@ -89,7 +191,7 @@ async function getData() {
       : contractorData.contractors || []
 
     contractor.value = contractors.find(
-      item => String(item._id) === contractorId
+      item => getId(item._id) === contractorId
     )
 
     if (!contractor.value) {
@@ -98,6 +200,10 @@ async function getData() {
 
     households.value = Array.isArray(plannerResponse.data.users)
       ? plannerResponse.data.users
+      : []
+
+    flatTypes.value = Array.isArray(plannerResponse.data.flatTypes)
+      ? plannerResponse.data.flatTypes
       : []
 
     if (isEditMode) {
@@ -110,19 +216,23 @@ async function getData() {
         )
         .map(service => service.name)
 
-      if (households.value.length === 0) {
+      if (canUseSavedHousehold.value) {
+        propertyMode.value = 'saved'
+        populateSavedHousehold()
+      } else {
         propertyMode.value = 'manual'
+        selectedHouseholdId.value = ''
       }
     }
-
   } catch (error) {
     console.error(error)
 
     errorMessage.value =
-      error.message || 'Unable to load quotation information.'
+      error.response?.data?.error ||
+      error.message ||
+      'Unable to load quotation information.'
 
     contractor.value = null
-
   } finally {
     loading.value = false
   }
@@ -140,18 +250,14 @@ async function loadExistingRequest() {
     : response.data.requests || []
 
   const existingRequest = requests.find(
-    request => String(request._id?.$oid || request._id) === requestId
+    request => getId(request._id) === requestId
   )
 
   if (!existingRequest) {
     throw new Error('Quotation request not found.')
   }
 
-  const existingContractorId =
-    existingRequest.contractorId?.$oid ||
-    existingRequest.contractorId
-
-  if (String(existingContractorId) !== contractorId) {
+  if (getId(existingRequest.contractorId) !== contractorId) {
     throw new Error('Quotation request does not belong to this contractor.')
   }
 
@@ -159,12 +265,17 @@ async function loadExistingRequest() {
     throw new Error('Only pending quotation requests can be updated.')
   }
 
-  // Restore previously submitted information
-  form.value = {
+  originalHouseholdId.value = getId(existingRequest.householdId)
+
+  originalHouseholdSnapshot.value = {
     householdName: existingRequest.household?.name || '',
-    flatType: existingRequest.household?.flatType || '',
+    flatType: normalizeFlatType(existingRequest.household?.flatType),
     occupants: existingRequest.household?.occupants ?? 1,
-    bedrooms: existingRequest.household?.bedrooms ?? 1,
+    bedrooms: existingRequest.household?.bedrooms ?? 1
+  }
+
+  form.value = {
+    ...originalHouseholdSnapshot.value,
     services: [...(existingRequest.services || [])],
     description: existingRequest.description || '',
     budget: existingRequest.budget ?? null,
@@ -173,15 +284,17 @@ async function loadExistingRequest() {
       : ''
   }
 
-  // Restore saved household selection, if it still exists
-  const savedHousehold = households.value.find(
-    household =>
-      String(household.id) === String(existingRequest.householdId)
-  )
+  const matchesSavedHousehold =
+    canUseSavedHousehold.value &&
+    originalHouseholdId.value &&
+    getId(savedHousehold.value.id) === originalHouseholdId.value
 
-  if (savedHousehold) {
+  if (matchesSavedHousehold) {
     propertyMode.value = 'saved'
-    selectedHouseholdId.value = String(savedHousehold.id)
+    selectedHouseholdId.value = originalHouseholdId.value
+
+    // Preserve the quotation snapshot instead of replacing it
+    // with the household's current profile values.
   } else {
     propertyMode.value = 'manual'
     selectedHouseholdId.value = ''
@@ -189,29 +302,50 @@ async function loadExistingRequest() {
 }
 
 // ============================================================
-// HOUSEHOLD SELECTION
+// PROPERTY INFORMATION
 // ============================================================
 
-function selectHousehold() {
-  const household = households.value.find(
-    item => String(item.id) === selectedHouseholdId.value
+function populateSavedHousehold() {
+  if (!canUseSavedHousehold.value) return
+
+  const household = savedHousehold.value
+  const householdId = getId(household.id)
+
+  selectedHouseholdId.value = householdId
+
+  if (
+    isEditMode &&
+    originalHouseholdSnapshot.value &&
+    originalHouseholdId.value === householdId
+  ) {
+    Object.assign(form.value, originalHouseholdSnapshot.value)
+    return
+  }
+
+  form.value.householdName = household.name || ''
+  form.value.flatType = normalizeFlatType(
+    household.flatType || household.flatTypeId
   )
-
-  if (!household) return
-
-  form.value.householdName = household.name
-  form.value.flatType = household.flatType
-  form.value.occupants = household.occupants
-  form.value.bedrooms = household.bedrooms
+  form.value.occupants = household.occupants ?? 1
+  form.value.bedrooms = household.bedrooms ?? 1
 }
 
 function changePropertyMode() {
-  selectedHouseholdId.value = ''
+  errorMessage.value = ''
 
-  form.value.householdName = ''
-  form.value.flatType = ''
-  form.value.occupants = 1
-  form.value.bedrooms = 1
+  if (propertyMode.value === 'saved') {
+    if (!canUseSavedHousehold.value) {
+      propertyMode.value = 'manual'
+      selectedHouseholdId.value = ''
+      return
+    }
+
+    populateSavedHousehold()
+    return
+  }
+
+  // Keep the displayed details available for manual editing.
+  selectedHouseholdId.value = ''
 }
 
 // ============================================================
@@ -219,11 +353,21 @@ function changePropertyMode() {
 // ============================================================
 
 async function submitRequest() {
+  if (submitting.value) return
+
   errorMessage.value = ''
   successMessage.value = ''
 
-  if (propertyMode.value === 'saved' && !selectedHouseholdId.value) {
-    errorMessage.value = 'Please select a saved household.'
+  if (
+    propertyMode.value === 'saved' &&
+    (
+      !canUseSavedHousehold.value ||
+      !selectedHouseholdId.value ||
+      selectedHouseholdId.value !== getId(savedHousehold.value?.id)
+    )
+  ) {
+    errorMessage.value =
+      'Your saved household is unavailable. Please enter your property details manually.'
     return
   }
 
@@ -235,6 +379,8 @@ async function submitRequest() {
   if (
     !Number.isInteger(Number(form.value.occupants)) ||
     Number(form.value.occupants) < 1 ||
+    form.value.bedrooms === '' ||
+    form.value.bedrooms === null ||
     !Number.isInteger(Number(form.value.bedrooms)) ||
     Number(form.value.bedrooms) < 0
   ) {
@@ -270,7 +416,7 @@ async function submitRequest() {
       : null,
 
     household: {
-      name: form.value.householdName,
+      name: form.value.householdName.trim(),
       flatType: form.value.flatType,
       occupants: Number(form.value.occupants),
       bedrooms: Number(form.value.bedrooms)
@@ -293,21 +439,18 @@ async function submitRequest() {
 
       successMessage.value =
         'Your quotation request has been updated successfully!'
-
     } else {
       await axios.post(QUOTATION_API, requestData)
 
       successMessage.value =
         'Your quotation request has been submitted successfully!'
     }
-
   } catch (error) {
     console.error(error)
 
     errorMessage.value =
       error.response?.data?.error ||
       'Unable to save quotation request.'
-
   } finally {
     submitting.value = false
   }
@@ -318,10 +461,10 @@ onMounted(getData)
 
 <template>
   <div class="container py-5">
-
     <!-- PAGE HEADER -->
     <div class="mb-4">
       <button
+        type="button"
         class="btn btn-link text-success text-decoration-none p-0 mb-3"
         @click="router.back()"
       >
@@ -344,7 +487,12 @@ onMounted(getData)
 
     <!-- LOADING -->
     <div v-if="loading" class="text-center py-5">
-      <div class="spinner-border text-success"></div>
+      <div
+        class="spinner-border text-success"
+        role="status"
+        aria-label="Loading quotation form"
+      ></div>
+
       <p class="text-muted mt-3">Loading quotation form...</p>
     </div>
 
@@ -360,18 +508,18 @@ onMounted(getData)
 
         <p>{{ successMessage }}</p>
 
-<button
-  class="btn btn-success mt-3"
-  @click="router.push('/MyQuotations')"
->
-  View My Quotations →
-</button>
+        <button
+          type="button"
+          class="btn btn-success mt-3"
+          @click="router.push('/MyQuotations')"
+        >
+          View My Quotations →
+        </button>
       </div>
     </div>
 
     <!-- FORM -->
     <div v-else-if="contractor">
-
       <!-- CONTRACTOR INFORMATION -->
       <div class="card border-0 shadow-sm rounded-4 mb-4">
         <div class="card-body p-4">
@@ -394,7 +542,6 @@ onMounted(getData)
       </div>
 
       <form @submit.prevent="submitRequest">
-
         <!-- SECTION 1: PROPERTY INFORMATION -->
         <div class="card border-0 shadow-sm rounded-4 mb-4">
           <div class="card-body p-4">
@@ -403,20 +550,31 @@ onMounted(getData)
             </h4>
 
             <p class="text-muted">
-              Select an existing household from your Energy Planner
-              or enter your property information manually.
+              Use your saved household from My Profile or enter
+              your property information manually.
             </p>
+
+            <div
+              v-if="householdNotice"
+              class="alert alert-warning"
+              role="status"
+            >
+              {{ householdNotice }}
+            </div>
 
             <!-- PROPERTY MODE -->
             <div class="d-flex flex-wrap gap-4 mb-4">
               <label class="form-check">
                 <input
                   type="radio"
+                  name="propertyMode"
                   class="form-check-input"
                   value="saved"
                   v-model="propertyMode"
+                  :disabled="!canUseSavedHousehold"
                   @change="changePropertyMode"
                 />
+
                 <span class="form-check-label">
                   Use Saved Household
                 </span>
@@ -425,58 +583,53 @@ onMounted(getData)
               <label class="form-check">
                 <input
                   type="radio"
+                  name="propertyMode"
                   class="form-check-input"
                   value="manual"
                   v-model="propertyMode"
                   @change="changePropertyMode"
                 />
+
                 <span class="form-check-label">
                   Enter Manually
                 </span>
               </label>
             </div>
 
-            <!-- SAVED HOUSEHOLD -->
-            <div v-if="propertyMode === 'saved'" class="mb-4">
-              <label class="form-label fw-semibold">
-                Select Household
-              </label>
+            <!-- SAVED HOUSEHOLD INFORMATION -->
+            <div
+              v-if="propertyMode === 'saved'"
+              class="bg-light rounded-3 p-3 mb-4"
+            >
+              <p class="fw-semibold mb-1">
+                {{
+                  isEditMode
+                    ? 'Saved Household Details'
+                    : 'Saved Household Loaded'
+                }}
+              </p>
 
-              <select
-                class="form-select"
-                v-model="selectedHouseholdId"
-                @change="selectHousehold"
-                required
-              >
-                <option value="">Select a household</option>
-
-                <option
-                  v-for="household in households"
-                  :key="household.id"
-                  :value="String(household.id)"
-                >
-                  {{ household.name }}
-                </option>
-              </select>
-
-              <p
-                v-if="households.length === 0"
-                class="small text-muted mt-2"
-              >
-                No saved households found.
-                Please enter your property details manually.
+              <p class="small text-muted mb-0">
+                {{
+                  isEditMode
+                    ? 'These are the property details stored with this quotation. Choose Enter Manually to change them.'
+                    : 'Your saved household details have been filled in automatically. Choose Enter Manually to use different property details.'
+                }}
               </p>
             </div>
 
             <!-- PROPERTY FIELDS -->
             <div class="row g-3">
-
               <div class="col-md-6">
-                <label class="form-label fw-semibold">
+                <label
+                  for="householdName"
+                  class="form-label fw-semibold"
+                >
                   Household Name
                 </label>
 
                 <input
+                  id="householdName"
                   type="text"
                   class="form-control"
                   v-model="form.householdName"
@@ -487,34 +640,46 @@ onMounted(getData)
               </div>
 
               <div class="col-md-6">
-                <label class="form-label fw-semibold">
+                <label
+                  for="flatType"
+                  class="form-label fw-semibold"
+                >
                   HDB Flat Type
                 </label>
 
                 <select
+                  id="flatType"
                   class="form-select"
                   v-model="form.flatType"
                   :disabled="propertyMode === 'saved'"
                   required
                 >
                   <option value="">Select flat type</option>
-                  <option value="2-room HDB">2-room HDB</option>
-                  <option value="3-room HDB">3-room HDB</option>
-                  <option value="4-room HDB">4-room HDB</option>
-                  <option value="5-room HDB">5-room HDB</option>
-                  <option value="Executive HDB">Executive HDB</option>
+
+                  <option
+                    v-for="flatType in flatTypeOptions"
+                    :key="flatType.id"
+                    :value="flatType.id"
+                  >
+                    {{ flatType.name }}
+                  </option>
                 </select>
               </div>
 
               <div class="col-md-6">
-                <label class="form-label fw-semibold">
+                <label
+                  for="occupants"
+                  class="form-label fw-semibold"
+                >
                   Number of Occupants
                 </label>
 
                 <input
+                  id="occupants"
                   type="number"
                   class="form-control"
                   min="1"
+                  step="1"
                   v-model.number="form.occupants"
                   :readonly="propertyMode === 'saved'"
                   required
@@ -522,20 +687,24 @@ onMounted(getData)
               </div>
 
               <div class="col-md-6">
-                <label class="form-label fw-semibold">
+                <label
+                  for="bedrooms"
+                  class="form-label fw-semibold"
+                >
                   Number of Bedrooms
                 </label>
 
                 <input
+                  id="bedrooms"
                   type="number"
                   class="form-control"
                   min="0"
+                  step="1"
                   v-model.number="form.bedrooms"
                   :readonly="propertyMode === 'saved'"
                   required
                 />
               </div>
-
             </div>
           </div>
         </div>
@@ -582,11 +751,15 @@ onMounted(getData)
 
             <!-- DESCRIPTION -->
             <div class="mb-4">
-              <label class="form-label fw-semibold">
+              <label
+                for="description"
+                class="form-label fw-semibold"
+              >
                 Renovation Description
               </label>
 
               <textarea
+                id="description"
                 class="form-control"
                 rows="4"
                 v-model="form.description"
@@ -597,7 +770,10 @@ onMounted(getData)
 
             <!-- BUDGET -->
             <div class="mb-4">
-              <label class="form-label fw-semibold">
+              <label
+                for="budget"
+                class="form-label fw-semibold"
+              >
                 Estimated Budget (S$)
               </label>
 
@@ -605,6 +781,7 @@ onMounted(getData)
                 <span class="input-group-text">S$</span>
 
                 <input
+                  id="budget"
                   type="number"
                   class="form-control"
                   min="1"
@@ -618,11 +795,15 @@ onMounted(getData)
 
             <!-- PREFERRED START DATE -->
             <div class="mb-3">
-              <label class="form-label fw-semibold">
+              <label
+                for="preferredStartDate"
+                class="form-label fw-semibold"
+              >
                 Preferred Start Date (Optional)
               </label>
 
               <input
+                id="preferredStartDate"
                 type="date"
                 class="form-control"
                 v-model="form.preferredStartDate"
@@ -635,7 +816,6 @@ onMounted(getData)
         <!-- SECTION 3: SUBMIT -->
         <div class="card border-0 shadow-sm rounded-4">
           <div class="card-body p-4">
-
             <h4 class="fw-bold mb-3">
               3. {{ isEditMode ? 'Save Changes' : 'Submit Request' }}
             </h4>
@@ -650,7 +830,11 @@ onMounted(getData)
               </p>
             </div>
 
-            <div v-if="errorMessage" class="alert alert-danger">
+            <div
+              v-if="errorMessage"
+              class="alert alert-danger"
+              role="alert"
+            >
               {{ errorMessage }}
             </div>
 
@@ -677,18 +861,15 @@ onMounted(getData)
                 Cancel
               </button>
             </div>
-
           </div>
         </div>
-
       </form>
     </div>
 
     <!-- ERROR LOADING DATA -->
-    <div v-else class="alert alert-danger">
+    <div v-else class="alert alert-danger" role="alert">
       {{ errorMessage || 'Contractor not found.' }}
     </div>
-
   </div>
 </template>
 
