@@ -1,10 +1,19 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore, homeFor } from '@/stores/auth'
 
 const auth = useAuthStore()
 const router = useRouter()
+
+// The navbar's height changes with the screen width and login state, so share it as
+// --nav-h for pages that sit below it (the login scene in auth.css).
+const nav = ref(null)
+const resize = new ResizeObserver(([entry]) => {
+  document.documentElement.style.setProperty('--nav-h', `${entry.borderBoxSize[0].blockSize}px`)
+})
+onMounted(() => resize.observe(nav.value))
+onBeforeUnmount(() => resize.disconnect())
 
 // First letter or digit of the name (company names can start with "#" or "(").
 const initial = computed(() => (auth.user?.name.match(/[A-Za-z0-9]/)?.[0] || '?').toUpperCase())
@@ -19,7 +28,7 @@ async function logout() {
 </script>
 
 <template>
-  <nav class="navbar navbar-expand-lg eco-navbar">
+  <nav ref="nav" class="navbar navbar-expand-lg eco-navbar">
     <div class="container-fluid px-3 px-lg-4">
 
       <RouterLink class="navbar-brand fw-bold" :to="homeFor(auth.user)">
