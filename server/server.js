@@ -52,11 +52,7 @@ function loadGameData() {
 
 const app = express();
 const dbReady = connectDb().then(async (db) => {
-<<<<<<< HEAD
-  await Planner.connectDB();
-=======
   await loadLayouts(db);
->>>>>>> main
   return db;
 });
 const isProduction = process.env.NODE_ENV === 'production';
@@ -69,7 +65,7 @@ if (!process.env.SESSION_SECRET) {
 }
 if (isProduction) app.set('trust proxy', 1);
 
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json());
 
 // Sessions are stored in MongoDB so users stay logged in across restarts.
 app.use(session({
@@ -954,7 +950,7 @@ for (let attempt = 1; attempt <= 3; attempt++) {
     } catch (error) {
       console.error(`PDF ${stage} error:`, error)
 
-      return res.status(500).json({
+      return res.status(500).json({ 
         error: stage === 'storage'
           ? 'PDF text was extracted but could not be saved. Please try again.'
           : stage === 'profile'
@@ -1292,8 +1288,6 @@ function readJson(filename) {
   return JSON.parse(content);
 }
 
-<<<<<<< HEAD
-=======
 // Hide MongoDB's own fields from the Vue page.
 const HIDDEN = {
   projection: {
@@ -1302,7 +1296,6 @@ const HIDDEN = {
   }
 };
 
->>>>>>> main
 // Households and plans belong to the logged-in homeowner: userId is their users._id.
 const ownedBy = (req) => ({ userId: new ObjectId(req.session.userId) });
 
@@ -1370,7 +1363,6 @@ app.get('/api/dev/simulator', auth.requireClient, async (req, res) => {
     }
 });
 
-<<<<<<< HEAD
 // Compare names within the same account and household, including older saved plans.
 async function duplicatePlanName(req, exceptId = '') {
   const plans = await Planner.retrievePlans(req.session.userId);
@@ -1387,43 +1379,6 @@ app.get('/api/planner', auth.requireClient, async (req, res) => {
     users: await Planner.retrieveHouseholds(req.session.userId),
     plans: await Planner.retrievePlans(req.session.userId),
   });
-=======
-
-// GET: return the catalogue plus this account's households and plans.
-app.get("/api/planner", auth.requireClient, async (req, res) => {
-  const catalogue = readJson("appliances.json");
-  for (const appliance of catalogue.appliances) {
-    appliance.type = appliance.type || appliance.name;
-    appliance.location = appliance.location || "Not specified";
-  }
-  const db = getDb();
-
-  const flats = await db
-  .collection("flat_types")
-  .find()
-  .sort({ _id: 1 })
-  .toArray();
-
-  const flatTypes = flats.map((flat) => ({
-    id: flat._id,
-    name: flat.name,
-    bedrooms: flat.bedrooms,
-    rooms: (flat.roomTemplate?.rooms || []).map((room) => room.name),
-  }));
-
-    res.json({
-      appliances: catalogue.appliances,
-      flatTypes,
-      users: await db
-        .collection("households")
-        .find(ownedBy(req), HIDDEN)
-        .toArray(),
-      plans: await db
-        .collection("plans")
-        .find(ownedBy(req), HIDDEN)
-        .toArray(),
-    });
->>>>>>> main
 });
 
 // Resolve saved 3D placements only for a household owned by this account.
@@ -1455,10 +1410,15 @@ app.put("/api/users/:id", auth.requireClient, async (req, res) => {
     return res.status(400).json({ error: "Household name is required." });
   }
   const user = householdBody(req, req.params.id);
-  const result = await getDb()
-    .collection("households")
-    .replaceOne({ ...ownedBy(req), id: req.params.id }, { ...user, ...ownedBy(req) });
-  if (result.matchedCount === 0) {
+  const households = getDb().collection("households");
+  const mine = { ...ownedBy(req), id: req.params.id };
+  // Older households may use their MongoDB _id instead of a separate public id.
+  if (ObjectId.isValid(req.params.id)) {
+    delete mine.id;
+    mine.$or = [{ id: req.params.id }, { _id: new ObjectId(req.params.id) }];
+  }
+  const before = await households.findOne(mine);
+  if (!before) {
     return res.status(404).json({ error: "Household not found." });
   }
 

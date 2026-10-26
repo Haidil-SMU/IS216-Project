@@ -26,6 +26,8 @@ const planSchema = new mongoose.Schema({
   // These objects contain the snapshot and breakdown calculated by the Vue page.
   profile: { type: Object, required: true },
   items: { type: Array, default: [] },
+  layout: { type: Array, default: [] },
+  layoutCapturedAt: String,
   estimate: { type: Object, required: true },
 }, { versionKey: false });
 
@@ -81,11 +83,21 @@ exports.retrieveRooms = async function (household) {
   const catalogue = await CatalogueItem.find({ typeKey: { $in: typeKeys } }, { _id: 0 }).lean();
   for (const room of rooms) {
     for (const placement of room.placements || []) {
+      let details = null;
       for (const item of catalogue) {
         if (item.typeKey === placement.applianceTypeKey) {
-          placement.energyInfo = { name: item.name, category: item.category, ticks: item.ticks, kwhYear: item.kwhYear };
+          details = item;
           break;
         }
+      }
+      if (details) {
+        placement.energyInfo = {
+          name: details.name, category: placement.category || details.category,
+          ticks: details.ticks, kwhYear: details.kwhYear,
+          brand: details.brand, model: details.model,
+          products: Array.isArray(details.products) ? details.products : [],
+          averagePrice: details.averagePriceSgd ?? details.averagePrice ?? details.avgPrice ?? details.priceSgd ?? details.price ?? null,
+        };
       }
     }
   }

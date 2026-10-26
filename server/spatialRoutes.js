@@ -50,6 +50,10 @@ function sanitizePlacements(list) {
     return {
       _id: idFor(p._id) ?? new ObjectId(),
       applianceTypeKey, category,
+      ...(typeof p.name === 'string' ? { name: p.name.trim().slice(0, 160) } : {}),
+      ...(typeof p.brand === 'string' ? { brand: p.brand.trim().slice(0, 100) } : {}),
+      ...(typeof p.model === 'string' ? { model: p.model.trim().slice(0, 160) } : {}),
+      ...(p.kwhYear != null && Number.isFinite(Number(p.kwhYear)) && Number(p.kwhYear) >= 0 ? { kwhYear: Number(p.kwhYear) } : {}),
       ...(tick ? { tick } : {}),
       ...(brand && model ? { brand, model } : {}),
       x: finite(p.x), z: finite(p.z), rotY: finite(p.rotY),

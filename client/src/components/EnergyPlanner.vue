@@ -3,12 +3,15 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import axios from 'axios'
 import Chart from 'chart.js/auto'
+import { factors } from '../stores/energy.js'
+import { resolveSpec } from '../stores/applianceModels.js'
 
 const API_URL = '/api'
 const household = ref(null)
 const plans = ref([])
 const householdId = computed(() => household.value?.id || '')
-const editingPlan = ref(false)
+const editingPlan = ref(true)
+const layoutLoadFailed = ref(false)
 const editor = ref(null)
 const compareIds = ref([])
 const loading = ref(true)
@@ -17,6 +20,34 @@ const loadFailed = ref(false)
 const plannerForm = ref(null)
 const profile = ref({})
 const plan = ref({ id: '', name: 'Everyday plan', days: 30, tariff: 0.32, items: [] })
+// A plan keeps the room geometry and positions as they were when Add plan was pressed.
+const layoutPreview = computed(() => {
+  const rooms = []
+  let minX = 0,
+    minZ = 0,
+    maxX = 1,
+    maxZ = 1
+  for (const room of plan.value.layout || []) {
+    const x = Number(room.origin?.x),
+      z = Number(room.origin?.z)
+    const w = Number(room.dimension?.w),
+      d = Number(room.dimension?.d)
+    if (![x, z, w, d].every(Number.isFinite) || w <= 0 || d <= 0) continue
+    const markers = []
+    for (let index = 0; index < plan.value.items.length; index++) {
+      const item = plan.value.items[index]
+      if (item.roomId === String(room._id) && item.x != null && item.z != null) {
+        markers.push({ x: x + item.x, z: z + item.z, label: index + 1, name: item.name })
+      }
+    }
+    rooms.push({ id: String(room._id), name: room.name || room.type, x, z, w, d, markers })
+    minX = Math.min(minX, x)
+    minZ = Math.min(minZ, z)
+    maxX = Math.max(maxX, x + w)
+    maxZ = Math.max(maxZ, z + d)
+  }
+  return { rooms, viewBox: `${minX - 0.5} ${minZ - 0.5} ${maxX - minX + 1} ${maxZ - minZ + 1}` }
+})
 const householdPlans = computed(() => {
   const result = []
   for (const saved of plans.value) {
@@ -174,6 +205,7 @@ async function load() {
   loadFailed.value = false
   try {
     await getData()
+    if (householdId.value) await startPlan(false)
   } catch {
     loadFailed.value = true
     window.alert('Unable to load the planner. Check that the server is running.')
@@ -185,43 +217,121 @@ onMounted(load)
 // Rooms provide placements; the server resolves their MongoDB energy-rating references.
 function annualEnergy(placement) {
   const details = placement.energyInfo || {}
-  let value = placement.kwhYear
+  let value = details.kwhYear
   if (value == null) value = details.ticks?.[placement.tick]?.kwhYear
-  if (value == null) value = details.kwhYear
+  if (value == null) value = placement.kwhYear
   if (value == null || !Number.isFinite(Number(value)) || Number(value) < 0) return null
   return Number(value)
 }
-async function startPlan() {
+function numberOrNull(value) {
+  return value != null && value !== '' && Number.isFinite(Number(value)) && Number(value) >= 0
+    ? Number(value)
+    : null
+}
+function chooseProduct(item) {
+  const product = item.products?.[item.productIndex]
+  if (!product) return
+  item.brand = product.brand || ''
+  item.model = product.model || ''
+  item.price = numberOrNull(product.priceSgd)
+  const base = numberOrNull(product.kwhYear)
+  item.annualKwh = base == null ? null : base * (item.placementMultiplier ?? 1)
+}
+async function startPlan(scroll = true) {
   if (busy.value || !householdId.value) return
   busy.value = true
+  layoutLoadFailed.value = false
   try {
     const response = await axios.get(
       API_URL + '/planner/households/' + encodeURIComponent(householdId.value) + '/rooms',
     )
     const items = []
-    const electrical = ['kitchen', 'living', 'television', 'laundry', 'lights']
+    const electrical = [
+      'kitchen',
+      'cooling',
+      'entertainment',
+      'laundry',
+      'lighting',
+      'bathroom',
+      'living',
+      'television',
+      'lights',
+    ]
     for (const room of response.data.rooms) {
+      // Windows, furniture and neighbouring appliances all affect placement energy.
+      const placed = []
+      for (const placement of room.placements || []) {
+        placed.push({
+          ...placement,
+          spec: resolveSpec(
+            placement.applianceTypeKey,
+            placement.category || placement.energyInfo?.category,
+          ),
+        })
+      }
       for (const placement of room.placements || []) {
         const details = placement.energyInfo || {}
-        if (!electrical.includes(details.category || placement.category)) continue
-        items.push({
+        if (!electrical.includes(placement.category || details.category)) continue
+        let placementMultiplier = 1
+        if (
+          room.dimension?.w > 0 &&
+          room.dimension?.d > 0 &&
+          Number.isFinite(placement.x) &&
+          Number.isFinite(placement.z)
+        ) {
+          const others = []
+          let current
+          for (let index = 0; index < placed.length; index++) {
+            if (room.placements[index] === placement) current = placed[index]
+            else others.push(placed[index])
+          }
+          const adjustments = factors(room.dimension, others, current)
+          for (const adjustment of Object.values(adjustments)) placementMultiplier += adjustment
+        }
+        const baseEnergy = annualEnergy(placement)
+        const item = {
+          placementMultiplier,
           placementId: String(placement._id || ''),
           roomId: String(room._id),
-          name: details.name || placement.name || placement.applianceTypeKey,
+          name: placement.name || details.name || placement.applianceTypeKey,
+          brand: placement.brand || details.ticks?.[placement.tick]?.brand || details.brand || '',
+          model: placement.model || details.ticks?.[placement.tick]?.model || details.model || '',
+          x: Number.isFinite(placement.x) ? placement.x : null,
+          z: Number.isFinite(placement.z) ? placement.z : null,
+          rotY: placement.rotY ?? 0,
           typeKey: placement.applianceTypeKey,
           tick: placement.tick || '',
           room: room.name || room.type || 'Room',
-          annualKwh: annualEnergy(placement),
+          annualKwh: baseEnergy == null ? null : baseEnergy * placementMultiplier,
           quantity: Number(placement.quantity) || 1,
           usagePercent: 100,
-        })
+          products: Array.isArray(details.products) ? details.products : [],
+          productIndex: 0,
+          price: numberOrNull(details.averagePrice),
+        }
+        for (let index = 0; index < item.products.length; index++) {
+          const product = item.products[index]
+          if (product.brand === item.brand && product.model === item.model)
+            item.productIndex = index
+        }
+        if (item.products.length) chooseProduct(item)
+        items.push(item)
       }
     }
     profile.value = { ...household.value }
-    plan.value = { id: '', name: 'Everyday plan', days: 30, tariff: 0.32, items }
+    plan.value = {
+      id: '',
+      name: 'Everyday plan',
+      days: 30,
+      tariff: 0.32,
+      items,
+      layout: JSON.parse(JSON.stringify(response.data.rooms)),
+      layoutCapturedAt: new Date().toISOString(),
+    }
     editingPlan.value = true
-    await showEditor()
+    if (scroll) await showEditor()
   } catch (err) {
+    layoutLoadFailed.value = true
     window.alert(err.response?.data?.error || 'Unable to load the saved rooms for this household.')
   }
   busy.value = false
@@ -234,8 +344,9 @@ function checkInputs(section) {
   return true
 }
 
-// POST /plans creates a new plan. PUT /plans/:id updates an existing plan.
-async function savePlan(copy = false) {
+// Each save creates a new plan in the database.
+async function savePlan() {
+  if (busy.value) return
   if (!plan.value.items.length) {
     window.alert('No electrical appliances were found in this household’s saved rooms.')
     return
@@ -257,10 +368,7 @@ async function savePlan(copy = false) {
     return
   }
   for (const saved of householdPlans.value) {
-    if (
-      saved.name.trim().toLowerCase() === name.toLowerCase() &&
-      (copy || saved.id !== plan.value.id)
-    ) {
+    if (saved.name.trim().toLowerCase() === name.toLowerCase()) {
       window.alert(
         'A plan with this name already exists in this household. Choose a different name.',
       )
@@ -277,18 +385,14 @@ async function savePlan(copy = false) {
       days: plan.value.days,
       tariff: plan.value.tariff,
       items: plan.value.items,
+      layout: plan.value.layout || [],
+      layoutCapturedAt: plan.value.layoutCapturedAt,
       estimate: totals.value,
     }
-    let response
-    if (plan.value.id === '' || copy) {
-      response = await axios.post(API_URL + '/plans', data)
-    } else {
-      response = await axios.put(API_URL + '/plans/' + plan.value.id, data)
-    }
-    plan.value.id = response.data.id
+    await axios.post(API_URL + '/plans', data)
     compareIds.value = []
     await getData()
-    editingPlan.value = false
+    editingPlan.value = true
     window.alert('Your plan has been saved.')
   } catch (err) {
     console.log(err.message)
@@ -320,6 +424,7 @@ function loadPlan(saved) {
   editingPlan.value = true
   compareIds.value = []
   plan.value = JSON.parse(JSON.stringify(saved))
+  plan.value.days = 30
   profile.value = { ...saved.profile }
   // Older plans retain their saved estimates without looking up a removed catalogue.
   for (let index = 0; index < plan.value.items.length; index++) {
@@ -424,11 +529,6 @@ function estimate(currentPlan) {
                   </p>
                 </div>
               </section>
-              <div class="d-flex justify-content-end mb-3">
-                <button class="btn btn-success rounded-pill px-4" @click="startPlan">
-                  + Add plan
-                </button>
-              </div>
               <section
                 v-if="editingPlan"
                 ref="editor"
@@ -438,10 +538,7 @@ function estimate(currentPlan) {
                 <div class="card border-0 shadow-sm mb-4">
                   <div class="card-body p-4">
                     <div class="d-flex flex-wrap justify-content-between gap-2 mb-3">
-                      <h2 id="plan-title" class="h4 fw-bold mb-0">Build your everyday plan.</h2>
-                      <button class="btn btn-sm btn-outline-success" @click="startPlan">
-                        New plan
-                      </button>
+                      <h2 id="plan-title" class="h4 fw-bold mb-0">Your home energy plan.</h2>
                     </div>
                     <div class="row g-3">
                       <div class="col-md-6">
@@ -454,19 +551,7 @@ function estimate(currentPlan) {
                           required
                         />
                       </div>
-                      <div class="col-6 col-md-3">
-                        <label for="days" class="form-label">Days in month</label
-                        ><input
-                          id="days"
-                          v-model.number="plan.days"
-                          class="form-control"
-                          type="number"
-                          min="28"
-                          max="31"
-                          required
-                        />
-                      </div>
-                      <div class="col-6 col-md-3">
+                      <div class="col-md-6">
                         <label for="tariff" class="form-label">S$ per kWh</label
                         ><input
                           id="tariff"
@@ -488,70 +573,155 @@ function estimate(currentPlan) {
                 </div>
                 <div class="card border-0 shadow-sm">
                   <div class="card-body p-4">
+                    <section class="mb-4" aria-labelledby="layout-preview-title">
+                      <h3 id="layout-preview-title" class="h5">Review your current home layout</h3>
+                      <svg
+                        v-if="layoutPreview.rooms.length"
+                        class="planner-layout-preview"
+                        :viewBox="layoutPreview.viewBox"
+                        role="img"
+                        aria-label="Home layout with numbered appliance positions"
+                      >
+                        <g v-for="room in layoutPreview.rooms" :key="room.id">
+                          <rect
+                            :x="room.x"
+                            :y="room.z"
+                            :width="room.w"
+                            :height="room.d"
+                            class="layout-room"
+                          />
+                          <text :x="room.x + 0.15" :y="room.z + 0.4" class="layout-room-label">
+                            {{ room.name }}
+                          </text>
+                          <g v-for="marker in room.markers" :key="marker.label">
+                            <title>{{ marker.label }}. {{ marker.name }} — {{ room.name }}</title>
+                            <circle :cx="marker.x" :cy="marker.z" r=".22" class="layout-marker" />
+                            <text :x="marker.x" :y="marker.z" class="layout-marker-label">
+                              {{ marker.label }}
+                            </text>
+                          </g>
+                        </g>
+                      </svg>
+                      <p v-else class="small text-secondary">
+                        Room dimensions are not available for a drawing. Review the room and
+                        appliance list below.
+                      </p>
+                    </section>
                     <h3 class="h5">Energy use from your saved rooms</h3>
                     <p class="small text-secondary">
-                      Each entry uses the energy rating saved for its 3D placement. Adjust usage as
-                      a percentage of that annual rating to compare scenarios; 100% uses the full
-                      rated annual consumption.
+                      Choose a product to compare its purchase price and annual energy rating. Basic
+                      appliances use their catalogue rating and average price. Usage at 100%
+                      represents the full annual rating.
                     </p>
                     <p v-if="!plan.items.length">
                       No electrical appliances were found in this household’s saved rooms.
                     </p>
-                    <article v-for="(item, index) in plan.items" :key="index" class="room mb-3">
-                      <h4 class="h6">{{ item.name }}</h4>
-                      <p class="small text-secondary">
-                        {{ item.room }} · Quantity: {{ item.quantity }}
-                        <span v-if="item.tick">· Rating: {{ item.tick }}</span>
-                      </p>
-                      <p v-if="item.annualKwh == null">
-                        Energy information is missing. Update the saved room’s rating before saving
-                        this plan.
-                      </p>
-                      <template v-else>
-                        <p class="small">
-                          Saved rating: {{ item.annualKwh.toFixed(1) }} kWh/year per item.
-                        </p>
-                        <label :for="'plan-usage-' + index" class="form-label"
-                          >Usage (% of annual rating)</label
+                    <p v-if="layoutLoadFailed" class="planner-appliance-details">
+                      The home layout could not load.
+                      <button class="btn btn-outline-success" @click="startPlan">
+                        Retry layout
+                      </button>
+                    </p>
+                    <article
+                      v-for="(item, index) in plan.items"
+                      :key="index"
+                      class="room planner-appliance-card mb-3"
+                    >
+                      <h4 class="h4 fw-bold">{{ index + 1 }}. {{ item.name }}</h4>
+                      <p class="planner-appliance-details">
+                        {{ item.room }}
+                        <span v-if="item.tick"
+                          >· 3D rating: {{ item.tick.replace('_tick', ' ticks') }}</span
                         >
-                        <input
-                          :id="'plan-usage-' + index"
-                          v-model.number="item.usagePercent"
-                          class="form-control"
-                          type="number"
-                          min="0"
-                          max="200"
-                          step="1"
-                          required
-                        />
-                        <p class="small mt-2">
-                          {{ itemEnergy(item, plan.days).toFixed(1) }} kWh/month ·
-                          {{ money(itemEnergy(item, plan.days) * plan.tariff) }}/month
-                        </p>
-                      </template>
+                      </p>
+                      <p v-if="item.x != null && item.z != null" class="planner-appliance-position">
+                        Position in room: {{ item.x.toFixed(2) }} m × {{ item.z.toFixed(2) }} m
+                      </p>
+                      <div v-if="item.products?.length" class="mb-2">
+                        <label :for="'plan-product-' + index" class="form-label fw-bold"
+                          >Brand and model</label
+                        >
+                        <select
+                          :id="'plan-product-' + index"
+                          v-model.number="item.productIndex"
+                          class="form-select"
+                          @change="chooseProduct(item)"
+                        >
+                          <option
+                            v-for="(product, productIndex) in item.products"
+                            :key="productIndex"
+                            :value="productIndex"
+                          >
+                            {{ product.brand }} · {{ product.model }}
+                          </option>
+                        </select>
+                      </div>
+                      <p v-else class="planner-appliance-details">Basic model · {{ item.name }}</p>
+                      <div class="row g-2 mb-2">
+                        <div class="col-sm-6">
+                          <div class="planner-energy-stat">
+                            <span>Annual energy per item</span>
+                            <strong
+                              >{{
+                                item.annualKwh == null ? 'Not available' : item.annualKwh.toFixed(1)
+                              }}
+                              <small v-if="item.annualKwh != null">kWh/year</small></strong
+                            >
+                          </div>
+                        </div>
+                        <div class="col-sm-6">
+                          <div class="planner-price-stat">
+                            <span>Price of item</span>
+                            <strong>{{
+                              item.price == null ? 'Not available' : money(item.price)
+                            }}</strong>
+                          </div>
+                        </div>
+                      </div>
+                      <label :for="'plan-usage-' + index" class="form-label fw-bold"
+                        >Usage (% of annual rating)</label
+                      >
+                      <input
+                        :id="'plan-usage-' + index"
+                        v-model.number="item.usagePercent"
+                        class="form-control"
+                        type="number"
+                        min="0"
+                        max="200"
+                        step="1"
+                        required
+                      />
+                      <p class="planner-monthly-result mt-2 mb-0">
+                        <template v-if="item.annualKwh != null"
+                          >{{ itemEnergy(item, plan.days).toFixed(1) }} kWh/month ·
+                          {{ money(itemEnergy(item, plan.days) * plan.tariff) }}/month</template
+                        >
+                        <template v-else>Monthly estimate unavailable</template>
+                      </p>
                     </article>
-                    <p>
+                    <p class="planner-monthly-result">
                       This plan: {{ totals.kwh.toFixed(1) }} kWh ·
                       {{ money(totals.cost) }} estimated monthly electricity.
+                    </p>
+                    <p class="text-secondary">
+                      Prices and energy figures are catalogue estimates. Purchase prices are
+                      separate from electricity costs.
                     </p>
                     <details class="small text-secondary mb-3">
                       <summary>How the estimate works</summary>
                       <p>
-                        Monthly kWh = saved annual kWh ÷ 365 × days in month × quantity × usage
-                        percentage ÷ 100. Cost = monthly kWh × tariff. Annual ratings are spread
-                        evenly across the year; these are planning estimates, not measured bills.
+                        Annual energy uses the database rating with the 3D map’s placement
+                        adjustments. Monthly kWh = adjusted annual kWh ÷ 365 × 30 days × quantity ×
+                        usage percentage ÷ 100. Cost = monthly kWh × tariff. Annual ratings are
+                        spread evenly across the year; these are planning estimates, not measured
+                        bills.
                       </p>
                     </details>
                     <div class="d-flex flex-wrap gap-2">
-                      <button class="btn btn-success" @click="savePlan(false)">
-                        {{ plan.id ? 'Update plan' : 'Save plan' }}</button
-                      ><button
-                        v-if="plan.id"
-                        class="btn btn-outline-success"
-                        @click="savePlan(true)"
-                      >
-                        Save as new plan</button
-                      ><span v-if="busy" role="status">Saving…</span>
+                      <button class="btn btn-success" :disabled="busy" @click="savePlan">
+                        Save plan
+                      </button>
+                      <span v-if="busy" role="status">Saving…</span>
                     </div>
                   </div>
                 </div>

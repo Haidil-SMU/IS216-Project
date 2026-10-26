@@ -652,3 +652,36 @@ fieldset {
     transition: none;
   }
 }
+.energy-home .planner-layout-preview { display: block; width: 100%; height: 340px; background: #f4faf7; border: 1px solid #d8eade; border-radius: 12px; }
+.energy-home .layout-room { fill: #e7f3ed; stroke: #507969; stroke-width: .05; }
+.energy-home .layout-room-label { fill: #244839; font-size: .3px; }
+.energy-home .layout-marker { fill: #148958; stroke: white; stroke-width: .03; }
+.energy-home .layout-marker-label { fill: white; font-size: .24px; text-anchor: middle; dominant-baseline: central; }
+
+.energy-home .planner-appliance-card { padding: clamp(10px, 1.5vw, 14px); }
+.energy-home .planner-appliance-card .planner-appliance-details, .energy-home .planner-appliance-card .planner-appliance-position { margin-bottom: 5px; }
+.energy-home .planner-appliance-card .form-label { margin-bottom: 2px; }
+.energy-home .planner-appliance-card .planner-monthly-result { padding: 8px 10px; }
+.energy-home .planner-appliance-card .planner-energy-stat, .energy-home .planner-appliance-card .planner-price-stat { padding: 8px 10px; }
+.energy-home .planner-appliance-card,
+.energy-home .planner-appliance-card .planner-appliance-details,
+.energy-home .planner-appliance-card .planner-appliance-position,
+.energy-home .planner-appliance-card .form-label,
+.energy-home .planner-appliance-card .form-select,
+.energy-home .planner-appliance-card .form-control,
+.energy-home .planner-appliance-card .planner-energy-stat span,
+.energy-home .planner-appliance-card .planner-energy-stat strong,
+.energy-home .planner-appliance-card .planner-energy-stat small,
+.energy-home .planner-appliance-card .planner-price-stat span,
+.energy-home .planner-appliance-card .planner-price-stat strong,
+.energy-home .planner-appliance-card .planner-monthly-result { font-size: 15px; }
+.energy-home .planner-appliance-details { font-size: 1.15rem; font-weight: 650; color: #234d3c; }
+.energy-home .planner-appliance-position { font-size: 1.05rem; font-weight: 600; color: #36556a; }
+.energy-home .planner-energy-stat, .energy-home .planner-price-stat { padding: 12px; border-radius: 12px; height: 100%; background: #e0f3e8; color: #145c3d; }
+.energy-home .planner-price-stat { background: #e6eff9; color: #214e78; }
+.energy-home .planner-energy-stat span, .energy-home .planner-price-stat span { display: block; font-size: 1.05rem; font-weight: 600; margin-bottom: 4px; }
+.energy-home .planner-energy-stat strong, .energy-home .planner-price-stat strong { display: block; font-size: clamp(1.6rem, 3vw, 2.2rem); line-height: 1.25; }
+.energy-home .planner-energy-stat small { font-size: 1rem; }
+.energy-home .planner-monthly-result { padding: 16px 20px; border-radius: 12px; background: #145c3d; color: #fff; font-size: clamp(1.2rem, 2vw, 1.5rem); font-weight: 700; }
+
+.energy-home .planner-appliance-card h4 { font-size: 18px; }

@@ -52,7 +52,9 @@ beforeEach(() => {
       ],
     },
   ]
-  api.get.mockImplementation(async (url) => ({ data: url.endsWith('/rooms') ? { rooms } : data }))
+  api.get.mockImplementation(async (url) => ({
+    data: JSON.parse(JSON.stringify(url.endsWith('/rooms') ? { rooms } : data)),
+  }))
   api.post.mockImplementation(async (url, body) => {
     const result = { ...body, id: 'new' }
     data.plans.push(result)
@@ -69,23 +71,19 @@ async function render() {
 function button(w, text) {
   return w.findAll('button').find((b) => b.text().includes(text))
 }
-async function start(w) {
-  await button(w, 'Add plan').trigger('click')
-  await flushPromises()
-}
 it('automatically displays one household with no tabs or household creation', async () => {
   const w = await render()
   expect(w.find('#household-summary-title').text()).toBe('Family home')
   expect(w.find('#household').exists()).toBe(false)
+  expect(w.find('#days').exists()).toBe(false)
   expect(w.text()).not.toContain('Create new household')
-  await start(w)
+  expect(button(w, 'New plan')).toBeUndefined()
   expect(api.get).toHaveBeenCalledWith('/api/planner/households/home/rooms')
   expect(w.findAll('[id^=plan-usage-]')).toHaveLength(1)
   w.unmount()
 })
 it('saves room ratings and adjusted consumption with no brand catalogue', async () => {
   const w = await render()
-  await start(w)
   await w.find('#plan-usage-0').setValue(50)
   await button(w, 'Save plan').trigger('click')
   await flushPromises()
@@ -93,20 +91,22 @@ it('saves room ratings and adjusted consumption with no brand catalogue', async 
     '/api/plans',
     expect.objectContaining({
       householdId: 'home',
+      days: 30,
       estimate: expect.objectContaining({ kwh: 15, cost: 4.8 }),
     }),
   )
   expect(window.alert).toHaveBeenCalledWith('Your plan has been saved.')
-  expect(w.find('#plan-name').exists()).toBe(false)
+  expect(w.find('#plan-name').exists()).toBe(true)
   w.unmount()
 })
 it('blocks missing room energy and handles failed room requests', async () => {
-  const w = await render()
-  api.get.mockRejectedValueOnce(new Error('offline'))
-  await start(w)
-  expect(window.alert).toHaveBeenCalledWith(expect.stringContaining('Unable to load'))
   delete rooms[0].placements[0].tick
-  await start(w)
+  api.get.mockImplementationOnce(async () => ({ data }))
+  api.get.mockRejectedValueOnce(new Error('offline'))
+  const w = await render()
+  expect(window.alert).toHaveBeenCalledWith(expect.stringContaining('Unable to load'))
+  await button(w, 'Retry layout').trigger('click')
+  await flushPromises()
   await button(w, 'Save plan').trigger('click')
   expect(window.alert).toHaveBeenCalledWith(
     expect.stringContaining('Energy information is missing'),
@@ -114,20 +114,26 @@ it('blocks missing room energy and handles failed room requests', async () => {
   expect(api.post).not.toHaveBeenCalled()
   w.unmount()
 })
-it('updates saved plans, rejects duplicate names and deletes after confirmation', async () => {
+it('creates new plans from saved details, rejects duplicate names and deletes after confirmation', async () => {
   data.plans = [saved()]
   const w = await render()
-  await start(w)
   await w.find('#plan-name').setValue(' FIRST ')
   await button(w, 'Save plan').trigger('click')
   expect(window.alert).toHaveBeenCalledWith(expect.stringContaining('already exists'))
   await w.find('[aria-label="View first"]').trigger('click')
-  await button(w, 'Update plan').trigger('click')
+  await button(w, 'Save plan').trigger('click')
+  expect(api.post).not.toHaveBeenCalled()
+  await w.find('#plan-name').setValue('Different plan')
+  await button(w, 'Save plan').trigger('click')
   await flushPromises()
-  expect(api.put).toHaveBeenCalledWith(
-    '/api/plans/first',
-    expect.objectContaining({ name: 'first' }),
+  expect(api.post).toHaveBeenCalledWith(
+    '/api/plans',
+    expect.objectContaining({ name: 'Different plan' }),
   )
+  expect(api.put).not.toHaveBeenCalled()
+  expect(data.plans[0].name).toBe('first')
+  await button(w, 'Save plan').trigger('click')
+  expect(api.post).toHaveBeenCalledTimes(1)
   await button(w, 'Delete').trigger('click')
   await flushPromises()
   expect(api.delete).toHaveBeenCalledWith('/api/plans/first')
@@ -157,5 +163,113 @@ it('shows an empty-account message without crashing', async () => {
   const w = await render()
   expect(w.text()).toContain('No household is linked')
   expect(button(w, 'Add plan')).toBeUndefined()
+  w.unmount()
+})
+
+it('automatically previews the layout and selects product-specific energy and price', async () => {
+  rooms[0].origin = { x: 0, z: 0 }
+  rooms[0].dimension = { w: 4, d: 3, h: 2.6 }
+  Object.assign(rooms[0].placements[0], {
+    category: 'lighting',
+    brand: 'Brand B',
+    model: 'B1',
+    x: 1,
+    z: 2,
+  })
+  rooms[0].placements[0].energyInfo.products = [
+    { brand: 'Brand A', model: 'A1', priceSgd: 100, kwhYear: 730 },
+    { brand: 'Brand B', model: 'B1', priceSgd: 50, kwhYear: 365 },
+  ]
+  const w = await render()
+  expect(button(w, 'Add plan')).toBeUndefined()
+  expect(w.find('.planner-layout-preview').exists()).toBe(true)
+  expect(w.find('#plan-product-0').element.value).toBe('1')
+  expect(w.find('.planner-energy-stat').text()).toContain('365.0')
+  expect(w.find('.planner-price-stat').text()).toContain('S$50.00')
+  await w.find('#plan-product-0').setValue(0)
+  expect(w.find('.planner-energy-stat').text()).toContain('730.0')
+  expect(w.find('.planner-price-stat').text()).toContain('S$100.00')
+  expect(w.find('.planner-monthly-result').text()).toContain('60.0 kWh/month')
+  await button(w, 'Save plan').trigger('click')
+  await flushPromises()
+  expect(data.plans[0].items[0]).toMatchObject({
+    brand: 'Brand A',
+    model: 'A1',
+    price: 100,
+    annualKwh: 730,
+  })
+  rooms[0].placements[0].x = 3
+  await w.find('[aria-label="View Everyday plan"]').trigger('click')
+  expect(w.find('.layout-marker').attributes('cx')).toBe('1')
+  expect(w.find('#plan-product-0').element.value).toBe('0')
+  w.unmount()
+})
+it('shows basic model energy and average price without brand fields or missing-energy warning', async () => {
+  rooms[0].placements[0].energyInfo = {
+    name: 'Basic lamp',
+    category: 'lighting',
+    kwhYear: 100,
+    averagePrice: 25,
+  }
+  const w = await render()
+  expect(w.find('#plan-product-0').exists()).toBe(false)
+  expect(w.find('#plan-brand-0').exists()).toBe(false)
+  expect(w.text()).toContain('Basic model · Basic lamp')
+  expect(w.find('.planner-energy-stat').text()).toContain('100.0')
+  expect(w.find('.planner-price-stat').text()).toContain('Price of item')
+  expect(w.find('.planner-price-stat').text()).toContain('S$25.00')
+  expect(w.text()).not.toContain('Energy information is missing')
+  w.unmount()
+})
+it('includes all current electrical categories on initial load', async () => {
+  rooms[0].placements = [
+    'cooling',
+    'entertainment',
+    'lighting',
+    'bathroom',
+    'laundry',
+    'kitchen',
+  ].map((category, index) => ({ _id: String(index), category, name: category, kwhYear: 365 }))
+  const w = await render()
+  expect(w.findAll('.planner-appliance-card')).toHaveLength(6)
+  expect(w.find('.planner-price-stat').text()).toContain('Not available')
+  w.unmount()
+})
+
+it('adjusts database product energy for placement without compounding on product changes', async () => {
+  rooms[0].dimension = { w: 4, d: 4 }
+  rooms[0].placements = [
+    {
+      _id: 'fridge',
+      applianceTypeKey: 'refrigerator_no_freezer',
+      category: 'kitchen',
+      x: 0.29,
+      z: 2,
+      rotY: 0,
+      wall: -1,
+      t: 0,
+      energyInfo: {
+        name: 'Fridge',
+        kwhYear: 100,
+        products: [
+          { brand: 'A', model: 'A1', priceSgd: 200, kwhYear: 365 },
+          { brand: 'B', model: 'B1', priceSgd: 300, kwhYear: 730 },
+        ],
+      },
+    },
+  ]
+  const w = await render()
+  // No rear clearance adds 10% using the map's placement rules.
+  expect(w.find('.planner-energy-stat').text()).toContain('401.5')
+  await w.find('#plan-product-0').setValue(1)
+  expect(w.find('.planner-energy-stat').text()).toContain('803.0')
+  await w.find('#plan-product-0').setValue(0)
+  expect(w.find('.planner-energy-stat').text()).toContain('401.5')
+  await button(w, 'Save plan').trigger('click')
+  await flushPromises()
+  expect(data.plans[0].items[0].annualKwh).toBeCloseTo(401.5)
+  expect(data.plans[0].items[0].placementMultiplier).toBeCloseTo(1.1)
+  expect(data.plans[0].estimate.kwh).toBeCloseTo(33)
+  expect(data.plans[0].items[0].price).toBe(200)
   w.unmount()
 })
