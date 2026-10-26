@@ -205,26 +205,14 @@
 
       /*
         Exit: src/splash.js turns the splash over like a page, pivoting on its left
-        edge, and two tinted pages follow it before the app shows underneath.
+        edge, while the app fades in underneath.
       */
-      .app-flip-sheet {
-        position: fixed;
-        inset: 0;
-        z-index: 1999;
-        background: #eef8f1;
-      }
-      .app-flip-sheet + .app-flip-sheet {
-        z-index: 1998;
-        background: #e3f3ea;
-      }
       .app-flip-page {
         backface-visibility: hidden;
         transform-origin: left center;
         pointer-events: none;
-        animation: app-flip 0.8s cubic-bezier(0.45, 0.05, 0.35, 1) both;
+        animation: app-flip 1.6s cubic-bezier(0.45, 0, 0.55, 1) both;
       }
-      .app-flip-sheet.app-flip-page { animation-delay: 0.14s; }
-      .app-flip-sheet + .app-flip-sheet.app-flip-page { animation-delay: 0.28s; }
       /* Shade the page as it lifts, darkest at the turning edge */
       .app-flip-page::before {
         content: '';
@@ -232,13 +220,13 @@
         inset: 0;
         z-index: 1;
         background: linear-gradient(to left, rgba(16, 47, 36, 0.3), transparent 70%);
-        animation: app-flip-shade 0.8s ease-in both;
-        animation-delay: inherit;
+        animation: app-flip-shade 1.6s ease-in both;
       }
-      .app-reveal { animation: app-reveal 0.6s ease-out 0.25s both; }
+      .app-reveal { animation: app-reveal 1s ease-out 0.2s both; }
       @keyframes app-flip {
         from { transform: perspective(1800px) rotateY(0); }
-        to { transform: perspective(1800px) rotateY(-180deg); }
+        /* The page is hidden once it passes edge-on, so the turn stops just after */
+        to { transform: perspective(1800px) rotateY(-95deg); }
       }
       @keyframes app-flip-shade {
         from { opacity: 0; }
