@@ -2,15 +2,15 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
 
-// Temporary test household: the Express API retrieves this household from MongoDB.
-const householdId = '6ad89eaa947d323d4c2b0ac0'
+// The Express API retrieves the logged-in user's household from MongoDB.
+const householdId = ref('')
 const rooms = ref([])
 const catalogue = ref([])
+const missingCatalogueKeys = ref([])
 const selectedRoomId = ref('')
 const settingsApplianceId = ref('')
 const loading = ref(false)
 const error = ref('')
-
 const playing = ref(false)
 const finished = ref(false)
 const minute = ref(480)
@@ -18,7 +18,6 @@ const energy = ref(0)
 const cost = ref(0)
 const electricityRate = 0.32 // Demonstration tariff (SGD per kWh)
 const gameSpeed = 1800 // Wait 1.8 real seconds between 10-minute game ticks
-const gameHours = 15 // 8 AM to 11 PM is 15 hours
 
 // Each situation lasts 3 game hours, from 8 AM until 11 PM.
 const currentSituation = ref(null)
@@ -29,46 +28,140 @@ const toast = ref('')
 let timer = null
 let toastTimer = null
 
-//only electrical appliances allowed.
-const allowedCategories = ['kitchen', 'cooling', 'entertainment', 'laundry', 'lighting']
+// These are the actual electrical categories in the updated catalogue_items JSON.
+const allowedCategories = ['kitchen', 'cooling', 'entertainment', 'laundry', 'lighting', 'bathroom']
+
+// Older 3D placements sometimes use typeKeys from the earlier catalogue.
+// Match those keys to the corresponding updated catalogue type where possible.
+const oldTypeKeys = {
+  single_split: 'aircon_split',
+  system_2: 'aircon_split',
+  system_3: 'aircon_split',
+  system_4: 'aircon_split',
+  window: 'aircon_window',
+  casement: 'aircon_window',
+  portable: 'aircon_portable',
+  vrf: 'aircon_vrf_three_phase',
+  '55_inch': 'tv_55_inch_wall_mounted',
+  '65_inch': 'tv_65_inch_wall_mounted',
+  vented: 'dryer_standard',
+  condenser: 'dryer_standard',
+  heat_pump: 'dryer_heat_pump',
+  led_10w: 'light_led_bulb',
+  led_15w: 'light_led_bulb',
+  cfl: 'light_cfl',
+  linear_led: 'light_tube',
+  fluorescent_tube: 'light_tube'
+}
+
 
 function getCatalogueItem(key) {
-  return catalogue.value.find(item => item.typeKey === key)
+  let lookupKey = oldTypeKeys[key] || key
+
+  // Match single-split and multi-split air conditioners
+  if (
+    key.startsWith('aircon_multi_split_') ||
+    key.startsWith('aircon_single_split_')
+  ) {
+    lookupKey = 'aircon_split'
+  }
+
+  // Match condenser clothes dryers
+  if (
+    (key.includes('condenser') || key.includes('condensor')) &&
+    key.includes('dryer')
+  ) {
+    lookupKey = 'dryer_standard'
+  }
+
+  return catalogue.value.find(item => item.typeKey === lookupKey)
 }
-// Read annual kWh for the exact efficiency tick chosen in the 3D home.
-// If no tick was saved, use the catalogue's middle rating as a provisional estimate.
-function getAnnualEnergy(details, tick) {
-  if (!details) return null
 
-  // Use the rating chosen in the 3D household when possible.
-  if (details.ticks && details.ticks[tick]) {
-    const value = Number(details.ticks[tick].kwhYear)
-    if (Number.isFinite(value) && value >= 0) return value
-  }
 
-  // Some appliances, such as rice cookers, have one yearly value.
-  if (details.kwhYear != null) {
-    const value = Number(details.kwhYear)
-    if (Number.isFinite(value) && value >= 0) return value
-  }
+// A placement identifies a 3D appliance type and a selected efficiency tick.
+// It only identifies a specific product when a product model is saved with it.
+function getEnergyDetails(details, placement) {
+  const products = details.products || []
+  const requestedModel = String(placement.productModel || placement.product?.model || placement.model || '').trim().toLowerCase()
+  const requestedBrand = String(placement.productBrand || placement.product?.brand || '').trim().toLowerCase()
 
-  // If no efficiency rating was saved, use the median available value.
-  const values = []
-  const ratings = details.ticks || {}
-  for (const rating in ratings) {
-    const value = Number(ratings[rating].kwhYear)
-    if (Number.isFinite(value) && value > 0) {
-      values.push(value)
+  if (requestedModel) {
+    const chosenProduct = products.find(product =>
+      String(product.model || '').trim().toLowerCase() === requestedModel &&
+      (!requestedBrand || String(product.brand || '').trim().toLowerCase() === requestedBrand)
+    )
+    if (chosenProduct && chosenProduct.kwhYear != null && Number(chosenProduct.kwhYear) > 0) {
+      return {
+        annualKwh: Number(chosenProduct.kwhYear),
+        energySource: 'Selected model',
+        productName: chosenProduct.brand + ' ' + chosenProduct.model,
+        genericEstimate: !chosenProduct.energyVerified
+      }
     }
   }
 
-  if (values.length === 0) return null
-  values.sort((a, b) => a - b)
-  const middle = Math.floor(values.length / 2)
-  if (values.length % 2 === 0) {
-    return (values[middle - 1] + values[middle]) / 2
+  // A selected 3D efficiency tick may match one or more product examples.
+  // Use their middle annual-kWh value as a reference, NOT a claim of owning a model.
+  const selectedTick = Number(String(placement.tick || '').match(/\d+/)?.[0])
+  if (selectedTick >= 1 && selectedTick <= 5) {
+    const matches = products.filter(product =>
+      Number(product.ticks) === selectedTick &&
+      product.kwhYear != null &&
+      Number(product.kwhYear) > 0
+    )
+    if (matches.length) {
+      const verified = matches.filter(product => product.energyVerified === true)
+      const examples = verified.length ? verified : matches
+      const values = examples.map(product => Number(product.kwhYear)).sort((a, b) => a - b)
+      return {
+        annualKwh: values[Math.floor(values.length / 2)],
+        energySource: selectedTick + '-tick product reference',
+        productName: '',
+        genericEstimate: !verified.length
+      }
+    }
   }
-  return values[middle]
+
+  // Product data is not automatically the user's actual model.
+  // If no model/tick match is available, use the catalogue type's general estimate.
+  if (details.kwhYear != null && Number(details.kwhYear) > 0) {
+    return {
+      annualKwh: Number(details.kwhYear),
+      energySource: 'Catalogue type estimate',
+      productName: '',
+      genericEstimate: true
+    }
+  }
+
+  return { annualKwh: null, energySource: 'Unknown', productName: '', genericEstimate: true }
+}
+
+// The updated products[] stores yearly kWh, not rated power in kW.
+// Converting it to hourly power needs assumed typical operating hours.
+// These are GAME assumptions, based on the catalogue descriptions where possible.
+function typicalHoursPerYear(typeKey) {
+  if (typeKey.startsWith('refrigerator') || typeKey === 'commercial_storage_refrigerator') return 365 * 24
+  if (typeKey.startsWith('aircon')) return 365 * 8
+  if (typeKey === 'ceiling_fan') return 365 * 8
+  if (typeKey === 'stand_fan') return 365 * 6
+  if (typeKey === 'air_purifier') return 365 * 12
+  if (typeKey === 'dehumidifier') return 365 * 3.5
+  if (typeKey.startsWith('tv_')) return 365 * 5
+  if (typeKey === 'desktop_computer') return 365 * 4
+  if (typeKey.startsWith('light_') || typeKey === 'floor_lamp') return 365 * 5
+  if (typeKey === 'microwave_oven') return 365 * (20 / 60)
+  if (typeKey === 'rice_cooker') return 365 * 0.75
+  if (typeKey === 'air_fryer') return 365 * (25 / 60)
+  if (typeKey === 'induction_cooker') return 365 * 0.5
+  if (typeKey === 'electric_kettle') return 365 * (14 / 60)
+  if (typeKey === 'toaster') return 365 * (8 / 60)
+  if (typeKey === 'dishwasher') return 52 * 5 * 1.5 // Five cycles weekly, estimated 1.5 h/cycle
+  if (typeKey.startsWith('washer_')) return 52 * 4 * 1.5 // Four loads weekly
+  if (typeKey.startsWith('dryer_')) return 52 * 4 * 1.5 // Assumed four loads weekly
+  if (typeKey === 'instant_water_heater') return 365 * 0.5 // Approximate shower heating time
+  if (typeKey === 'storage_water_heater') return 365 * 24 // Standby consumption is included
+  if (typeKey === 'exhaust_fan') return 365 * 1
+  return 365 * 5 // General fallback, not a measured operating schedule
 }
 
 function prettyName(key) {
@@ -86,7 +179,19 @@ function iconFor(key) {
   return '🔌'
 }
 // Only show settings appropriate for recognized electrical appliances.
-function controlTypeFor(name, category) {
+// Settings are GENERAL GAME CONTROLS for a catalogue appliance type.
+// The products[] data does not prove a particular brand/model supports every control.
+function controlTypeFor(name, category, typeKey) {
+  const key = String(typeKey || '')
+  if (key === 'air_purifier') return 'purifier'
+  if (key === 'dehumidifier') return 'dehumidifier'
+  if (key === 'dishwasher') return 'dishwasher'
+  if (key === 'desktop_computer') return 'computer'
+  if (key === 'exhaust_fan') return 'exhaust'
+  if (key === 'rice_cooker') return 'ricecooker'
+  if (key === 'induction_cooker') return 'induction'
+  if (key === 'electric_kettle' || key === 'toaster') return '' // No adjustable control specified in the catalogue
+
   const text = String(name).toLowerCase()
   if (/air.?con|air condition|split unit|system[_ -]?[234]|vrf/.test(text)) return 'aircon'
   if (/fan|circulator/.test(text) && !/extractor|hood/.test(text)) return 'fan'
@@ -106,87 +211,94 @@ function defaultSetting(type) {
   if (type === 'fan') return { speed: '2', oscillation: 'On' }
   if (type === 'light') return { brightness: 100 }
   if (type === 'tv') return { picture: 'Normal' }
-  if (type === 'washer') return { mode: 'Normal', water: 'Cold' }
-  if (type === 'dryer') return { mode: 'Normal' }
-  if (type === 'heater') return { temperature: 40 }
+  if (type === 'washer') return { mode: 'Normal', water: 'Warm' }
+  if (type === 'dryer' || type === 'dishwasher') return { mode: 'Normal' }
+  if (type === 'heater') return { temperature: 45 }
   if (type === 'fridge') return { temperature: 4 }
-  if (type === 'microwave') return { level: 'Medium' }
+  if (type === 'microwave' || type === 'induction') return { level: 'High' }
   if (type === 'airfryer' || type === 'oven') return { temperature: 180 }
+  if (type === 'purifier') return { speed: 'Auto' }
+  if (type === 'dehumidifier') return { humidity: 65 }
+  if (type === 'computer') return { mode: 'Normal' }
+  if (type === 'exhaust') return { speed: 'High' }
+  if (type === 'ricecooker') return { mode: 'Cook' }
   return {}
 }
 function settingsDescription(item) {
-  if (item.controlType === 'aircon') return `${item.setting.temperature}°C · ${item.setting.mode} · ${item.setting.speed}`
-  if (item.controlType === 'fan') return `Speed ${item.setting.speed} · Oscillation ${item.setting.oscillation}`
-  if (item.controlType === 'light') return `${item.setting.brightness}% brightness`
-  if (item.controlType === 'tv') return `${item.setting.picture} picture`
-  if (item.controlType === 'washer') return `${item.setting.mode} · ${item.setting.water} wash`
-  if (item.controlType === 'dryer') return `${item.setting.mode} mode`
-  if (item.controlType === 'heater' || item.controlType === 'fridge' || item.controlType === 'airfryer' || item.controlType === 'oven') return `${item.setting.temperature}°C`
-  if (item.controlType === 'microwave') return `${item.setting.level} power`
+  const setting = item.setting
+  if (item.controlType === 'aircon') return `${setting.temperature}°C · ${setting.mode} · ${setting.speed}`
+  if (item.controlType === 'fan') return `Speed ${setting.speed} · Oscillation ${setting.oscillation}`
+  if (item.controlType === 'light') return `${setting.brightness}% brightness`
+  if (item.controlType === 'tv') return `${setting.picture} picture`
+  if (item.controlType === 'washer') return `${setting.mode} · ${setting.water} wash`
+  if (['dryer', 'dishwasher', 'computer', 'ricecooker'].includes(item.controlType)) return `${setting.mode} mode`
+  if (['heater', 'fridge', 'airfryer', 'oven'].includes(item.controlType)) return `${setting.temperature}°C`
+  if (item.controlType === 'microwave' || item.controlType === 'induction') return `${setting.level} power`
+  if (item.controlType === 'purifier' || item.controlType === 'exhaust') return `${setting.speed} speed`
+  if (item.controlType === 'dehumidifier') return `${setting.humidity}% target humidity`
   return ''
 }
-// ANNUAL-kWh GAME MODEL
-// Annual kWh / 365 gives the reference energy for one whole day.
-// Dividing by 15 spreads that amount equally across our 8 AM–11 PM game.
-// This is a GAME assumption, not the appliance's actual measured kW.
-// Multipliers below are also illustrative. They let settings affect energy use.
+// Power = estimated operating kW from the catalogue's annual kWh reference.
+// Settings change power with ILLUSTRATIVE GAME MULTIPLIERS, not manufacturer measurements.
 function effectivePower(item) {
-  if (item.annualKwh == null) return 0
+  if (item.basePowerKw == null) return 0
 
-  let power = item.annualKwh / 365 / gameHours
+  let power = item.basePowerKw
   const setting = item.setting
   const type = item.controlType
 
   if (type === 'aircon') {
-    if (setting.mode === 'Fan') {
-      power = power * 0.12
-    } else if (setting.mode === 'Dry') {
-      power = power * 0.75
-    } else {
-      let temperatureFactor = 1 + (25 - setting.temperature) * 0.08
-      temperatureFactor = Math.max(0.55, Math.min(1.35, temperatureFactor))
-      power = power * temperatureFactor
-      if (setting.speed === 'High') power = power * 1.08
-      if (setting.speed === 'Low') power = power * 0.94
+    if (setting.mode === 'Fan') power *= 0.12
+    else if (setting.mode === 'Dry') power *= 0.75
+    else {
+      const factor = Math.max(0.55, Math.min(1.35, 1 + (25 - setting.temperature) * 0.08))
+      power *= factor
+      if (setting.speed === 'High') power *= 1.08
+      if (setting.speed === 'Low') power *= 0.94
     }
   }
-
   if (type === 'fan') {
-    if (setting.speed === '1') power = power * 0.55
-    if (setting.speed === '2') power = power * 0.8
+    if (setting.speed === '1') power *= 0.55
+    if (setting.speed === '2') power *= 0.8
   }
-
-  if (type === 'light') power = power * (setting.brightness / 100)
-
+  if (type === 'light') power *= setting.brightness / 100
   if (type === 'tv') {
-    if (setting.picture === 'Eco') power = power * 0.75
-    if (setting.picture === 'Vivid') power = power * 1.15
+    if (setting.picture === 'Eco') power *= 0.75
+    if (setting.picture === 'Vivid') power *= 1.15
   }
-
   if (type === 'washer') {
-    if (setting.mode === 'Eco') power = power * 0.7
-    if (setting.mode === 'Intensive') power = power * 1.25
-    if (setting.water === 'Warm') power = power * 1.3
+    if (setting.mode === 'Eco') power *= 0.7
+    if (setting.mode === 'Intensive') power *= 1.25
+    if (setting.water === 'Warm') power *= 1.3
   }
-
   if (type === 'dryer') {
-    if (setting.mode === 'Eco') power = power * 0.8
-    if (setting.mode === 'Quick') power = power * 1.15
+    if (setting.mode === 'Eco') power *= 0.8
+    if (setting.mode === 'Quick') power *= 1.15
   }
-
-  if (type === 'heater') {
-    power = power * Math.max(0.6, Math.min(1.2, 1 + (setting.temperature - 40) * 0.025))
+  if (type === 'dishwasher') {
+    if (setting.mode === 'Eco') power *= 0.75
+    if (setting.mode === 'Intensive') power *= 1.2
   }
-  if (type === 'fridge') {
-    power = power * Math.max(0.8, Math.min(1.25, 1 + (4 - setting.temperature) * 0.07))
+  if (type === 'heater') power *= Math.max(0.6, Math.min(1.2, 1 + (setting.temperature - 40) * 0.025))
+  if (type === 'fridge') power *= Math.max(0.8, Math.min(1.25, 1 + (4 - setting.temperature) * 0.07))
+  if (type === 'microwave' || type === 'induction') {
+    if (setting.level === 'Low') power *= 0.45
+    if (setting.level === 'Medium') power *= 0.7
   }
-  if (type === 'microwave') {
-    if (setting.level === 'Low') power = power * 0.45
-    if (setting.level === 'Medium') power = power * 0.7
+  if (type === 'oven' || type === 'airfryer') power *= Math.max(0.7, Math.min(1.2, 1 + (setting.temperature - 180) * 0.002))
+  if (type === 'purifier') {
+    if (setting.speed === 'Low') power *= 0.6
+    if (setting.speed === 'High') power *= 1.3
   }
-  if (type === 'oven' || type === 'airfryer') {
-    power = power * Math.max(0.7, Math.min(1.2, 1 + (setting.temperature - 180) * 0.002))
+  if (type === 'dehumidifier') power *= Math.max(0.7, Math.min(1.2, 1 + (60 - setting.humidity) * 0.018))
+  if (type === 'computer') {
+    if (setting.mode === 'Eco') power *= 0.65
+    if (setting.mode === 'Performance') power *= 1.2
   }
+  if (type === 'exhaust') {
+    if (setting.speed === 'Low') power *= 0.65
+  }
+  if (type === 'ricecooker' && setting.mode === 'Keep Warm') power *= 0.2
 
   return power
 }
@@ -214,10 +326,14 @@ async function loadRooms() {
   loading.value = true
   error.value = ''
   rooms.value = []
+  missingCatalogueKeys.value = []
   selectedRoomId.value = ''
 
   try {
-    const response = await axios.get('/api/dev/simulator')
+    const response = await axios.get('/api/simulator')
+
+    householdId.value = response.data.householdId
+
     const records = response.data.rooms
     const items = response.data.items
 
@@ -227,7 +343,7 @@ async function loadRooms() {
 
     catalogue.value = items
 
-    // Ordinary loops are easier to follow than several nested map/filter calls.
+    // Go through every room
     for (const room of records) {
       const newRoom = {
         id: String(room._id?.$oid || room._id),
@@ -237,23 +353,71 @@ async function loadRooms() {
         appliances: []
       }
 
+      // Go through every placement in the room
       for (const placement of room.placements || []) {
-        const details = getCatalogueItem(placement.applianceTypeKey)
-        if (!details) continue
-        if (!allowedCategories.includes(details.category)) continue
 
-        const type = controlTypeFor(details.name + ' ' + details.typeKey, details.category)
-        const yearly = getAnnualEnergy(details, placement.tick)
-        const selectedRating = details.ticks && details.ticks[placement.tick]
+        // Only include electrical appliances based on category
+        if (!allowedCategories.includes(placement.category)) {
+          continue
+        }
 
+        // Try to find appliance information in catalogue
+        let details = getCatalogueItem(placement.applianceTypeKey)
+
+        // If not found, still include the appliance
+        if (!details) {
+          if (!missingCatalogueKeys.value.includes(placement.applianceTypeKey)) {
+            missingCatalogueKeys.value.push(placement.applianceTypeKey)
+          }
+
+          let applianceName = prettyName(placement.applianceTypeKey)
+
+          if (
+            placement.applianceTypeKey.includes('condenser') ||
+            placement.applianceTypeKey.includes('condensor')
+          ) {
+            applianceName = 'Condenser Clothes Dryer'
+          }
+
+          details = {
+            typeKey: placement.applianceTypeKey,
+            name: applianceName,
+            category: placement.category,
+            kwhYear: null,
+            products: []
+          }
+        }
+
+        // Identify the available appliance settings
+        const type = controlTypeFor(
+          details.name + ' ' + details.typeKey,
+          details.category,
+          details.typeKey
+        )
+
+        // Retrieve electricity information
+        const energyDetails = getEnergyDetails(details, placement)
+
+        const annualKwh = energyDetails.annualKwh
+        const hoursPerYear = typicalHoursPerYear(details.typeKey)
+
+        const basePowerKw = annualKwh == null
+          ? null
+          : annualKwh / hoursPerYear
+
+        // Add appliance to its room
         newRoom.appliances.push({
           id: String(placement._id?.$oid || placement._id),
           key: placement.applianceTypeKey,
+          typeKey: details.typeKey,
           name: details.name,
-          category: details.category,
+          category: placement.category,
           tick: placement.tick || '',
-          annualKwh: yearly,
-          estimatedRating: !selectedRating && details.kwhYear == null,
+          annualKwh: annualKwh,
+          basePowerKw: basePowerKw,
+          energySource: energyDetails.energySource,
+          productName: energyDetails.productName,
+          genericEstimate: energyDetails.genericEstimate,
           icon: iconFor(details.name + ' ' + placement.applianceTypeKey),
           on: false,
           controlType: type,
@@ -265,10 +429,15 @@ async function loadRooms() {
     }
 
     rooms.value.sort((a, b) => a.order - b.order)
+
     selectedRoomId.value = rooms.value[0]?.id || ''
+
     resetGame()
+
   } catch (err) {
-    error.value = err.response?.data?.error || err.message || 'Could not load household'
+    error.value = err.response?.data?.error ||
+                  err.message ||
+                  'Could not load household'
   } finally {
     loading.value = false
   }
@@ -295,7 +464,7 @@ const currentPower = computed(() => {
   return total
 })
 const unknownAnnualCount = computed(() => allAppliances.value.filter(item => item.annualKwh == null).length)
-const estimatedRatingCount = computed(() => allAppliances.value.filter(item => item.annualKwh != null && item.estimatedRating).length)
+const genericEstimateCount = computed(() => allAppliances.value.filter(item => item.annualKwh != null && item.genericEstimate).length)
 const progress = computed(() => Math.min(100, (minute.value - 480) / 900 * 100))
 const timeText = computed(() => formatTime(minute.value))
 const nextChangeMinute = computed(() => 480 + (periodIndex.value + 1) * 180)
@@ -402,6 +571,8 @@ function chooseRandom(items) {
   return items[Math.floor(Math.random() * items.length)]
 }
 
+// Every 3-hour situation builds a different set of missions using the devices
+// actually present in the logged-in user's rooms. No appliance = no such mission.
 function startSituation(index) {
   periodIndex.value = index
   currentSituation.value = pickSituation(index)
@@ -409,187 +580,257 @@ function startSituation(index) {
 
   const usedIds = []
   const devices = allAppliances.value.filter(item => !isEssential(item))
-  const lights = devices.filter(isLight)
-  const televisions = devices.filter(isTelevision)
-  const cooling = devices.filter(isCooling)
-  const cooking = devices.filter(isCooking)
-  const laundry = devices.filter(isLaundry)
+  const situation = currentSituation.value.key
 
-  // Add a task to switch on a real appliance, but only if it is OFF already.
-  // Don't switch an appliance off just to make the player turn it on again.
-  function addOnGoal(candidates, title, reason) {
-    const choices = candidates.filter(item => !usedIds.includes(item.id) && !item.on)
+  function available(items) {
+    return items.filter(item => !usedIds.includes(item.id))
+  }
+  function appliancesOf(...types) {
+    return devices.filter(item => types.includes(item.controlType))
+  }
+  function addOnGoal(items, title, reason) {
+    const choices = available(items).filter(item => !item.on)
     if (!choices.length) return false
-
     const item = chooseRandom(choices)
     usedIds.push(item.id)
     missions.value.push({
-      title,
-      detail: `${reason} Turn on ${item.name} in ${applianceRoom(item)}.`,
+      title, detail: `${reason} Turn on ${item.name} in ${applianceRoom(item)}.`,
       action: 'on', targetId: item.id, done: false
     })
     return true
   }
-
-  // Simulate an unnecessary appliance left running. Never do this with a fridge.
-  function addOffGoal(candidates, title, reason) {
-    const choices = candidates.filter(item => !usedIds.includes(item.id) && !isEssential(item))
+  function addOffGoal(items, title, reason) {
+    const choices = available(items)
     if (!choices.length) return false
-
-    // Prefer a device that is already running, otherwise one has been left ON.
     const running = choices.filter(item => item.on)
     const item = chooseRandom(running.length ? running : choices)
-    item.on = true
+    item.on = true // A simulated appliance was left running
     usedIds.push(item.id)
     missions.value.push({
-      title,
-      detail: `${reason} Find ${item.name} in ${applianceRoom(item)} and switch it off.`,
+      title, detail: `${reason} Switch off ${item.name} in ${applianceRoom(item)}.`,
       action: 'off', targetId: item.id, done: false
     })
     return true
   }
-
-  // Appliance-settings missions: only choose controls that exist in this home.
-  // These are gameplay controls; actual model-specific capabilities may vary.
-  function addSettingGoal(candidates, title, reason, settingKey, targetValue, comparison = 'equals') {
-    const choices = []
-    for (const item of candidates) {
-      if (usedIds.includes(item.id)) continue
-      if (!item.controlType) continue
-      if (item.setting[settingKey] === undefined) continue
-      if (settingMatches(item.setting[settingKey], targetValue, comparison)) continue
-      choices.push(item)
-    }
-    if (choices.length === 0) return false
-
+  function addSettingGoal(items, title, reason, key, target, comparison = 'equals') {
+    const choices = available(items).filter(item =>
+      item.setting[key] !== undefined && !settingMatches(item.setting[key], target, comparison)
+    )
+    if (!choices.length) return false
     const item = chooseRandom(choices)
-    usedIds.push(item.id)
     item.on = true
-
-    let instruction = 'Set ' + settingKey + ' to ' + targetValue
-    if (comparison === 'atLeast') instruction = 'Set ' + settingKey + ' to at least ' + targetValue
-    if (comparison === 'atMost') instruction = 'Set ' + settingKey + ' to at most ' + targetValue
-    if (settingKey === 'temperature') instruction = instruction + '°C'
-    if (settingKey === 'brightness') instruction = instruction + '%'
-
+    usedIds.push(item.id)
+    let direction = 'Set ' + key + ' to ' + target
+    if (comparison === 'atLeast') direction = 'Set ' + key + ' to at least ' + target
+    if (comparison === 'atMost') direction = 'Set ' + key + ' to at most ' + target
+    if (key === 'temperature') direction += '°C'
+    if (key === 'brightness' || key === 'humidity') direction += '%'
     missions.value.push({
-      title: title,
-      detail: reason + ' Open Settings for ' + item.name + ' in ' + applianceRoom(item) + '. ' + instruction + '.',
-      action: 'setting',
-      targetId: item.id,
-      settingKey: settingKey,
-      targetValue: targetValue,
-      comparison: comparison,
+      title,
+      detail: `${reason} In ${applianceRoom(item)}, open Settings for ${item.name}. ${direction}.`,
+      action: 'setting', targetId: item.id,
+      settingKey: key, targetValue: target, comparison, done: false
+    })
+    return true
+  }
+  // Different from a single settings click: sustain efficient operation for 30 game minutes.
+  function addHoldGoal(items, title, reason, key, target, comparison = 'equals') {
+    const choices = available(items).filter(item => item.setting[key] !== undefined)
+    if (!choices.length) return false
+    const item = chooseRandom(choices)
+    item.on = true
+    usedIds.push(item.id)
+    const instruction = comparison === 'atLeast' ? `at least ${target}` : comparison === 'atMost' ? `at most ${target}` : String(target)
+    const unit = key === 'temperature' ? '°C' : key === 'humidity' || key === 'brightness' ? '%' : ''
+    missions.value.push({
+      title,
+      detail: `${reason} Keep ${item.name} ON in ${applianceRoom(item)} with ${key} ${instruction}${unit} for 30 continuous game minutes.`,
+      action: 'hold', targetId: item.id,
+      settingKey: key, targetValue: target, comparison,
+      progress: 0, duration: 30, done: false
+    })
+    return true
+  }
+  // Combined challenge: run a fan and air conditioner together with sensible settings.
+  function addComboGoal() {
+    const aircons = available(appliancesOf('aircon'))
+    const fans = available(appliancesOf('fan'))
+    if (!aircons.length || !fans.length) return false
+    const ac = chooseRandom(aircons)
+    const fan = chooseRandom(fans)
+    usedIds.push(ac.id, fan.id)
+    // Do not pre-complete the challenge; players must switch on both.
+    ac.on = false
+    fan.on = false
+    missions.value.push({
+      title: 'Team up fan and aircon',
+      detail: `Turn ON ${ac.name} in ${applianceRoom(ac)} and ${fan.name} in ${applianceRoom(fan)}. Set the aircon to at least 26°C to avoid overcooling.`,
+      action: 'combo', targetId: ac.id, secondId: fan.id,
       done: false
     })
     return true
   }
+  // Restore a mistakenly changed fridge setting, rather than telling users to turn it off.
+  function addFridgeGoal() {
+    const fridges = available(allAppliances.value.filter(item => isEssential(item)))
+    if (!fridges.length) return false
+    const item = chooseRandom(fridges)
+    item.on = true
+    item.setting.temperature = 7 // A simulated 'fridge set too warm' incident
+    usedIds.push(item.id)
+    missions.value.push({
+      title: 'Fix the refrigerator temperature',
+      detail: `Someone set ${item.name} in ${applianceRoom(item)} too warm. Keep it ON and set its temperature to 5°C or lower (ideally about 4°C).`,
+      action: 'setting', targetId: item.id,
+      settingKey: 'temperature', targetValue: 5,
+      comparison: 'atMost', done: false
+    })
+    return true
+  }
+  // Achieve a power cap for 30 continuous game minutes during peak demand.
+  function addPowerGoal() {
+    const essentialPower = allAppliances.value
+      .filter(item => isEssential(item) && item.on)
+      .reduce((sum, item) => sum + effectivePower(item), 0)
+    const current = currentPower.value
+    const adjustable = current - essentialPower
+    if (adjustable < 0.05) return false
+    const limit = essentialPower + adjustable * 0.65
+    missions.value.push({
+      title: 'Beat the peak-power target',
+      detail: `Keep total simulated power at or below ${limit.toFixed(2)} kW for 30 continuous game minutes. Adjust settings or turn off unnecessary devices.`,
+      action: 'powerHold', limitKw: limit,
+      progress: 0, duration: 30, done: false
+    })
+    return true
+  }
 
-  // An exploration goal is always possible even in a household with no devices.
-  if (rooms.value.length) {
+  // All tasks below are possible only with a matching appliance category/control.
+  const lights = devices.filter(isLight)
+  const televisions = devices.filter(isTelevision)
+  const cooking = devices.filter(isCooking)
+  const laundry = devices.filter(isLaundry)
+  const cooling = devices.filter(isCooling)
+  const purifier = appliancesOf('purifier')
+  const dehumidifier = appliancesOf('dehumidifier')
+  const computer = appliancesOf('computer')
+  const dishwasher = appliancesOf('dishwasher')
+  const exhaust = appliancesOf('exhaust')
+  const riceCooker = appliancesOf('ricecooker')
+
+  // Some periods prioritise reducing waste, others require comfortable/healthy operation.
+  // Choose different missions from the pool, not the same fixed three every time.
+  const goals = []
+  if (situation === 'sunny') {
+    goals.push(
+      () => addSettingGoal(lights.filter(item => item.controlType === 'light'), 'Use sunlight instead of full brightness', 'The sun is already lighting the room.', 'brightness', 50, 'atMost'),
+      () => addSettingGoal(appliancesOf('fan'), 'Choose a gentle fan speed', 'The weather is comfortable.', 'speed', '1'),
+      () => addSettingGoal(televisions, 'Try Eco picture mode', 'Watching TV does not need maximum display power.', 'picture', 'Eco'),
+      () => addSettingGoal(computer, 'Enable computer Eco mode', 'Reduce simulated computing demand while doing light tasks.', 'mode', 'Eco'),
+      () => addOffGoal(lights, 'Turn off unnecessary daylight lighting', 'Natural light is available.'),
+      () => addOffGoal(televisions, 'Switch off the idle TV', 'Nobody is watching.'),
+      () => addOffGoal(cooking, 'Avoid wasted kitchen electricity', 'No cooking is taking place.'),
+      () => addSettingGoal(appliancesOf('induction'), 'Reduce induction cooking power', 'Use medium power when simmering does not need maximum heat.', 'level', 'Medium'),
+      () => addSettingGoal(riceCooker, 'Switch the rice cooker to Keep Warm', 'The simulated rice has finished cooking.', 'mode', 'Keep Warm'),
+      () => addFridgeGoal()
+    )
+  }
+  if (situation === 'heat') {
+    goals.push(
+      () => addComboGoal(),
+      () => addSettingGoal(appliancesOf('aircon'), 'Raise the cooling setpoint', 'Avoid overcooling the home.', 'temperature', 26, 'atLeast'),
+      () => addHoldGoal(appliancesOf('aircon'), 'Keep cooling efficient for 30 minutes', 'Keep a comfortable, moderate cooling setting.', 'temperature', 26, 'atLeast'),
+      () => addSettingGoal(appliancesOf('fan'), 'Use the fan at a gentle speed', 'Comfortable airflow may not require a high setting.', 'speed', '1'),
+      () => addOnGoal(cooling, 'Stay comfortable in the heat', 'Use your existing cooling equipment where it is needed.'),
+      () => addOffGoal([...cooking, ...laundry], 'Reduce avoidable indoor heat', 'This unnecessary appliance adds heat.'),
+      () => addSettingGoal(appliancesOf('heater'), 'Lower water-heating demand', 'A lower setpoint can reduce heating energy.', 'temperature', 40, 'atMost')
+    )
+  }
+  if (situation === 'rain') {
+    goals.push(
+      () => addSettingGoal(dehumidifier, 'Lower excess humidity', 'Rainy weather may make the home damp.', 'humidity', 55, 'atMost'),
+      () => addHoldGoal(dehumidifier, 'Control indoor moisture for 30 minutes', 'Run the dehumidifier with a moderate humidity target.', 'humidity', 55, 'atMost'),
+      () => addSettingGoal(appliancesOf('washer'), 'Choose a cold wash', 'Cold water avoids additional water-heating energy.', 'water', 'Cold'),
+      () => addSettingGoal(dishwasher, 'Use the dishwasher Eco cycle', 'An Eco wash can reduce estimated electricity use.', 'mode', 'Eco'),
+      () => addSettingGoal(lights.filter(item => item.controlType === 'light'), 'Use moderate rainy-day lighting', 'Cloudy weather does not always require full brightness.', 'brightness', 60, 'atMost'),
+      () => addOnGoal(lights, 'Light up a gloomy room', 'Rain clouds are making the home darker.'),
+      () => addOffGoal(laundry, 'Pause unnecessary laundry equipment', 'Avoid running an unattended cycle.'),
+      () => addSettingGoal(exhaust, 'Reduce unnecessary ventilation speed', 'Use low speed when high ventilation is not required.', 'speed', 'Low')
+    )
+  }
+  if (situation === 'haze') {
+    goals.push(
+      () => addOnGoal(purifier, 'Run the air purifier', 'Help filter indoor air during the haze.'),
+      () => addHoldGoal(purifier, 'Maintain air filtration for 30 minutes', 'During haze, running a purifier is more important than saving a little fan electricity.', 'speed', 'High'),
+      () => addSettingGoal(purifier, 'Increase purifier filtration speed', 'Use higher filtration speed when outdoor air is hazy.', 'speed', 'High'),
+      () => addOffGoal(exhaust, 'Avoid unnecessary exhaust ventilation', 'Reduce avoidable intake of outdoor haze when ventilation is not needed.'),
+      () => addOffGoal(cooking, 'Avoid unnecessary indoor cooking fumes', 'Reduce avoidable sources of indoor particles.'),
+      () => addSettingGoal(computer, 'Use computer Eco mode indoors', 'Save energy during indoor activities.', 'mode', 'Eco'),
+      () => addSettingGoal(appliancesOf('aircon'), 'Avoid excessive cooling indoors', 'Cooling can stay moderate during haze.', 'temperature', 26, 'atLeast')
+    )
+  }
+  if (situation === 'peak') {
+    goals.push(
+      () => addSettingGoal(appliancesOf('washer', 'dryer', 'dishwasher'), 'Choose an Eco appliance cycle', 'Reduce demand during the evening peak.', 'mode', 'Eco'),
+      () => addHoldGoal(appliancesOf('dryer', 'washer', 'dishwasher'), 'Stay in Eco mode for 30 minutes', 'Keep a laundry or cleaning appliance on its simulated Eco cycle.', 'mode', 'Eco'),
+      () => addSettingGoal(computer, 'Reduce computer peak demand', 'Use the computer Eco profile.', 'mode', 'Eco'),
+      () => addSettingGoal(televisions, 'Switch TV to Eco picture', 'Avoid high display power during peak hours.', 'picture', 'Eco'),
+      () => addSettingGoal(appliancesOf('aircon'), 'Reduce peak cooling load', 'Raise the aircon setpoint.', 'temperature', 27, 'atLeast'),
+      () => addSettingGoal(appliancesOf('heater'), 'Choose a moderate hot-water temperature', 'Avoid unnecessary high water-heating demand.', 'temperature', 40, 'atMost'),
+      () => addSettingGoal(lights.filter(item => item.controlType === 'light'), 'Dim lights during peak hours', 'Use only the brightness you need.', 'brightness', 50, 'atMost'),
+      () => addOffGoal(laundry, 'Stop unnecessary peak laundry loads', 'This cycle is not needed right now.'),
+      () => addOffGoal([...televisions, ...computer], 'Switch off idle entertainment', 'Screens left on waste electricity.'),
+      () => addOffGoal(cooking, 'Stop unnecessary cooking appliances', 'Reduce avoidable peak-time demand.'),
+      () => addSettingGoal(appliancesOf('microwave', 'induction'), 'Reduce instantaneous cooking power', 'Use a lower power setting if the task allows it.', 'level', 'Medium')
+    )
+  }
+  if (situation === 'night') {
+    goals.push(
+      () => addSettingGoal(lights.filter(item => item.controlType === 'light'), 'Dim lights for bedtime', 'Use softer evening lighting.', 'brightness', 30, 'atMost'),
+      () => addSettingGoal(appliancesOf('aircon'), 'Use a gentler night temperature', 'Avoid excessive cooling overnight.', 'temperature', 26, 'atLeast'),
+      () => addHoldGoal(appliancesOf('aircon'), 'Keep a comfortable night setting', 'Maintain energy-conscious cooling while winding down.', 'temperature', 26, 'atLeast'),
+      () => addSettingGoal(televisions, 'Lower TV display demand', 'Use the Eco picture setting.', 'picture', 'Eco'),
+      () => addSettingGoal(appliancesOf('fan'), 'Reduce fan speed at night', 'Keep a gentle breeze.', 'speed', '1'),
+      () => addOffGoal(televisions, 'Turn off the television before bed', 'Nobody is watching anymore.'),
+      () => addOffGoal(lights, 'Turn off unused lights', 'The room is empty.'),
+      () => addOffGoal([...cooking, ...laundry], 'Shut down unused appliances', 'Avoid unnecessary nighttime usage.'),
+      () => addFridgeGoal()
+    )
+  }
+
+  // Randomize candidate order, but prefer household-specific missions over generic visits.
+  // Aim for up to three device goals and one room inspection goal.
+  const shuffledGoals = goals.sort(() => Math.random() - 0.5)
+  const powerChallenge = situation === 'peak' || situation === 'night'
+  for (const attempt of shuffledGoals) {
+    if (missions.value.length >= (powerChallenge ? 2 : 3)) break
+    attempt()
+  }
+
+  // Peak-power challenge comes after some appliances have been switched on.
+  // If insufficient electricity is running, select another ordinary objective.
+  if (powerChallenge && missions.value.length < 3) addPowerGoal()
+  if (missions.value.length < 3) {
+    for (const attempt of shuffledGoals) {
+      if (missions.value.length >= 3) break
+      attempt()
+    }
+  }
+
+  // Fallback for a sparse home: still offer a real appliance task when possible.
+  if (!missions.value.length && devices.length) {
+    addOffGoal(devices, 'Find an appliance left on', 'An unused appliance is wasting electricity.')
+  }
+
+  // Visiting a room is a separate exploration task, if the home has rooms.
+  if (rooms.value.length > 1) {
     const otherRooms = rooms.value.filter(room => room.id !== selectedRoomId.value)
-    const room = chooseRandom(otherRooms.length ? otherRooms : rooms.value)
+    const room = chooseRandom(otherRooms)
     missions.value.push({
       title: currentSituation.value.roomGoal,
-      detail: `Visit ${room.name} to check the situation.`,
+      detail: `Visit ${room.name} to inspect the household during this situation.`,
       action: 'visit', targetId: room.id, done: false
     })
-  }
-
-  // Each situation has its own preferred appliance tasks. A missing device
-  // means that task is skipped or replaced, never assigned to the player.
-  const situation = currentSituation.value.key
-
-  // Prefer a setting-based challenge during each situation. Fall back to ON/OFF
-  // missions if the household does not have a suitable adjustable appliance.
-  if (situation === 'sunny') {
-    if (!addSettingGoal(devices.filter(item => item.controlType === 'light'), 'Dim lights for daylight', 'Natural sunlight is available.', 'brightness', 50, 'atMost')) {
-      addSettingGoal(devices.filter(item => item.controlType === 'fan'), 'Use a gentle breeze', 'Comfortable weather means maximum fan speed is unnecessary.', 'speed', '1')
-    }
-  }
-  if (situation === 'heat') {
-    if (!addSettingGoal(devices.filter(item => item.controlType === 'aircon'), 'Raise aircon temperature', 'Save cooling energy while staying comfortable.', 'temperature', 26, 'atLeast')) {
-      addSettingGoal(devices.filter(item => item.controlType === 'fan'), 'Choose an efficient fan speed', 'Use a moderate fan setting.', 'speed', '2')
-    }
-  }
-  if (situation === 'rain') {
-    if (!addSettingGoal(devices.filter(item => item.controlType === 'washer'), 'Choose a cold wash', 'Save water-heating energy on laundry.', 'water', 'Cold')) {
-      addSettingGoal(devices.filter(item => item.controlType === 'light'), 'Use moderate lighting', 'Cloudy skies do not always require full brightness.', 'brightness', 60, 'atMost')
-    }
-  }
-  if (situation === 'haze') {
-    if (!addSettingGoal(devices.filter(item => item.controlType === 'aircon'), 'Use moderate cooling', 'Keep indoor cooling energy-conscious.', 'temperature', 26, 'atLeast')) {
-      addSettingGoal(devices.filter(item => item.controlType === 'fan'), 'Lower the fan speed', 'Avoid unnecessary high fan power.', 'speed', '1')
-    }
-  }
-  if (situation === 'peak') {
-    if (!addSettingGoal(devices.filter(item => item.controlType === 'washer' || item.controlType === 'dryer'), 'Select Eco cycle', 'Reduce simulated electricity consumption during peak demand.', 'mode', 'Eco')) {
-      if (!addSettingGoal(devices.filter(item => item.controlType === 'aircon'), 'Reduce cooling demand', 'Raise the cooling setpoint.', 'temperature', 27, 'atLeast')) {
-        addSettingGoal(devices.filter(item => item.controlType === 'light'), 'Dim household lights', 'Reduce avoidable lighting demand.', 'brightness', 40, 'atMost')
-      }
-    }
-  }
-  if (situation === 'night') {
-    if (!addSettingGoal(devices.filter(item => item.controlType === 'light'), 'Dim evening lights', 'Use softer lighting before bedtime.', 'brightness', 30, 'atMost')) {
-      addSettingGoal(devices.filter(item => item.controlType === 'aircon'), 'Set a gentler night temperature', 'Avoid excessive cooling overnight.', 'temperature', 26, 'atLeast')
-    }
-  }
-
-  if (situation === 'sunny') {
-    // Sunlight is available: lights and unused entertainment are wasteful.
-    addOffGoal(lights, 'Use natural daylight', 'It is sunny outside, so extra lighting is not needed.')
-    addOffGoal(televisions, 'Avoid unnecessary screen time', 'The television has been left running.') ||
-      addOffGoal([...cooking, ...laundry], 'Switch off an unused appliance', 'Nobody is using this device.')
-  }
-
-  if (situation === 'heat') {
-    // Cooling can be useful, but heat-producing devices should not run unused.
-    addOnGoal(cooling, 'Cool the room', 'Temperatures are climbing. Use the available cooling appliance if needed.')
-    addOffGoal([...cooking, ...laundry], 'Reduce unnecessary indoor heat', 'An unattended cooking or laundry appliance adds heat.') ||
-      addOffGoal(lights, 'Avoid extra heat from lighting', 'Daylight is bright enough without unnecessary lights.')
-  }
-
-  if (situation === 'rain') {
-    // Dark clouds may require lighting; unused entertainment still wastes power.
-    addOnGoal(lights, 'Light up a gloomy room', 'Rain clouds have darkened the home.')
-    addOffGoal(televisions, 'Switch off unused entertainment', 'The television was left on during the storm.') ||
-      addOffGoal([...cooking, ...laundry], 'Avoid wasting electricity', 'The appliance is running even though it is not being used.')
-  }
-
-  if (situation === 'haze') {
-    // A cooking device can produce indoor particles; do not claim AC filters haze.
-    addOffGoal(cooking, 'Reduce avoidable indoor fumes', 'During haze, avoid running unnecessary cooking equipment.')
-    addOnGoal(cooling, 'Stay comfortable indoors', 'The room is warm while you are staying inside.') ||
-      addOffGoal(televisions, 'Switch off unused entertainment', 'Keep your indoor activities energy-conscious.')
-  }
-
-  if (situation === 'peak') {
-    // Prioritise power-hungry appliance types without inventing live wattage.
-    addOffGoal([...cooling, ...laundry], 'Reduce peak-hour demand', 'Avoid using unnecessary cooling or laundry equipment during peak hours.') ||
-      addOffGoal(cooking, 'Avoid unnecessary peak-hour cooking', 'This cooking appliance is running needlessly.')
-    addOffGoal([...televisions, ...lights], 'Cut standby-time waste', 'Turn off an unnecessary screen or light.') ||
-      addOffGoal(cooking, 'Switch off another unused appliance', 'Every avoidable device adds to demand.')
-  }
-
-  if (situation === 'night') {
-    // Evening wind-down: fewer lights and entertainment devices should run.
-    addOffGoal(lights, 'Turn off unused lights', 'It is bedtime, and this room no longer needs lighting.')
-    addOffGoal(televisions, 'Switch off the television', 'The television has been left on before bedtime.') ||
-      addOffGoal([...cooking, ...laundry], 'Shut down the evening appliances', 'Nobody is using this device anymore.')
-  }
-
-  // If none of the situation-specific appliance tasks are available, use one
-  // safe, achievable energy-saving task from another non-essential device.
-  if (missions.value.length < 2 && devices.length) {
-    const fallbackText = {
-      sunny: 'Sunlight is plentiful, so avoid unnecessary electricity use.',
-      heat: 'The household is already hot. Avoid adding waste heat from idle devices.',
-      rain: 'During the rainy spell, avoid leaving devices on unnecessarily.',
-      haze: 'While staying indoors during the haze, minimise unnecessary electricity use.',
-      peak: 'Electricity demand is high. Switch off devices that are not needed.',
-      night: 'Before bedtime, make sure idle appliances are turned off.'
-    }
-    addOffGoal(devices, 'Switch off an unused appliance', fallbackText[situation])
   }
 
   showToast(`${currentSituation.value.icon} New situation: ${currentSituation.value.title}`)
@@ -609,7 +850,40 @@ function settingMatches(value, target, comparison) {
   if (comparison === 'atMost') return Number(value) <= Number(target)
   return String(value) === String(target)
 }
+function checkComboGoals() {
+  if (!playing.value || finished.value) return
+  for (const goal of missions.value) {
+    if (goal.done || goal.action !== 'combo') continue
+    const aircon = allAppliances.value.find(item => item.id === goal.targetId)
+    const fan = allAppliances.value.find(item => item.id === goal.secondId)
+    if (aircon?.on && fan?.on && aircon.setting.temperature >= 26) {
+      goal.done = true
+      showToast(`✅ Mission complete: ${goal.title}`)
+    }
+  }
+}
+// Sustained goals only make progress while the player maintains the required state.
+function checkTimedGoals(step) {
+  for (const goal of missions.value) {
+    if (goal.done) continue
+    let passing = false
+    if (goal.action === 'hold') {
+      const item = allAppliances.value.find(appliance => appliance.id === goal.targetId)
+      passing = !!item?.on && settingMatches(item.setting[goal.settingKey], goal.targetValue, goal.comparison)
+    }
+    if (goal.action === 'powerHold') {
+      passing = currentPower.value <= goal.limitKw
+    }
+    if (goal.action !== 'hold' && goal.action !== 'powerHold') continue
+    goal.progress = passing ? goal.progress + step : 0
+    if (goal.progress >= goal.duration) {
+      goal.done = true
+      showToast(`✅ Mission complete: ${goal.title}`)
+    }
+  }
+}
 function checkSettingGoals(item) {
+  checkComboGoals()
   if (!playing.value || finished.value) return
   for (const goal of missions.value) {
     if (!goal.done && goal.action === 'setting' && goal.targetId === item.id &&
@@ -637,6 +911,7 @@ function toggleAppliance(item) {
   if (!playing.value || finished.value) return
   item.on = !item.on
   completeGoals(item.on ? 'on' : 'off', item.id)
+  checkComboGoals()
   if (!missions.value.some(goal => goal.targetId === item.id && goal.done)) {
     showToast(`${item.name} switched ${item.on ? 'ON' : 'OFF'}`)
   }
@@ -685,6 +960,7 @@ function gameTick() {
   const energyThisTick = currentPower.value * hoursPassed
   energy.value = energy.value + energyThisTick
   cost.value = cost.value + energyThisTick * electricityRate
+  checkTimedGoals(step)
 
   // Every 3 game hours the old checklist is archived and replaced.
   if (minute.value >= 1380) {
@@ -821,7 +1097,8 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
                   <button type="button" class="device-tile" :class="{ powered: item.on }" :disabled="!playing || finished" @click="toggleAppliance(item)">
                     <span class="device-emoji">{{ item.icon }}</span>
                     <strong>{{ item.name }}</strong>
-                    <span class="device-power">{{ item.annualKwh != null ? item.annualKwh + ' kWh/year' : 'Annual kWh unavailable' }}</span>
+                    <span class="device-power">{{ item.basePowerKw != null ? item.basePowerKw.toFixed(3) + ' estimated kW' : 'Power estimate unavailable' }}</span>
+                    <span class="device-power">{{ item.productName || item.energySource }}</span>
                     <span class="switch" :class="{ on: item.on }"><span></span></span>
                   </button>
                   <button v-if="item.controlType" type="button" class="settings-button" :disabled="!playing || finished" @click="openSettings(item)">
@@ -845,10 +1122,15 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
                   <div v-if="item.controlType === 'fan'" class="setting-row"><label>Oscillation</label><select @change="checkSettingGoals(item)" v-model="item.setting.oscillation"><option>On</option><option>Off</option></select></div>
                   <div v-if="item.controlType === 'light'" class="setting-row"><label>Brightness: {{ item.setting.brightness }}%</label><input @input="checkSettingGoals(item)" v-model.number="item.setting.brightness" type="range" min="10" max="100" step="10" /></div>
                   <div v-if="item.controlType === 'tv'" class="setting-row"><label>Picture mode</label><select @change="checkSettingGoals(item)" v-model="item.setting.picture"><option>Eco</option><option>Normal</option><option>Vivid</option></select></div>
-                  <div v-if="item.controlType === 'washer' || item.controlType === 'dryer'" class="setting-row"><label>Cycle</label><select @change="checkSettingGoals(item)" v-model="item.setting.mode"><option>Eco</option><option>Normal</option><option v-if="item.controlType === 'washer'">Intensive</option><option v-else>Quick</option></select></div>
+                  <div v-if="item.controlType === 'washer' || item.controlType === 'dryer' || item.controlType === 'dishwasher'" class="setting-row"><label>Cycle</label><select @change="checkSettingGoals(item)" v-model="item.setting.mode"><option>Eco</option><option>Normal</option><option v-if="item.controlType === 'washer' || item.controlType === 'dishwasher'">Intensive</option><option v-else>Quick</option></select></div>
                   <div v-if="item.controlType === 'washer'" class="setting-row"><label>Water</label><select @change="checkSettingGoals(item)" v-model="item.setting.water"><option>Cold</option><option>Warm</option></select></div>
-                  <div v-if="item.controlType === 'microwave'" class="setting-row"><label>Power level</label><select @change="checkSettingGoals(item)" v-model="item.setting.level"><option>Low</option><option>Medium</option><option>High</option></select></div>
-                  <small class="settings-note">The game spreads each appliance’s annual kWh across 365 days and 15 game hours. Settings use illustrative multipliers; these are not measured power ratings. Oscillation does not change this estimate.</small>
+                  <div v-if="item.controlType === 'microwave' || item.controlType === 'induction'" class="setting-row"><label>Power level</label><select @change="checkSettingGoals(item)" v-model="item.setting.level"><option>Low</option><option>Medium</option><option>High</option></select></div>
+                  <div v-if="item.controlType === 'purifier'" class="setting-row"><label>Air filtration speed</label><select @change="checkSettingGoals(item)" v-model="item.setting.speed"><option>Low</option><option>Auto</option><option>High</option></select></div>
+                  <div v-if="item.controlType === 'dehumidifier'" class="setting-row"><label>Target humidity: {{ item.setting.humidity }}%</label><input @input="checkSettingGoals(item)" v-model.number="item.setting.humidity" type="range" min="45" max="65" step="5" /></div>
+                  <div v-if="item.controlType === 'computer'" class="setting-row"><label>Power profile</label><select @change="checkSettingGoals(item)" v-model="item.setting.mode"><option>Eco</option><option>Normal</option><option>Performance</option></select></div>
+                  <div v-if="item.controlType === 'exhaust'" class="setting-row"><label>Ventilation speed</label><select @change="checkSettingGoals(item)" v-model="item.setting.speed"><option>Low</option><option>High</option></select></div>
+                  <div v-if="item.controlType === 'ricecooker'" class="setting-row"><label>Cooking state</label><select @change="checkSettingGoals(item)" v-model="item.setting.mode"><option>Cook</option><option>Keep Warm</option></select></div>
+                  <small class="settings-note">Power is estimated from catalogue annual kWh and assumed typical operating hours, not a measured wattage. Setting multipliers are illustrative. Oscillation does not change this estimate.</small>
                 </div>
                 <div v-if="!selectedRoom.appliances.length" class="empty-devices">No electrical appliances placed in this room yet.</div>
               </div>
@@ -876,7 +1158,7 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
             <div class="current-goals">
               <div v-for="(mission, i) in missions" :key="periodIndex + '-' + i" class="checklist-item" :class="{ completed: mission.done }">
                 <span class="check-square">{{ mission.done ? '✓' : '' }}</span>
-                <div><strong>{{ mission.title }}</strong><p>{{ mission.detail }}</p></div>
+                <div><strong>{{ mission.title }}</strong><p>{{ mission.detail }}</p><small v-if="mission.action === 'hold' || mission.action === 'powerHold'">{{ mission.progress }} / {{ mission.duration }} game minutes sustained</small></div>
               </div>
               <p v-if="!missions.length" class="mission-intro">No missions for this household yet.</p>
             </div>
@@ -884,9 +1166,10 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
           </section>
         </aside>
       </div>
-      <p class="calculation-note">⚡ Simplified energy model: annual kWh ÷ 365 ÷ 15, counted only while each appliance is ON. This is a gameplay estimate, not a measured electricity bill.
-        <span v-if="estimatedRatingCount"> {{ estimatedRatingCount }} appliance(s) had no saved efficiency tick, so their middle catalogue rating was used.</span>
-        <span v-if="unknownAnnualCount"> ⚠ {{ unknownAnnualCount }} appliance(s) have no annual kWh data and cannot be counted.</span>
+      <p class="calculation-note">⚡ Simulation estimate: energy (kWh) = estimated operating power (kW) × time ON (hours). The updated catalogue provides annual kWh, not rated power, so operating kW is inferred from typical usage hours. These are not measured electricity readings.
+        <span v-if="genericEstimateCount"> {{ genericEstimateCount }} appliance(s) use unverified or general catalogue estimates.</span>
+        <span v-if="unknownAnnualCount"> ⚠ {{ unknownAnnualCount }} appliance(s) have no usable energy data and cannot be counted.</span>
+        <span v-if="missingCatalogueKeys.length"> ⚠ Unmatched 3D appliance types: {{ missingCatalogueKeys.join(', ') }}.</span>
       </p>
       <footer class="game-footer">HDB ECOHOME · ENERGY QUEST <span>REAL HOUSEHOLD DATA · SIMULATED SCENARIOS</span></footer>
     </main>

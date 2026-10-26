@@ -8,6 +8,7 @@ const { getDb } = require('./db');
 
 const scryptAsync = promisify(scrypt);
 const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+const ONE_HOUR = 60 * 60 * 1000;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // At least 8 characters with an uppercase letter, a lowercase letter, a number and a symbol.
@@ -78,9 +79,8 @@ function startSession(req, user, { remember = false, keep = {} } = {}) {
       req.session.userId = user._id.toString();
       req.session.role = roleOf(user);
       Object.assign(req.session, keep);
-      // "Remember me" keeps the cookie for 30 days, otherwise it ends with the browser.
-      if (remember) req.session.cookie.maxAge = THIRTY_DAYS;
-      else req.session.cookie.expires = false;
+      // "Remember me" keeps the cookie for 30 days, otherwise it ends after an hour idle.
+      req.session.cookie.maxAge = remember ? THIRTY_DAYS : ONE_HOUR;
       req.session.save((saveError) => (saveError ? reject(saveError) : resolve()));
     });
   });
