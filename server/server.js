@@ -1375,7 +1375,16 @@ async function duplicatePlanName(req, exceptId = '') {
 
 // GET: read this account's existing households and saved energy plans.
 app.get('/api/planner', auth.requireClient, async (req, res) => {
+  // Profile shares this endpoint and needs the database flat types to render its form.
+  const flats = await getDb().collection('flat_types').find().sort({ _id: 1 }).toArray();
+  const flatTypes = flats.map((flat) => ({
+    id: flat._id,
+    name: flat.name,
+    bedrooms: flat.bedrooms,
+    rooms: (flat.roomTemplate?.rooms || []).map((room) => room.name),
+  }));
   res.json({
+    flatTypes,
     users: await Planner.retrieveHouseholds(req.session.userId),
     plans: await Planner.retrievePlans(req.session.userId),
   });
@@ -1397,9 +1406,10 @@ app.post("/api/users", auth.requireClient, async (req, res) => {
     return res.status(409).json({ error: "This account already has a household. Edit it instead." });
   }
   const user = householdBody(req, randomUUID());
-  await getDb()
+  const { insertedId } = await getDb()
     .collection("households")
     .insertOne({ ...user, ...ownedBy(req) });
+  req.session.householdId = String(insertedId);
   delete req.session.myinfoDraft;
   res.status(201).json(user);
 });

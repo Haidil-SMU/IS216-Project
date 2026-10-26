@@ -3,8 +3,19 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import axios from 'axios'
 import Chart from 'chart.js/auto'
+import plannerNoticeImage from '../assets/planner-notice.svg'
 import { factors } from '../stores/energy.js'
 import { resolveSpec } from '../stores/applianceModels.js'
+
+const noticeDialog = ref(null)
+const noticeMessage = ref('')
+const noticeTitle = ref('A quick heads-up')
+async function showNotice(message, title = 'A quick heads-up') {
+  noticeMessage.value = message
+  noticeTitle.value = title
+  await nextTick()
+  if (noticeDialog.value && !noticeDialog.value.open) noticeDialog.value.showModal()
+}
 
 const API_URL = '/api'
 const household = ref(null)
@@ -208,7 +219,7 @@ async function load() {
     if (householdId.value) await startPlan(false)
   } catch {
     loadFailed.value = true
-    window.alert('Unable to load the planner. Check that the server is running.')
+    showNotice('Unable to load the planner. Check that the server is running.')
   }
   loading.value = false
 }
@@ -332,7 +343,7 @@ async function startPlan(scroll = true) {
     if (scroll) await showEditor()
   } catch (err) {
     layoutLoadFailed.value = true
-    window.alert(err.response?.data?.error || 'Unable to load the saved rooms for this household.')
+    showNotice(err.response?.data?.error || 'Unable to load the saved rooms for this household.')
   }
   busy.value = false
 }
@@ -348,12 +359,12 @@ function checkInputs(section) {
 async function savePlan() {
   if (busy.value) return
   if (!plan.value.items.length) {
-    window.alert('No electrical appliances were found in this household’s saved rooms.')
+    showNotice('No electrical appliances were found in this household’s saved rooms.')
     return
   }
   for (const item of plan.value.items) {
     if (item.annualKwh == null) {
-      window.alert(
+      showNotice(
         'Energy information is missing for ' +
           item.name +
           '. Save a valid energy rating in the room data before creating this plan.',
@@ -364,14 +375,12 @@ async function savePlan() {
   if (!checkInputs(editor.value)) return
   const name = plan.value.name.trim()
   if (!name) {
-    window.alert('Please enter a plan name.')
+    showNotice('Please enter a plan name.')
     return
   }
   for (const saved of householdPlans.value) {
     if (saved.name.trim().toLowerCase() === name.toLowerCase()) {
-      window.alert(
-        'A plan with this name already exists in this household. Choose a different name.',
-      )
+      showNotice('A plan with this name already exists in this household. Choose a different name.')
       return
     }
   }
@@ -393,10 +402,10 @@ async function savePlan() {
     compareIds.value = []
     await getData()
     editingPlan.value = true
-    window.alert('Your plan has been saved.')
+    showNotice('Your plan has been saved.', 'Plan saved!')
   } catch (err) {
     console.log(err.message)
-    window.alert(err.response?.data?.error || 'Unable to save the plan.')
+    showNotice(err.response?.data?.error || 'Unable to save the plan.')
   }
   busy.value = false
 }
@@ -411,10 +420,10 @@ async function deletePlan(saved) {
     const index = compareIds.value.indexOf(saved.id)
     if (index !== -1) compareIds.value.splice(index, 1)
     await getData()
-    window.alert('Plan deleted.')
+    showNotice('Plan deleted.', 'Plan deleted')
   } catch (err) {
     console.log(err.message)
-    window.alert('Unable to delete the plan.')
+    showNotice('Unable to delete the plan.')
   }
   busy.value = false
 }
@@ -476,6 +485,38 @@ function estimate(currentPlan) {
 </script>
 <template>
   <div class="planner-page energy-home">
+    <dialog
+      ref="noticeDialog"
+      class="planner-notice"
+      aria-labelledby="planner-notice-title"
+      aria-describedby="planner-notice-message"
+      @click.self="noticeDialog.close()"
+    >
+      <div class="planner-notice-art">
+        <button
+          type="button"
+          class="planner-notice-close"
+          aria-label="Close notification"
+          @click="noticeDialog.close()"
+        >
+          ×
+        </button>
+        <img :src="plannerNoticeImage" alt="" width="240" height="160" />
+      </div>
+      <div class="planner-notice-body">
+        <p class="planner-notice-eyebrow">YOUR HOME ENERGY</p>
+        <h2 id="planner-notice-title">{{ noticeTitle }}</h2>
+        <p id="planner-notice-message">{{ noticeMessage }}</p>
+        <button
+          type="button"
+          class="btn btn-success rounded-pill w-100"
+          autofocus
+          @click="noticeDialog.close()"
+        >
+          Got it
+        </button>
+      </div>
+    </dialog>
     <div class="planner-sky" aria-hidden="true">
       <div class="planner-sun"></div>
       <div class="planner-cloud cloud-left"></div>

@@ -34,6 +34,12 @@ beforeEach(() => {
   vi.clearAllMocks()
   charts.configs = []
   window.alert = vi.fn()
+  HTMLDialogElement.prototype.showModal = function () {
+    this.open = true
+  }
+  HTMLDialogElement.prototype.close = function () {
+    this.open = false
+  }
   window.confirm = vi.fn(() => true)
   Element.prototype.scrollIntoView = vi.fn()
   data = { users: [home], plans: [] }
@@ -95,7 +101,11 @@ it('saves room ratings and adjusted consumption with no brand catalogue', async 
       estimate: expect.objectContaining({ kwh: 15, cost: 4.8 }),
     }),
   )
-  expect(window.alert).toHaveBeenCalledWith('Your plan has been saved.')
+  expect(w.find('#planner-notice-message').text()).toBe('Your plan has been saved.')
+  expect(w.find('dialog').element.open).toBe(true)
+  await button(w, 'Got it').trigger('click')
+  expect(w.find('dialog').element.open).toBe(false)
+  expect(window.alert).not.toHaveBeenCalled()
   expect(w.find('#plan-name').exists()).toBe(true)
   w.unmount()
 })
@@ -104,13 +114,11 @@ it('blocks missing room energy and handles failed room requests', async () => {
   api.get.mockImplementationOnce(async () => ({ data }))
   api.get.mockRejectedValueOnce(new Error('offline'))
   const w = await render()
-  expect(window.alert).toHaveBeenCalledWith(expect.stringContaining('Unable to load'))
+  expect(w.find('#planner-notice-message').text()).toContain('Unable to load')
   await button(w, 'Retry layout').trigger('click')
   await flushPromises()
   await button(w, 'Save plan').trigger('click')
-  expect(window.alert).toHaveBeenCalledWith(
-    expect.stringContaining('Energy information is missing'),
-  )
+  expect(w.find('#planner-notice-message').text()).toContain('Energy information is missing')
   expect(api.post).not.toHaveBeenCalled()
   w.unmount()
 })
@@ -119,7 +127,7 @@ it('creates new plans from saved details, rejects duplicate names and deletes af
   const w = await render()
   await w.find('#plan-name').setValue(' FIRST ')
   await button(w, 'Save plan').trigger('click')
-  expect(window.alert).toHaveBeenCalledWith(expect.stringContaining('already exists'))
+  expect(w.find('#planner-notice-message').text()).toContain('already exists')
   await w.find('[aria-label="View first"]').trigger('click')
   await button(w, 'Save plan').trigger('click')
   expect(api.post).not.toHaveBeenCalled()

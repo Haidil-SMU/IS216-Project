@@ -91,7 +91,10 @@ async function connectDb() {
   );
   await migrateUserIds(db);
   await db.collection('households').createIndex({ userId: 1, id: 1 });
-  await db.collection('plans').createIndex({ userId: 1, id: 1 });
+  await db.collection('plans').createIndex(
+    { userId: 1, householdId: 1, nameKey: 1 },
+    { unique: true, partialFilterExpression: { nameKey: { $type: 'string' } } },
+  );
   // One business profile per contractor account, and per UEN.
   await db.collection('contractors').createIndex({ userId: 1 }, { unique: true });
   await db.collection('contractors').createIndex(

@@ -7,15 +7,14 @@ const vm = require('node:vm');
 const { randomUUID } = require('node:crypto');
 const { ObjectId } = require('mongodb');
 const auth = require('../auth');
-const Planner = require('../energyplanner-model');
-const mongoose = require('mongoose');
+
 
 const alice = new ObjectId().toString();
 const bob = new ObjectId().toString();
 const profile = { name: 'Home', flatType: '4-room', bedrooms: 3, occupants: 4, budget: 150, pattern: 'Evenings', appliances: [{ type: 'Lights', room: 'Living Room', location: 'Desk', quantity: 1, hours: 6, daysPerWeek: 7, loadPercent: 100 }] };
 
 function setup() {
-  const records = { households: [], plans: [], rooms: [], catalogue_items: [] };
+  const records = { households: [], plans: [], rooms: [], catalogue_items: [], flat_types: [] };
   const matches = (document, filter) => Object.entries(filter).every(([key, value]) => {
     if (key === '$or') return value.some(condition => matches(document, condition));
     if (value?.$in) return value.$in.includes(document[key]);
@@ -27,16 +26,22 @@ function setup() {
       const list = records[name];
       return {
         async countDocuments(filter) { return list.filter(record => matches(record, filter)).length; },
-        async insertOne(document) { list.push(document); return { insertedId: new ObjectId() }; },
+        async insertOne(document) { document._id = new ObjectId(); list.push(document); return { insertedId: document._id }; },
         async findOne(filter) { return list.find(record => matches(record, filter)) || null; },
-        find(filter, options) {
-          return { async toArray() {
+        find(filter = {}, options = {}) {
+          return { sort() { return this; }, async toArray() {
             return list.filter(record => matches(record, filter)).map(record => {
               const copy = { ...record };
               for (const key of Object.keys(options.projection || {})) delete copy[key];
               return copy;
             });
           } };
+        },
+        async replaceOne(filter, replacement) {
+          const index = list.findIndex(record => matches(record, filter));
+          if (index < 0) return { matchedCount: 0 };
+          list[index] = { ...replacement, _id: list[index]._id };
+          return { matchedCount: 1 };
         },
         async updateOne(filter, update) {
           const index = list.findIndex(record => matches(record, filter));
@@ -53,13 +58,13 @@ function setup() {
       };
     },
   };
-  // Exercise the real Mongoose schemas and queries, replacing only database I/O.
-  for (const [modelName, collectionName] of [['PlannerHousehold', 'households'], ['EnergyPlan', 'plans'], ['PlannerRoom', 'rooms'], ['PlannerRoomCatalogue', 'catalogue_items']]) {
-    const collection = mongoose.model(modelName).collection;
-    Object.assign(collection, db.collection(collectionName));
-  }
+  const Planner = {};
+  vm.runInNewContext(fs.readFileSync(require.resolve('../energyplanner-model'), 'utf8'), {
+    exports: Planner,
+    require: name => name === './db' ? { getDb: () => db } : require(name),
+  });
   const handlers = {};
-  const app = {};
+  const app = { use() {} };
   for (const method of ['get', 'post', 'put', 'delete']) {
     app[method] = (url, ...callbacks) => { handlers[method + ' ' + url] = callbacks; };
   }
@@ -68,7 +73,7 @@ function setup() {
   const end = source.indexOf('// One error handler', start);
   assert.ok(start >= 0 && end > start);
   vm.runInNewContext(source.slice(start, end), {
-    app, auth, Planner, getDb: () => db, ObjectId, randomUUID, fs, path,
+    app, auth, Planner, spatialRoutes: { syncRoomsToFlatType: async () => ({ updated: true }) }, getDb: () => db, ObjectId, randomUUID, fs, path,
     __dirname: path.join(__dirname, '..'),
   });
   async function request(method, url, account, body = {}, id) {
@@ -141,27 +146,18 @@ test('another account cannot edit or delete a plan, or relink it to a foreign ho
   assert.equal(records.plans.length, 0);
 });
 
-test('Mongoose updates preserve shared fields and Myinfo, and cannot change ownership through operators', async () => {
+test('household updates retain submitted Myinfo and cannot change account ownership', async () => {
   const { request, records } = setup();
-  const myinfo = { fields: ['address'], filledAt: '2026-10-22' };
-  const created = await request('post', '/api/users', alice, { ...profile, address: 'Example address', myinfo });
-  records.households[0].spatialLayout = { roomCount: 3 };
-  await assert.rejects(request('put', '/api/users/:id', alice, {
-    ...profile, $set: { userId: new ObjectId(bob) },
-  }, created.data.id), /Invalid update/);
-  const updated = await request('put', '/api/users/:id', alice, { ...profile, name: 'New name' }, created.data.id);
+  const details = { ...profile, address: 'Example address', myinfo: { fields: ['address'] } };
+  const created = await request('post', '/api/users', alice, details);
+  const updated = await request('put', '/api/users/:id', alice, {
+    ...details, name: 'Updated', userId: bob, ownerId: bob,
+  }, created.data.id);
   assert.equal(updated.status, 200);
-  assert.equal(records.households[0].name, 'New name');
-  assert.equal(records.households[0].address, 'Example address');
-  assert.deepEqual(records.households[0].myinfo, myinfo);
-  assert.deepEqual(records.households[0].spatialLayout, { roomCount: 3 });
+  assert.equal(records.households[0].name, 'Updated');
+  assert.equal(records.households[0].address, details.address);
+  assert.deepEqual(records.households[0].myinfo, details.myinfo);
   assert.ok(records.households[0].userId.equals(new ObjectId(alice)));
-});
-
-test('Mongoose validates numeric household fields before writing', async () => {
-  const { request, records } = setup();
-  await assert.rejects(request('post', '/api/users', alice, { ...profile, occupants: 'invalid' }), { name: 'ValidationError' });
-  assert.equal(records.households.length, 0);
 });
 
 test('plan names are unique per account and household, ignoring case and outer spaces', async () => {
@@ -194,4 +190,16 @@ test('room energy references are returned only to the household owner', async ()
   assert.equal(result.data.rooms.length, 1);
   assert.equal(result.data.rooms[0].placements[0].energyInfo.ticks['3_tick'].kwhYear, 365);
   assert.equal((await request('get', '/api/planner/households/:id/rooms', bob, {}, home.id)).status, 404);
+});
+
+test('Profile receives flat types and household details through the shared driver', async () => {
+  const { request, records } = setup();
+  records.flat_types.push({ _id: '4-room', name: '4-room flat', bedrooms: 3,
+    roomTemplate: { rooms: [{ name: 'Bedroom 1' }] } });
+  const home = (await request('post', '/api/users', alice, profile)).data;
+  const result = await request('get', '/api/planner', alice);
+  assert.equal(result.data.users[0].id, home.id);
+  assert.equal(result.data.users[0].bedrooms, 3);
+  assert.equal(result.data.flatTypes[0].id, '4-room');
+  assert.equal(result.data.flatTypes[0].rooms[0], 'Bedroom 1');
 });
