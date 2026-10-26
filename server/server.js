@@ -14,6 +14,7 @@ const myinfo = require('./myinfo');
 const corppass = require('./corppass');
 const contractor = require('./contractor');
 const profile = require('./profile');
+const portfolio = require('./portfolio');
 const spatialRoutes = require('./spatialRoutes');
 const { loadLayouts } = require('./floorplan');
 
@@ -168,6 +169,7 @@ app.get(
     }
   }
 )
+app.use('/api/contractor/projects', portfolio.ownRouter);
 app.use('/api/contractor', contractor.router);
 app.use('/api/profile', profile.router);
 
@@ -220,6 +222,9 @@ app.get('/api/contractors', async (req, res) => {
         });
     }
 });
+// Each contractor's portfolio of past projects, shown from View Portfolio.
+app.use('/api/contractors', portfolio.publicRouter);
+
 // ============================================================
 // POST - SUBMIT QUOTATION REQUEST
 // ============================================================

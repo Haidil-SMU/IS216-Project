@@ -48,6 +48,23 @@ const showUpload = ref(false)
 const priceListSearch = ref('')
 const uploadHighlighted = ref(false)
 
+const portfolio = ref([])
+const maxProjects = ref(10)
+const portfolioLoading = ref(false)
+const portfolioError = ref('')
+const newProjectName = ref('')
+const creatingProject = ref(false)
+const showNewProject = ref(false) // the popup that asks for a new collection's name
+const newProjectField = ref(null)
+const newProjectButton = ref(null)
+const nameShake = ref(false)
+const nameError = ref('') // shown in a banner under the name field
+const photoInput = ref(null)
+let photoTarget = null // the project whose Add Photos button was pressed
+const projectToDelete = ref(null) // the project the delete popup is asking about
+const deleteConfirmButton = ref(null)
+let deleteOpener = null
+
 const temporaryMessage = ref('')
 let uploadHighlightTimer
 let messageTimer
@@ -360,6 +377,306 @@ async function saveProfile() {
   }
 }
 
+// PAST PROJECTS
+
+const PHOTO_MAX_SIDE = 1600
+
+const projectsFull = computed(() =>
+  portfolio.value.length >= maxProjects.value
+)
+
+// Each project and photo keeps a draft of its editable text and its own busy state.
+function preparePhoto(photo) {
+  return { ...photo, captionDraft: photo.caption, saving: false }
+}
+
+function prepareProject(project) {
+  return {
+    ...project,
+    nameDraft: project.name,
+    saving: false,
+    uploading: 0,
+    nameShake: false,
+    nameError: '',
+    error: '',
+    photos: project.photos.map(preparePhoto)
+  }
+}
+
+function projectUrl(project) {
+  return `${API}/contractor/projects/${getId(project)}`
+}
+
+async function loadPortfolio() {
+  portfolioLoading.value = true
+  portfolioError.value = ''
+
+  try {
+    const { data } = await axios.get(`${API}/contractor/projects`)
+    maxProjects.value = data.maxProjects
+    portfolio.value = data.projects.map(prepareProject)
+  } catch (error) {
+    portfolioError.value =
+      error.response?.data?.error || 'Unable to load your past projects.'
+  } finally {
+    portfolioLoading.value = false
+  }
+}
+
+// Keep the line breaks a contractor types, but tidy spaces and drop blank lines.
+function cleanProjectName(value) {
+  return value
+    .split(/\r?\n/)
+    .map(line => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n')
+}
+
+// Collection name fields warm to amber near the 40-character limit, turn red at it,
+// and shake if the contractor keeps typing once they are full.
+const NAME_MAX = 40
+const NAME_WARN = 32
+
+const nameLength = computed(() => newProjectName.value.length)
+
+function nameFieldClass(length, shaking) {
+  return {
+    'near-limit': length >= NAME_WARN && length < NAME_MAX,
+    'at-limit': length >= NAME_MAX,
+    shake: shaking
+  }
+}
+
+// The message shown under a name field that is empty or too short, or ''.
+function nameProblem(name) {
+  if (!name) return 'Please enter a name'
+  return name.length < 2 ? 'Please enter at least 2 characters' : ''
+}
+
+// Read out by screen readers in place of a visible counter.
+function charactersLeftText(length) {
+  return length >= NAME_WARN ? `${NAME_MAX - length} characters left` : ''
+}
+
+// setShake(true) plays the shake; it is reset first so it restarts if already playing.
+function guardNameLimit(event, setShake) {
+  const field = event.target
+  const replacing = field.selectionStart !== field.selectionEnd
+  if (!event.inputType.startsWith('insert') || replacing || field.value.length < NAME_MAX) return
+
+  setShake(false)
+  requestAnimationFrame(() => setShake(true))
+}
+
+async function openNewProject() {
+  showNewProject.value = true
+  portfolioError.value = ''
+  await nextTick()
+  newProjectField.value?.focus()
+}
+
+// Closes the popup, with focus back on New Collection.
+async function closeNewProject() {
+  showNewProject.value = false
+  newProjectName.value = ''
+  nameError.value = ''
+  portfolioError.value = ''
+  await nextTick()
+  newProjectButton.value?.focus()
+}
+
+async function createProject() {
+  const name = cleanProjectName(newProjectName.value)
+  portfolioError.value = ''
+  nameError.value = nameProblem(name)
+
+  if (nameError.value) {
+    newProjectField.value?.focus()
+    return
+  }
+
+  creatingProject.value = true
+
+  try {
+    const { data } = await axios.post(`${API}/contractor/projects`, { name })
+    portfolio.value.unshift(prepareProject(data.project))
+    closeNewProject()
+  } catch (error) {
+    portfolioError.value =
+      error.response?.data?.error || 'Unable to add the project.'
+  } finally {
+    creatingProject.value = false
+  }
+}
+
+// Project names save when the field loses focus.
+// An empty or too-short name is not saved; the message stays until they type.
+async function renameProject(project) {
+  const name = cleanProjectName(project.nameDraft)
+  project.nameError = nameProblem(name)
+  if (project.nameError || name === project.name) return
+
+  project.saving = true
+  project.error = ''
+
+  try {
+    const { data } = await axios.patch(projectUrl(project), { name })
+    project.name = data.name
+    project.nameDraft = data.name
+  } catch (error) {
+    project.nameDraft = project.name
+    project.error =
+      error.response?.data?.error || 'Unable to rename the project.'
+  } finally {
+    project.saving = false
+  }
+}
+
+// An empty or too-short name keeps focus in its field until it is fixed.
+function keepNameFocus(project, event) {
+  project.nameError = nameProblem(cleanProjectName(project.nameDraft))
+  if (!project.nameError) return
+
+  const field = event.target
+  setTimeout(() => field.focus())
+}
+
+// The bin button asks first, in a popup with Okay and Cancel.
+async function askDeleteProject(project, event) {
+  deleteOpener = event.currentTarget
+  projectToDelete.value = project
+  await nextTick()
+  deleteConfirmButton.value?.focus()
+}
+
+// Closing without deleting puts keyboard focus back on the bin button.
+function cancelDeleteProject() {
+  projectToDelete.value = null
+  deleteOpener?.focus()
+}
+
+async function deleteProject() {
+  const project = projectToDelete.value
+  projectToDelete.value = null
+  if (!project) return
+
+  project.saving = true
+  project.error = ''
+
+  try {
+    await axios.delete(projectUrl(project))
+    portfolio.value = portfolio.value.filter(item => item !== project)
+  } catch (error) {
+    project.saving = false
+    project.error =
+      error.response?.data?.error || 'Unable to delete the project.'
+  }
+}
+
+// Phone photos are often 5 MB or more, so send a JPEG no longer than 1600 px on either side.
+async function shrinkPhoto(file) {
+  const image = await createImageBitmap(file)
+  const scale = Math.min(1, PHOTO_MAX_SIDE / Math.max(image.width, image.height))
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.round(image.width * scale)
+  canvas.height = Math.round(image.height * scale)
+
+  const context = canvas.getContext('2d')
+  context.fillStyle = '#fff'
+  context.fillRect(0, 0, canvas.width, canvas.height)
+  context.drawImage(image, 0, 0, canvas.width, canvas.height)
+  image.close()
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      blob => blob ? resolve(blob) : reject(new Error('Unable to process photo')),
+      'image/jpeg',
+      0.85
+    )
+  })
+}
+
+// One file picker serves every project; remember which project it was opened for.
+function chooseProjectPhotos(project) {
+  photoTarget = project
+  photoInput.value.click()
+}
+
+async function uploadProjectPhotos(event) {
+  const project = photoTarget
+  const files = [...event.target.files]
+  event.target.value = ''
+  if (!project || !files.length) return
+
+  const errors = []
+
+  project.uploading = files.length
+  project.error = ''
+
+  for (const file of files) {
+    try {
+      let blob
+
+      try {
+        blob = await shrinkPhoto(file)
+      } catch {
+        throw new Error('Please choose a JPEG, PNG or WebP photo.')
+      }
+
+      const form = new FormData()
+      form.append('photo', blob, 'photo.jpg')
+      const { data } = await axios.post(`${projectUrl(project)}/photos`, form)
+      project.photos.push(preparePhoto(data.photo))
+    } catch (error) {
+      errors.push(
+        `${file.name}: ${error.response?.data?.error || error.message}`
+      )
+    } finally {
+      project.uploading -= 1
+    }
+  }
+
+  project.error = errors.join(' ')
+}
+
+// Captions save when the field loses focus or Enter is pressed.
+async function saveCaption(project, photo) {
+  const caption = photo.captionDraft.trim()
+  if (caption === photo.caption) return
+
+  photo.saving = true
+  project.error = ''
+
+  try {
+    const { data } = await axios.patch(
+      `${projectUrl(project)}/photos/${getId(photo)}`,
+      { caption }
+    )
+    photo.caption = data.photo.caption
+    photo.captionDraft = data.photo.caption
+  } catch (error) {
+    photo.captionDraft = photo.caption
+    project.error =
+      error.response?.data?.error || 'Unable to save the caption.'
+  } finally {
+    photo.saving = false
+  }
+}
+
+async function removeProjectPhoto(project, photo) {
+  photo.saving = true
+  project.error = ''
+
+  try {
+    await axios.delete(`${projectUrl(project)}/photos/${getId(photo)}`)
+    project.photos = project.photos.filter(item => item !== photo)
+  } catch (error) {
+    photo.saving = false
+    project.error =
+      error.response?.data?.error || 'Unable to remove the photo.'
+  }
+}
+
 // FORMATTERS
 
 function formatDate(date) {
@@ -454,18 +771,18 @@ async function replacePriceList() {
   await goToPriceListUpload()
 }
 
-function handleTabKey(event) {
-  let nextTab
+const TABS = ['requests', 'priceList', 'photos']
 
-  if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
-    nextTab = activeTab.value === 'requests' ? 'priceList' : 'requests'
-  } else if (event.key === 'Home') {
-    nextTab = 'requests'
-  } else if (event.key === 'End') {
-    nextTab = 'priceList'
-  } else {
-    return
-  }
+function handleTabKey(event) {
+  const index = TABS.indexOf(activeTab.value)
+  const nextTab = {
+    ArrowRight: TABS[(index + 1) % TABS.length],
+    ArrowLeft: TABS[(index + TABS.length - 1) % TABS.length],
+    Home: TABS[0],
+    End: TABS[TABS.length - 1]
+  }[event.key]
+
+  if (!nextTab) return
 
   event.preventDefault()
   activeTab.value = nextTab
@@ -568,7 +885,7 @@ async function loadData() {
     }))
 
     if (!needsSetup.value && profile.value) {
-      await loadLatestPriceList()
+      await Promise.all([loadLatestPriceList(), loadPortfolio()])
     }
   } catch (error) {
     console.error(error)
@@ -987,7 +1304,7 @@ onUnmounted(() => {
         Contractor <span class="text-success">Dashboard</span>
       </h1>
       <p class="text-muted mb-0">
-        Review requests, prepare quotations and manage your price list.
+        Review requests, prepare quotations, manage your price list and show your past projects.
       </p>
     </header>
 
@@ -1016,14 +1333,14 @@ onUnmounted(() => {
         <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
           <div>
             <h2 class="h5 fw-bold mb-1">{{ profile.companyName }}</h2>
-            <p class="small text-muted mb-0">
+            <p class="small text-muted mb-2">
               {{ profile.location }} · {{ profile.contactNumber }}
             </p>
-          </div>
-          <div class="d-flex flex-wrap align-items-center gap-2">
-            <span class="badge bg-success-subtle text-success-emphasis">
+            <span class="badge corppass-badge">
               ✓ UEN {{ profile.uenNo }} · Corppass verified
             </span>
+          </div>
+          <div class="d-flex flex-wrap align-items-center gap-2">
             <button
               type="button"
               class="btn btn-sm btn-outline-success"
@@ -1239,6 +1556,19 @@ onUnmounted(() => {
             :class="{ ready: priceListLoaded && latestPriceList }"
             aria-hidden="true"
           ></span>
+        </button>
+        <button
+          id="tab-photos"
+          type="button"
+          role="tab"
+          class="dashboard-tab"
+          :class="{ active: activeTab === 'photos' }"
+          :aria-selected="activeTab === 'photos'"
+          :tabindex="activeTab === 'photos' ? 0 : -1"
+          aria-controls="panel-photos"
+          @click="activeTab = 'photos'"
+        >
+          Portfolio <span class="tab-count">{{ portfolio.length }}</span>
         </button>
       </div>
 
@@ -1966,11 +2296,303 @@ onUnmounted(() => {
           </div>
         </section>
       </div>
+
+      <!-- PAST PROJECTS TAB -->
+      <div
+        v-show="activeTab === 'photos'"
+        id="panel-photos"
+        role="tabpanel"
+        aria-labelledby="tab-photos"
+      >
+        <section class="card border-0 shadow-sm rounded-4 mb-4">
+          <div class="card-body p-4">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
+              <h2 class="h4 fw-bold mb-0">Past Projects</h2>
+              <button
+                ref="newProjectButton"
+                type="button"
+                class="btn btn-success"
+                :disabled="portfolioLoading || projectsFull"
+                @click="openNewProject"
+              >
+                {{ projectsFull ? 'Project Limit Reached' : 'New Collection' }}
+              </button>
+            </div>
+
+            <div
+              v-if="portfolioError && !showNewProject"
+              class="alert alert-danger mt-3 mb-0"
+              role="alert"
+            >
+              {{ portfolioError }}
+            </div>
+          </div>
+        </section>
+
+        <div v-if="portfolioLoading" class="text-center py-4">
+          <div class="spinner-border text-success" role="status">
+            <span class="visually-hidden">Loading past projects</span>
+          </div>
+        </div>
+
+        <div
+          v-else-if="!portfolio.length"
+          class="photo-empty text-center text-muted rounded-4 p-5"
+        >
+          <p class="fw-semibold mb-1">No projects yet</p>
+          <p class="small mb-0">
+            Name your first project above, then add photos of the finished work.
+          </p>
+        </div>
+
+        <section
+          v-for="project in portfolio"
+          :key="getId(project)"
+          class="card border-0 rounded-4 mb-4 collection-card"
+          :class="{ 'opacity-50': project.saving }"
+        >
+          <div class="card-body p-4">
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+              <label :for="'project-' + getId(project)" class="visually-hidden">
+                Project name
+              </label>
+              <div class="project-name-field">
+                <!-- Saves when it loses focus; one row unless the name has a line break. -->
+                <textarea
+                  :id="'project-' + getId(project)"
+                  v-model="project.nameDraft"
+                  class="form-control name-field project-name-input"
+                  :class="nameFieldClass(project.nameDraft.length, project.nameShake)"
+                  :rows="project.nameDraft.includes('\n') ? 2 : 1"
+                  :maxlength="NAME_MAX"
+                  title="Click to rename"
+                  :disabled="project.saving"
+                  :aria-invalid="Boolean(project.nameError)"
+                  :aria-describedby="project.nameError ? 'project-error-' + getId(project) : undefined"
+                  @input="project.nameError = ''"
+                  @change="renameProject(project)"
+                  @blur="keepNameFocus(project, $event)"
+                  @beforeinput="guardNameLimit($event, value => (project.nameShake = value))"
+                  @animationend="project.nameShake = false"
+                ></textarea>
+                <span class="visually-hidden" aria-live="polite">
+                  {{ charactersLeftText(project.nameDraft.length) }}
+                </span>
+                <p
+                  v-if="project.nameError"
+                  :id="'project-error-' + getId(project)"
+                  class="name-error beside mb-0"
+                  role="alert"
+                >
+                  <span class="name-error-icon" aria-hidden="true">!</span>
+                  {{ project.nameError }}
+                </p>
+              </div>
+              <span class="small text-muted text-nowrap">
+                {{ project.photos.length }} photo{{ project.photos.length === 1 ? '' : 's' }}
+              </span>
+              <button
+                type="button"
+                class="btn btn-sm btn-success text-nowrap"
+                :disabled="project.saving || project.uploading > 0"
+                @click="chooseProjectPhotos(project)"
+              >
+                {{ project.uploading ? `Uploading ${project.uploading}...` : '+ Add Photos' }}
+              </button>
+              <button
+                type="button"
+                class="btn btn-sm btn-outline-danger bin-button"
+                :disabled="project.saving || project.uploading > 0"
+                aria-label="Delete project"
+                title="Delete project"
+                @click="askDeleteProject(project, $event)"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  width="16"
+                  height="16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <g class="bin-lid">
+                    <path d="M3 6h18" />
+                    <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+                  </g>
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                  <path d="M10 11v6M14 11v6" />
+                </svg>
+              </button>
+            </div>
+
+            <div v-if="project.error" class="alert alert-danger" role="alert">
+              {{ project.error }}
+            </div>
+
+            <p v-if="!project.photos.length" class="small text-muted mb-0">
+              No photos yet. Homeowners only see projects that have photos.
+            </p>
+
+            <ul v-else class="photo-grid list-unstyled mb-0">
+              <li
+                v-for="photo in project.photos"
+                :key="getId(photo)"
+                class="photo-tile"
+                :class="{ busy: photo.saving }"
+              >
+                <img
+                  :src="photo.url"
+                  :alt="photo.caption || project.name"
+                  loading="lazy"
+                />
+                <div class="d-flex gap-2 p-2">
+                  <label :for="'caption-' + getId(photo)" class="visually-hidden">
+                    Photo caption
+                  </label>
+                  <input
+                    :id="'caption-' + getId(photo)"
+                    v-model="photo.captionDraft"
+                    class="form-control form-control-sm"
+                    maxlength="100"
+                    placeholder="Add a caption"
+                    :disabled="photo.saving"
+                    @change="saveCaption(project, photo)"
+                    @keydown.enter.prevent="$event.target.blur()"
+                  />
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-outline-danger"
+                    :disabled="photo.saving"
+                    aria-label="Remove photo"
+                    title="Remove photo"
+                    @click="removeProjectPhoto(project, photo)"
+                  >✕</button>
+                </div>
+              </li>
+            </ul>
+          </div>
+        </section>
+
+        <input
+          ref="photoInput"
+          type="file"
+          class="d-none"
+          accept="image/jpeg,image/png,image/webp"
+          multiple
+          @change="uploadProjectPhotos"
+        />
+      </div>
     </template>
+
+    <!-- NEW COLLECTION POPUP -->
+    <Teleport to="body">
+      <div
+        v-if="showNewProject"
+        class="confirm-backdrop"
+        @click.self="!creatingProject && closeNewProject()"
+        @keydown.esc="!creatingProject && closeNewProject()"
+      >
+        <form
+          class="confirm-card new-collection-card"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="new-collection-title"
+          novalidate
+          @submit.prevent="createProject"
+        >
+          <h2 id="new-collection-title" class="h5 fw-bold mb-3">New Collection</h2>
+
+          <label for="new-project-name" class="visually-hidden">Collection name</label>
+          <textarea
+            id="new-project-name"
+            ref="newProjectField"
+            v-model="newProjectName"
+            class="form-control name-field new-project-name"
+            :class="[nameFieldClass(nameLength, nameShake), nameError ? 'mb-0' : 'mb-3']"
+            rows="2"
+            :maxlength="NAME_MAX"
+            placeholder="Collection Name"
+            :disabled="creatingProject"
+            :aria-invalid="Boolean(nameError)"
+            :aria-describedby="nameError ? 'new-project-name-error' : undefined"
+            @input="nameError = ''"
+            @beforeinput="guardNameLimit($event, value => (nameShake = value))"
+            @animationend="nameShake = false"
+          ></textarea>
+          <span class="visually-hidden" aria-live="polite">
+            {{ charactersLeftText(nameLength) }}
+          </span>
+          <p
+            v-if="nameError"
+            id="new-project-name-error"
+            class="name-error mb-3"
+            role="alert"
+          >
+            <span class="name-error-icon" aria-hidden="true">!</span>
+            {{ nameError }}
+          </p>
+
+          <div v-if="portfolioError" class="alert alert-danger py-2" role="alert">
+            {{ portfolioError }}
+          </div>
+
+          <div class="d-flex justify-content-end gap-2">
+            <button
+              type="button"
+              class="btn btn-outline-secondary"
+              :disabled="creatingProject"
+              @click="closeNewProject"
+            >Cancel</button>
+            <button type="submit" class="btn btn-success" :disabled="creatingProject">
+              {{ creatingProject ? 'Adding...' : 'Create' }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </Teleport>
+
+    <!-- DELETE COLLECTION POPUP -->
+    <Teleport to="body">
+      <div
+        v-if="projectToDelete"
+        class="confirm-backdrop"
+        @click.self="cancelDeleteProject"
+        @keydown.esc="cancelDeleteProject"
+      >
+        <div
+          class="confirm-card"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="delete-collection-title"
+        >
+          <h2 id="delete-collection-title" class="h5 fw-bold mb-4">Delete Collection?</h2>
+          <div class="d-flex justify-content-end gap-2">
+            <button type="button" class="btn btn-outline-secondary" @click="cancelDeleteProject">
+              Cancel
+            </button>
+            <button
+              ref="deleteConfirmButton"
+              type="button"
+              class="btn btn-danger"
+              @click="deleteProject"
+            >Okay</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <style scoped>
+/* Corppass navy, as on the Corppass login button. */
+.corppass-badge {
+  background: #0444ce;
+  color: #fff;
+}
+
 .dashboard {
   color: #24332d;
 }
@@ -2304,7 +2926,229 @@ fieldset {
   min-width: 0;
 }
 
+
+/* The bin's lid is hinged at its right end, and may swing past the icon's edge. */
+.bin-button svg {
+  overflow: visible;
+}
+
+.bin-lid {
+  transform-box: fill-box;
+  transform-origin: right bottom;
+  transition: transform 0.2s ease;
+}
+
+/* The lid lifts while the button is hovered or focused, and drops when it is not. */
+.bin-button:hover:not(:disabled) .bin-lid,
+.bin-button:focus-visible .bin-lid {
+  transform: translateY(-1px) rotate(20deg);
+}
+
+.confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1055;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(18 38 27 / 45%);
+}
+
+.confirm-card {
+  width: 100%;
+  max-width: 360px;
+  padding: 24px;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 24px 48px -12px rgb(16 40 28 / 35%);
+}
+
+.photo-empty {
+  border: 1px dashed #c9d8cf;
+  background: #f7faf8;
+}
+
+/* Wide enough for a typical 40-character name (the limit) in the name field. */
+.new-collection-card {
+  max-width: calc(40ch + 1.5rem + 2px + 48px);
+}
+
+.new-project-name {
+  resize: none;
+}
+
+
+/* The rename field, with its message beside it (below it when there is no room). */
+.project-name-field {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  max-width: 100%;
+  margin-right: auto;
+}
+
+.project-name-input {
+  width: calc(40ch + 1rem + 2px);
+  max-width: 100%;
+  margin-left: -0.5rem;
+  padding: 0.25rem 0.5rem;
+  border-color: transparent;
+  background: transparent;
+  font-size: 1.15rem;
+  font-weight: 700;
+  resize: none;
+}
+
+.project-name-input:hover {
+  border-color: #dee2e6;
+}
+
+/* The message for a collection name field that is empty or too short,
+   only as wide as its text. */
+.name-error {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 6px 10px;
+  border: 1px solid #f1aeb5;
+  border-radius: 8px;
+  background: #f8d7da;
+  color: #842029;
+  font-size: 0.875rem;
+}
+
+.name-error.beside {
+  margin-top: 0;
+  white-space: nowrap;
+}
+
+.name-error-icon {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #dc3545;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* Collection name fields near and at the 40-character limit. */
+.name-field {
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+}
+
+.name-field.near-limit {
+  border-color: #f0ad4e;
+  box-shadow: 0 0 0 0.25rem rgb(240 173 78 / 25%);
+}
+
+.name-field.at-limit {
+  border-color: #dc3545;
+  box-shadow: 0 0 0 0.25rem rgb(220 53 69 / 25%);
+}
+
+.name-field.shake {
+  animation: name-shake 0.3s ease;
+}
+
+@keyframes name-shake {
+  20%,
+  60% {
+    transform: translateX(-4px);
+  }
+
+  40%,
+  80% {
+    transform: translateX(4px);
+  }
+}
+
+/* One row of photos; scroll sideways when a project has more than fit. */
+.photo-grid {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 240px;
+  gap: 16px;
+  overflow-x: auto;
+  /* Room for a hovered tile's lift and shadow, which the scrolling row would clip. */
+  margin: -8px -8px 0;
+  padding: 8px 8px 16px;
+  scroll-padding-inline: 8px;
+  scroll-snap-type: x proximity;
+}
+
+.photo-grid > li {
+  scroll-snap-align: start;
+}
+
+.photo-tile {
+  overflow: hidden;
+  border: 1px solid #e0e8e3;
+  border-radius: 12px;
+  background: #fff;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+/* A collection lifts and gains a green outline while the pointer or focus is in it. */
+.collection-card {
+  box-shadow: 0 0.125rem 0.25rem rgb(0 0 0 / 7.5%);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.collection-card:hover,
+.collection-card:focus-within {
+  box-shadow:
+    0 0 0 1px #a3cfbb,
+    0 12px 28px -12px rgb(20 108 67 / 30%);
+  transform: translateY(-2px);
+}
+
+/* The tile under the pointer, or holding keyboard focus, lifts and turns green. */
+.photo-tile:hover,
+.photo-tile:focus-within {
+  border-color: #198754;
+  box-shadow: 0 8px 18px -8px rgb(20 108 67 / 35%);
+  transform: translateY(-4px);
+}
+
+.photo-tile.busy {
+  opacity: 0.6;
+}
+
+.photo-tile img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  background: #edf2ef;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .name-field.shake {
+    animation: none;
+  }
+
+  .collection-card,
+  .photo-tile {
+    transition: none;
+  }
+
+  .collection-card:hover,
+  .collection-card:focus-within,
+  .photo-tile:hover,
+  .photo-tile:focus-within {
+    transform: none;
+  }
+
+  .bin-lid,
   .upload-panel,
   .upload-panel input[type="file"] {
     transition: none;
@@ -2312,6 +3156,10 @@ fieldset {
 }
 
 @media (max-width: 575.98px) {
+  .dashboard-tabs {
+    flex-wrap: wrap;
+  }
+
   .dashboard-tab {
     flex: 1;
     gap: 6px;

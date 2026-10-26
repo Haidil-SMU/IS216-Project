@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
 import workheads from '@/data/workheads.json'
+import ContractorProfile from '@/components/ContractorProfile.vue'
 
 const router = useRouter()
 
@@ -20,6 +21,8 @@ const showResults = ref(false)
 const loading = ref(false)
 const errorMessage = ref('')
 const quotationsLoaded = ref(false)
+const profileContractor = ref(null) // whose profile popup is open
+let profileOpener = null
 
 const services = [
   { code: 'CR06', name: 'Interior Design & Renovation' },
@@ -224,6 +227,21 @@ function getServiceName(service) {
     : service.name || service.code
 
   return services.find(item => item.code === value)?.name || value
+}
+
+// ============================================================
+// CONTRACTOR PROFILE POPUP
+// ============================================================
+
+function openProfile(contractor, event) {
+  profileOpener = event.currentTarget
+  profileContractor.value = contractor
+}
+
+// Closing the popup puts keyboard focus back on the link that opened it.
+function closeProfile() {
+  profileContractor.value = null
+  profileOpener?.focus()
 }
 
 // ============================================================
@@ -441,13 +459,21 @@ async function requestQuotation(contractor) {
                 Website-Registered
               </span>
 
-              <h5 class="fw-bold">
+              <h5 class="fw-bold mb-2">
                 {{ contractor.companyName }}
               </h5>
 
-              <p class="text-muted small">
+              <p class="text-muted small mb-1">
                 {{ contractor.location }}
               </p>
+
+              <button
+                type="button"
+                class="btn btn-link btn-sm p-0 text-success fw-semibold mb-3"
+                @click="openProfile(contractor, $event)"
+              >
+                View Portfolio
+              </button>
 
               <hr />
 
@@ -690,6 +716,12 @@ async function requestQuotation(contractor) {
     <div v-else-if="errorMessage" class="alert alert-danger">
       {{ errorMessage }}
     </div>
+
+    <ContractorProfile
+      v-if="profileContractor"
+      :contractor="profileContractor"
+      @close="closeProfile"
+    />
 
   </div>
 </template>
