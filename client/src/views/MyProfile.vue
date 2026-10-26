@@ -7,12 +7,10 @@ import { useAuthStore } from '@/stores/auth'
 import HouseholdDetails from '@/components/HouseholdDetails.vue'
 import PictureCropper from '@/components/PictureCropper.vue'
 import MyQuotations from '@/views/MyQuotations.vue'
-import RewardsWallet from '@/components/RewardsWallet.vue'
 
 const TABS = [
   { id: 'household', label: '🏠 My Household' },
   { id: 'quotations', label: '📋 My Quotations' },
-  { id: 'rewards', label: '🎁 Rewards Wallet' },
 ]
 
 const auth = useAuthStore()
@@ -95,7 +93,7 @@ async function removePicture() {
   pictureBusy.value = false
 }
 
-// The open tab lives in the URL (?tab=quotations, ?tab=rewards) so links and refreshes keep it.
+// The open tab lives in the URL (?tab=quotations) so links and refreshes keep it.
 const tab = computed(() =>
   TABS.some((item) => item.id === route.query.tab) ? route.query.tab : 'household',
 )
@@ -248,14 +246,6 @@ async function moveTab(step) {
         aria-labelledby="tab-quotations"
       >
         <MyQuotations />
-      </section>
-      <section
-        v-show="tab === 'rewards'"
-        id="panel-rewards"
-        role="tabpanel"
-        aria-labelledby="tab-rewards"
-      >
-        <RewardsWallet />
       </section>
     </main>
     <Transition name="popup">
