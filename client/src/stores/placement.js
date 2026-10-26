@@ -1,4 +1,4 @@
-import { sinkSpan } from './applianceModels.js'
+import { sinkSpan, resolveSpec } from './applianceModels.js'
 
 export const WALL_THICKNESS = 0.1
 const GAP = 0.02
@@ -150,7 +150,6 @@ export function findSpot(room, spec, others) {
   return null
 }
 
-
 export function wallPieces(room, items, trimStart = []) {
   const out = []
   const add = (wall, t0, t1, y0, y1) => { if (t1 - t0 > 0.01 && y1 - y0 > 0.01) out.push({ wall, t0, t1, y0, y1 }) }
@@ -188,7 +187,6 @@ export function sharedRange(room, other, wall) {
 
 export const sameSpotOn = (room, wall, t, other, otherWall) => fromFlat(other, otherWall, toFlat(room, wall, t))
 
-
 const rectOf = (r) => ({ x: r.origin.x, z: r.origin.z, w: r.dimension.w, d: r.dimension.d })
 const tAlong = (r, wall, g) => [g - r.x, g - r.z, r.x + r.w - g, r.z + r.d - g][wall]
 const gAlong = (r, wall, t) => [r.x + t, r.z + t, r.x + r.w - t, r.z + r.d - t][wall]
@@ -224,3 +222,54 @@ export function refitPlacements(oldR, newR, carry) {
   }
   return out
 }
+
+export const itemsOfRoom = (r) => (r.placements || []).map((p) => ({
+  id: String(p._id), spec: resolveSpec(p.applianceTypeKey, p.category),
+  x: p.x, z: p.z, rotY: p.rotY, wall: p.wall, t: p.t, cu: p.cu ?? 0,
+  on: p.onPlacementId ? String(p.onPlacementId) : undefined,
+  connectsTo: p.connectsTo ?? null,
+}))
+
+export function neighbourAcross(rooms, r, wall, t) {
+  const a = r.origin, d = r.dimension
+  const line = [a.z, a.x + d.w, a.z + d.d, a.x][wall]
+  const g = [a.x + t, a.z + t, a.x + d.w - t, a.z + d.d - t][wall]
+  for (const o of rooms) {
+    if (String(o._id) === String(r._id)) continue
+    const oo = o.origin, od = o.dimension
+    const facing = [oo.z + od.d, oo.x, oo.z, oo.x + od.w][wall]
+    if (Math.abs(line - facing) > 0.02) continue
+    const lo = wall % 2 ? oo.z : oo.x, hi = lo + (wall % 2 ? od.d : od.w)
+    if (g > lo && g < hi) return o
+  }
+  return null
+}
+
+export function doorBlockedBeyond(rooms, r, spec, pos, { ignoreId = null, cache = null } = {}) {
+  if (spec.kind !== 'door' || pos.wall < 0) return null
+  const other = neighbourAcross(rooms, r, pos.wall, pos.t)
+  const half = spec.w / 2 - 0.02
+  const a = neighbourAcross(rooms, r, pos.wall, pos.t - half), b = neighbourAcross(rooms, r, pos.wall, pos.t + half)
+  if ((a && String(a._id)) !== (b && String(b._id)) || (other && String(other._id)) !== (a && String(a._id)))
+    return { name: (other || a || b).name, straddle: true }
+  if (!other) return null
+  const there = (pos.wall + 2) % 4
+  const at = onWall(other.dimension, spec, there, sameSpotOn(r, pos.wall, pos.t, other, there))
+  if (!at) return other
+  const key = String(other._id)
+  let items = cache?.get(key)
+  if (!items) { items = itemsOfRoom(other); cache?.set(key, items) }
+  if (ignoreId) items = items.filter((i) => i.id !== String(ignoreId))
+  return isBlocked({ spec, ...at }, items) ? other : null
+}
+
+export const needsOutsideWall = (spec) => spec.kind === 'window' || (spec.kind === 'door' && spec.variant === 'glass')
+
+export function roomBehindOpening(rooms, r, spec, pos) {
+  if (pos.wall < 0) return null
+  const half = spec.w / 2 - 0.02
+  return neighbourAcross(rooms, r, pos.wall, pos.t) || neighbourAcross(rooms, r, pos.wall, pos.t - half) || neighbourAcross(rooms, r, pos.wall, pos.t + half)
+}
+
+export const outsideOnlyMessage = (spec, roomName) =>
+  `${spec.kind === 'window' ? 'Windows' : 'Balcony sliding doors'} belong on an outside wall, and that part of the wall faces the ${roomName}. Try a wall with the outdoors behind it.`

@@ -129,7 +129,7 @@ function generateRooms(flatTypeId) {
       let pick = null;
       for (let i = 0; i < 4; i++) {
         for (const seg of sharedSegments(r, i, rects)) {
-          if (r.ensuite && seg.room.name !== r.ensuite) continue;
+          if (r.ensuite && seg.room.name !== r.ensuite) continue; 
           const score = (seg.room.type === 'living' ? 100 : 0) + (seg.hi - seg.lo);
           if (!pick || score > pick.score) pick = { i, seg, score };
         }
@@ -159,4 +159,23 @@ function generateRooms(flatTypeId) {
   return { footprint: { w: W, d: D }, rooms };
 }
 
-module.exports = { generateRooms, LAYOUTS, OPENING_KEYS, isOpeningKey, CEILING_H, opening, wallPoint, NORMAL, TANGENT, WALL_THICKNESS };
+async function loadLayouts(db) {
+  const flats = await db
+    .collection("flat_types")
+    .find()
+    .toArray();
+
+  for (const flat of flats) {
+    const template = flat.roomTemplate;
+
+    if (template?.rooms?.length) {
+      LAYOUTS[flat._id] = {
+        width: template.width,
+        depth: template.depth,
+        rooms: template.rooms,
+      };
+    }
+  }
+}
+
+module.exports = { generateRooms, LAYOUTS, loadLayouts, OPENING_KEYS, isOpeningKey, CEILING_H, opening, wallPoint, NORMAL, TANGENT, WALL_THICKNESS };
