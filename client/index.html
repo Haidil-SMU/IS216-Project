@@ -14,11 +14,13 @@
       trees grow, green walls climb and balcony planters appear. Each element's resting
       style is its final "eco" state and the animations only describe where it starts,
       so with reduced motion the finished scene is shown straight away.
+      The loader sits outside #app; src/splash.js removes it once the first page is ready.
     -->
     <style>
       .app-loader {
         position: fixed;
         inset: 0;
+        z-index: 2000;
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -201,6 +203,54 @@
       }
       @keyframes eco-fly { to { transform: translateX(360px); } }
 
+      /*
+        Exit: src/splash.js splits the finished splash into two halves that swing
+        open like a gatefold card, while the app behind them unfolds into view.
+      */
+      .app-loader-stage {
+        position: fixed;
+        inset: 0;
+        z-index: 2000;
+        perspective: 1800px;
+        pointer-events: none;
+      }
+      .app-loader-half {
+        backface-visibility: hidden;
+        animation: app-loader-unfold 0.9s cubic-bezier(0.65, 0, 0.35, 1) forwards;
+      }
+      .app-loader-half::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        z-index: 1;
+        opacity: 0;
+        animation: app-loader-shade 0.9s ease-in forwards;
+      }
+      .app-loader-left {
+        clip-path: inset(0 50% 0 0);
+        transform-origin: left center;
+        --unfold-angle: 100deg;
+      }
+      .app-loader-left::before { background: linear-gradient(to left, rgba(16, 47, 36, 0.35), transparent 50%); }
+      .app-loader-right {
+        clip-path: inset(0 0 0 50%);
+        transform-origin: right center;
+        --unfold-angle: -100deg;
+      }
+      .app-loader-right::before { background: linear-gradient(to right, rgba(16, 47, 36, 0.35), transparent 50%); }
+      .app-unfold-in {
+        transform-origin: top center;
+        animation: app-unfold-in 0.9s cubic-bezier(0.22, 1, 0.36, 1) 0.15s both;
+      }
+      @keyframes app-loader-unfold {
+        70% { opacity: 1; }
+        to { transform: rotateY(var(--unfold-angle)); opacity: 0; }
+      }
+      @keyframes app-loader-shade { to { opacity: 1; } }
+      @keyframes app-unfold-in {
+        from { opacity: 0; transform: perspective(1800px) rotateX(-8deg) scale(0.96); }
+      }
+
       @media (prefers-reduced-motion: reduce) {
         .app-loader *,
         .app-loader *::after { animation: none !important; }
@@ -209,177 +259,176 @@
     </style>
   </head>
   <body>
-    <div id="app">
-      <!-- Vue replaces everything in #app when it mounts, which removes this loader. -->
-      <div class="app-loader">
-        <span class="app-loader-sr" role="status">Loading HDB EcoHome…</span>
+    <!-- Sits above the app until src/splash.js unfolds it away once the first page is ready. -->
+    <div id="app-loader" class="app-loader">
+      <span class="app-loader-sr" role="status">Loading HDB EcoHome…</span>
 
-        <svg class="eco-scene" viewBox="0 0 280 180" aria-hidden="true">
-          <defs>
-            <clipPath id="eco-panel-clip">
-              <polygon points="98,49 118,49 122,41 102,41" />
-              <polygon points="128,49 148,49 152,41 132,41" />
-              <polygon points="158,49 178,49 182,41 162,41" />
-            </clipPath>
-          </defs>
+      <svg class="eco-scene" viewBox="0 0 280 180" aria-hidden="true">
+        <defs>
+          <clipPath id="eco-panel-clip">
+            <polygon points="98,49 118,49 122,41 102,41" />
+            <polygon points="128,49 148,49 152,41 132,41" />
+            <polygon points="158,49 178,49 182,41 162,41" />
+          </clipPath>
+        </defs>
 
-          <!-- Sky, clearing from smog -->
-          <rect width="280" height="180" fill="#e3f3ea" />
-          <rect class="eco-smog-sky" width="280" height="180" fill="#cfd3d1" />
+        <!-- Sky, clearing from smog -->
+        <rect width="280" height="180" fill="#e3f3ea" />
+        <rect class="eco-smog-sky" width="280" height="180" fill="#cfd3d1" />
 
-          <g class="eco-sun">
-            <g class="eco-sun-rays" stroke="#f2b632" stroke-width="3" stroke-linecap="round">
-              <line x1="236" y1="20" x2="236" y2="14" />
-              <line x1="248.7" y1="25.3" x2="253" y2="21" />
-              <line x1="254" y1="38" x2="260" y2="38" />
-              <line x1="248.7" y1="50.7" x2="253" y2="55" />
-              <line x1="236" y1="56" x2="236" y2="62" />
-              <line x1="223.3" y1="50.7" x2="219" y2="55" />
-              <line x1="218" y1="38" x2="212" y2="38" />
-              <line x1="223.3" y1="25.3" x2="219" y2="21" />
-            </g>
-            <circle cx="236" cy="38" r="13" fill="#f6c445" />
+        <g class="eco-sun">
+          <g class="eco-sun-rays" stroke="#f2b632" stroke-width="3" stroke-linecap="round">
+            <line x1="236" y1="20" x2="236" y2="14" />
+            <line x1="248.7" y1="25.3" x2="253" y2="21" />
+            <line x1="254" y1="38" x2="260" y2="38" />
+            <line x1="248.7" y1="50.7" x2="253" y2="55" />
+            <line x1="236" y1="56" x2="236" y2="62" />
+            <line x1="223.3" y1="50.7" x2="219" y2="55" />
+            <line x1="218" y1="38" x2="212" y2="38" />
+            <line x1="223.3" y1="25.3" x2="219" y2="21" />
           </g>
+          <circle cx="236" cy="38" r="13" fill="#f6c445" />
+        </g>
 
-          <g fill="#b6bcb9">
-            <g class="eco-smog">
-              <ellipse cx="60" cy="40" rx="34" ry="11" />
-              <ellipse cx="82" cy="33" rx="20" ry="10" />
-            </g>
-            <g class="eco-smog eco-smog-2">
-              <ellipse cx="200" cy="62" rx="38" ry="10" />
-              <ellipse cx="180" cy="55" rx="18" ry="9" />
-            </g>
+        <g fill="#b6bcb9">
+          <g class="eco-smog">
+            <ellipse cx="60" cy="40" rx="34" ry="11" />
+            <ellipse cx="82" cy="33" rx="20" ry="10" />
           </g>
+          <g class="eco-smog eco-smog-2">
+            <ellipse cx="200" cy="62" rx="38" ry="10" />
+            <ellipse cx="180" cy="55" rx="18" ry="9" />
+          </g>
+        </g>
 
-          <g transform="translate(-30 30)">
-            <g class="eco-birds" fill="none" stroke="#19352a" stroke-width="1.5" stroke-linecap="round">
-              <path d="M0 0 q4 -4 8 0 q4 -4 8 0" />
-              <path d="M14 8 q3 -3 6 0 q3 -3 6 0" />
-            </g>
+        <g transform="translate(-30 30)">
+          <g class="eco-birds" fill="none" stroke="#19352a" stroke-width="1.5" stroke-linecap="round">
+            <path d="M0 0 q4 -4 8 0 q4 -4 8 0" />
+            <path d="M14 8 q3 -3 6 0 q3 -3 6 0" />
           </g>
+        </g>
 
-          <!-- Ground, turning from dry to green -->
-          <rect y="150" width="280" height="30" fill="#9fd19a" />
-          <rect class="eco-ground-dry" y="150" width="280" height="30" fill="#cdbf9f" />
+        <!-- Ground, turning from dry to green -->
+        <rect y="150" width="280" height="30" fill="#9fd19a" />
+        <rect class="eco-ground-dry" y="150" width="280" height="30" fill="#cdbf9f" />
 
-          <!-- Wind turbine -->
-          <g class="eco-turbine">
-            <polygon points="34.5,150 37.5,150 36.6,98 35.4,98" fill="#ffffff" stroke="#8fa39a" stroke-width="0.8" />
-            <g class="eco-blades" fill="#ffffff" stroke="#8fa39a" stroke-width="0.8">
-              <ellipse cx="36" cy="85" rx="2.2" ry="11" />
-              <ellipse cx="36" cy="85" rx="2.2" ry="11" transform="rotate(120 36 96)" />
-              <ellipse cx="36" cy="85" rx="2.2" ry="11" transform="rotate(240 36 96)" />
-            </g>
-            <circle cx="36" cy="96" r="2.5" fill="#8fa39a" />
+        <!-- Wind turbine -->
+        <g class="eco-turbine">
+          <polygon points="34.5,150 37.5,150 36.6,98 35.4,98" fill="#ffffff" stroke="#8fa39a" stroke-width="0.8" />
+          <g class="eco-blades" fill="#ffffff" stroke="#8fa39a" stroke-width="0.8">
+            <ellipse cx="36" cy="85" rx="2.2" ry="11" />
+            <ellipse cx="36" cy="85" rx="2.2" ry="11" transform="rotate(120 36 96)" />
+            <ellipse cx="36" cy="85" rx="2.2" ry="11" transform="rotate(240 36 96)" />
           </g>
+          <circle cx="36" cy="96" r="2.5" fill="#8fa39a" />
+        </g>
 
-          <!-- HDB block -->
-          <rect x="93" y="50" width="94" height="7" rx="1" fill="#dcd2c1" />
-          <rect x="96" y="56" width="88" height="94" fill="#f4eee3" stroke="#d8cdb9" />
-          <rect x="138" y="57" width="4" height="77" fill="#e8dcc8" />
-          <rect x="96" y="134" width="88" height="2" fill="#d8cdb9" />
-          <rect x="96" y="136" width="88" height="14" fill="#ddd3c1" />
-          <g fill="#efe7d8">
-            <rect x="96" y="136" width="4" height="14" />
-            <rect x="116" y="136" width="4" height="14" />
-            <rect x="138" y="136" width="4" height="14" />
-            <rect x="160" y="136" width="4" height="14" />
-            <rect x="180" y="136" width="4" height="14" />
-          </g>
-          <g fill="#bcd7e0">
-            <rect x="103" y="64" width="12" height="8" /><rect x="123" y="64" width="12" height="8" /><rect x="145" y="64" width="12" height="8" /><rect x="165" y="64" width="12" height="8" />
-            <rect x="103" y="78" width="12" height="8" /><rect x="123" y="78" width="12" height="8" /><rect x="145" y="78" width="12" height="8" /><rect x="165" y="78" width="12" height="8" />
-            <rect x="103" y="92" width="12" height="8" /><rect x="123" y="92" width="12" height="8" /><rect x="145" y="92" width="12" height="8" /><rect x="165" y="92" width="12" height="8" />
-            <rect x="103" y="106" width="12" height="8" /><rect x="123" y="106" width="12" height="8" /><rect x="145" y="106" width="12" height="8" /><rect x="165" y="106" width="12" height="8" />
-            <rect x="103" y="120" width="12" height="8" /><rect x="123" y="120" width="12" height="8" /><rect x="145" y="120" width="12" height="8" /><rect x="165" y="120" width="12" height="8" />
-          </g>
+        <!-- HDB block -->
+        <rect x="93" y="50" width="94" height="7" rx="1" fill="#dcd2c1" />
+        <rect x="96" y="56" width="88" height="94" fill="#f4eee3" stroke="#d8cdb9" />
+        <rect x="138" y="57" width="4" height="77" fill="#e8dcc8" />
+        <rect x="96" y="134" width="88" height="2" fill="#d8cdb9" />
+        <rect x="96" y="136" width="88" height="14" fill="#ddd3c1" />
+        <g fill="#efe7d8">
+          <rect x="96" y="136" width="4" height="14" />
+          <rect x="116" y="136" width="4" height="14" />
+          <rect x="138" y="136" width="4" height="14" />
+          <rect x="160" y="136" width="4" height="14" />
+          <rect x="180" y="136" width="4" height="14" />
+        </g>
+        <g fill="#bcd7e0">
+          <rect x="103" y="64" width="12" height="8" /><rect x="123" y="64" width="12" height="8" /><rect x="145" y="64" width="12" height="8" /><rect x="165" y="64" width="12" height="8" />
+          <rect x="103" y="78" width="12" height="8" /><rect x="123" y="78" width="12" height="8" /><rect x="145" y="78" width="12" height="8" /><rect x="165" y="78" width="12" height="8" />
+          <rect x="103" y="92" width="12" height="8" /><rect x="123" y="92" width="12" height="8" /><rect x="145" y="92" width="12" height="8" /><rect x="165" y="92" width="12" height="8" />
+          <rect x="103" y="106" width="12" height="8" /><rect x="123" y="106" width="12" height="8" /><rect x="145" y="106" width="12" height="8" /><rect x="165" y="106" width="12" height="8" />
+          <rect x="103" y="120" width="12" height="8" /><rect x="123" y="120" width="12" height="8" /><rect x="145" y="120" width="12" height="8" /><rect x="165" y="120" width="12" height="8" />
+        </g>
 
-          <!-- Balcony planters, bottom floor first -->
-          <g fill="#4ea866">
-            <g class="eco-planters"><rect x="102" y="128" width="14" height="2.5" rx="1" /><rect x="122" y="128" width="14" height="2.5" rx="1" /><rect x="144" y="128" width="14" height="2.5" rx="1" /><rect x="164" y="128" width="14" height="2.5" rx="1" /></g>
-            <g class="eco-planters"><rect x="102" y="114" width="14" height="2.5" rx="1" /><rect x="122" y="114" width="14" height="2.5" rx="1" /><rect x="144" y="114" width="14" height="2.5" rx="1" /><rect x="164" y="114" width="14" height="2.5" rx="1" /></g>
-            <g class="eco-planters"><rect x="102" y="100" width="14" height="2.5" rx="1" /><rect x="122" y="100" width="14" height="2.5" rx="1" /><rect x="144" y="100" width="14" height="2.5" rx="1" /><rect x="164" y="100" width="14" height="2.5" rx="1" /></g>
-            <g class="eco-planters"><rect x="102" y="86" width="14" height="2.5" rx="1" /><rect x="122" y="86" width="14" height="2.5" rx="1" /><rect x="144" y="86" width="14" height="2.5" rx="1" /><rect x="164" y="86" width="14" height="2.5" rx="1" /></g>
-            <g class="eco-planters"><rect x="102" y="72" width="14" height="2.5" rx="1" /><rect x="122" y="72" width="14" height="2.5" rx="1" /><rect x="144" y="72" width="14" height="2.5" rx="1" /><rect x="164" y="72" width="14" height="2.5" rx="1" /></g>
-          </g>
+        <!-- Balcony planters, bottom floor first -->
+        <g fill="#4ea866">
+          <g class="eco-planters"><rect x="102" y="128" width="14" height="2.5" rx="1" /><rect x="122" y="128" width="14" height="2.5" rx="1" /><rect x="144" y="128" width="14" height="2.5" rx="1" /><rect x="164" y="128" width="14" height="2.5" rx="1" /></g>
+          <g class="eco-planters"><rect x="102" y="114" width="14" height="2.5" rx="1" /><rect x="122" y="114" width="14" height="2.5" rx="1" /><rect x="144" y="114" width="14" height="2.5" rx="1" /><rect x="164" y="114" width="14" height="2.5" rx="1" /></g>
+          <g class="eco-planters"><rect x="102" y="100" width="14" height="2.5" rx="1" /><rect x="122" y="100" width="14" height="2.5" rx="1" /><rect x="144" y="100" width="14" height="2.5" rx="1" /><rect x="164" y="100" width="14" height="2.5" rx="1" /></g>
+          <g class="eco-planters"><rect x="102" y="86" width="14" height="2.5" rx="1" /><rect x="122" y="86" width="14" height="2.5" rx="1" /><rect x="144" y="86" width="14" height="2.5" rx="1" /><rect x="164" y="86" width="14" height="2.5" rx="1" /></g>
+          <g class="eco-planters"><rect x="102" y="72" width="14" height="2.5" rx="1" /><rect x="122" y="72" width="14" height="2.5" rx="1" /><rect x="144" y="72" width="14" height="2.5" rx="1" /><rect x="164" y="72" width="14" height="2.5" rx="1" /></g>
+        </g>
 
-          <!-- Rooftop solar panels -->
-          <g stroke="#6ea6c9" stroke-width="0.6">
-            <g class="eco-panel">
-              <line x1="104" y1="49" x2="104" y2="51" stroke="#8a9aa3" stroke-width="1.5" />
-              <polygon points="98,49 118,49 122,41 102,41" fill="#2c5e80" />
-              <line x1="100" y1="45" x2="120" y2="45" /><line x1="108" y1="49" x2="112" y2="41" />
-            </g>
-            <g class="eco-panel">
-              <line x1="134" y1="49" x2="134" y2="51" stroke="#8a9aa3" stroke-width="1.5" />
-              <polygon points="128,49 148,49 152,41 132,41" fill="#2c5e80" />
-              <line x1="130" y1="45" x2="150" y2="45" /><line x1="138" y1="49" x2="142" y2="41" />
-            </g>
-            <g class="eco-panel">
-              <line x1="164" y1="49" x2="164" y2="51" stroke="#8a9aa3" stroke-width="1.5" />
-              <polygon points="158,49 178,49 182,41 162,41" fill="#2c5e80" />
-              <line x1="160" y1="45" x2="180" y2="45" /><line x1="168" y1="49" x2="172" y2="41" />
-            </g>
+        <!-- Rooftop solar panels -->
+        <g stroke="#6ea6c9" stroke-width="0.6">
+          <g class="eco-panel">
+            <line x1="104" y1="49" x2="104" y2="51" stroke="#8a9aa3" stroke-width="1.5" />
+            <polygon points="98,49 118,49 122,41 102,41" fill="#2c5e80" />
+            <line x1="100" y1="45" x2="120" y2="45" /><line x1="108" y1="49" x2="112" y2="41" />
           </g>
-          <g clip-path="url(#eco-panel-clip)">
-            <g transform="skewX(-20)">
-              <rect class="eco-glint" x="90" y="38" width="7" height="14" fill="#ffffff" opacity="0.6" />
-            </g>
+          <g class="eco-panel">
+            <line x1="134" y1="49" x2="134" y2="51" stroke="#8a9aa3" stroke-width="1.5" />
+            <polygon points="128,49 148,49 152,41 132,41" fill="#2c5e80" />
+            <line x1="130" y1="45" x2="150" y2="45" /><line x1="138" y1="49" x2="142" y2="41" />
           </g>
+          <g class="eco-panel">
+            <line x1="164" y1="49" x2="164" y2="51" stroke="#8a9aa3" stroke-width="1.5" />
+            <polygon points="158,49 178,49 182,41 162,41" fill="#2c5e80" />
+            <line x1="160" y1="45" x2="180" y2="45" /><line x1="168" y1="49" x2="172" y2="41" />
+          </g>
+        </g>
+        <g clip-path="url(#eco-panel-clip)">
+          <g transform="skewX(-20)">
+            <rect class="eco-glint" x="90" y="38" width="7" height="14" fill="#ffffff" opacity="0.6" />
+          </g>
+        </g>
 
-          <!-- Green walls -->
-          <g fill="none" stroke="#3f9a5c" stroke-width="2.5" stroke-linecap="round">
-            <path class="eco-vine" pathLength="1" d="M97 150 C 91 138, 103 128, 97 116 S 91 94, 97 82 S 103 66, 97 57" />
-            <path class="eco-vine" pathLength="1" d="M183 150 C 189 138, 177 128, 183 116 S 189 94, 183 82 S 177 66, 183 57" />
-          </g>
-          <g fill="#5db574">
-            <g><ellipse class="eco-leaf" cx="93" cy="140" rx="3.5" ry="2" /><ellipse class="eco-leaf" cx="101" cy="124" rx="3.5" ry="2" /><ellipse class="eco-leaf" cx="93" cy="106" rx="3.5" ry="2" /><ellipse class="eco-leaf" cx="101" cy="90" rx="3.5" ry="2" /><ellipse class="eco-leaf" cx="93" cy="72" rx="3.5" ry="2" /></g>
-            <g><ellipse class="eco-leaf" cx="187" cy="140" rx="3.5" ry="2" /><ellipse class="eco-leaf" cx="179" cy="124" rx="3.5" ry="2" /><ellipse class="eco-leaf" cx="187" cy="106" rx="3.5" ry="2" /><ellipse class="eco-leaf" cx="179" cy="90" rx="3.5" ry="2" /><ellipse class="eco-leaf" cx="187" cy="72" rx="3.5" ry="2" /></g>
-          </g>
+        <!-- Green walls -->
+        <g fill="none" stroke="#3f9a5c" stroke-width="2.5" stroke-linecap="round">
+          <path class="eco-vine" pathLength="1" d="M97 150 C 91 138, 103 128, 97 116 S 91 94, 97 82 S 103 66, 97 57" />
+          <path class="eco-vine" pathLength="1" d="M183 150 C 189 138, 177 128, 183 116 S 189 94, 183 82 S 177 66, 183 57" />
+        </g>
+        <g fill="#5db574">
+          <g><ellipse class="eco-leaf" cx="93" cy="140" rx="3.5" ry="2" /><ellipse class="eco-leaf" cx="101" cy="124" rx="3.5" ry="2" /><ellipse class="eco-leaf" cx="93" cy="106" rx="3.5" ry="2" /><ellipse class="eco-leaf" cx="101" cy="90" rx="3.5" ry="2" /><ellipse class="eco-leaf" cx="93" cy="72" rx="3.5" ry="2" /></g>
+          <g><ellipse class="eco-leaf" cx="187" cy="140" rx="3.5" ry="2" /><ellipse class="eco-leaf" cx="179" cy="124" rx="3.5" ry="2" /><ellipse class="eco-leaf" cx="187" cy="106" rx="3.5" ry="2" /><ellipse class="eco-leaf" cx="179" cy="90" rx="3.5" ry="2" /><ellipse class="eco-leaf" cx="187" cy="72" rx="3.5" ry="2" /></g>
+        </g>
 
-          <!-- Trees and bushes -->
-          <g fill="#3f9a5c">
-            <ellipse class="eco-bush" cx="104" cy="150" rx="9" ry="5" />
-            <ellipse class="eco-bush" cx="176" cy="150" rx="9" ry="5" />
+        <!-- Trees and bushes -->
+        <g fill="#3f9a5c">
+          <ellipse class="eco-bush" cx="104" cy="150" rx="9" ry="5" />
+          <ellipse class="eco-bush" cx="176" cy="150" rx="9" ry="5" />
+        </g>
+        <g class="eco-tree">
+          <g class="eco-tree-grow">
+            <rect x="60" y="126" width="4" height="24" fill="#8a6a4a" />
+            <circle cx="62" cy="120" r="12" fill="#3f9a5c" /><circle cx="53" cy="127" r="8" fill="#3f9a5c" /><circle cx="71" cy="127" r="8" fill="#3f9a5c" />
+            <circle cx="58" cy="116" r="5" fill="#5db574" />
           </g>
-          <g class="eco-tree">
-            <g class="eco-tree-grow">
-              <rect x="60" y="126" width="4" height="24" fill="#8a6a4a" />
-              <circle cx="62" cy="120" r="12" fill="#3f9a5c" /><circle cx="53" cy="127" r="8" fill="#3f9a5c" /><circle cx="71" cy="127" r="8" fill="#3f9a5c" />
-              <circle cx="58" cy="116" r="5" fill="#5db574" />
-            </g>
+        </g>
+        <g class="eco-tree eco-tree-right">
+          <g class="eco-tree-grow">
+            <rect x="220" y="126" width="4" height="24" fill="#8a6a4a" />
+            <circle cx="222" cy="120" r="12" fill="#3f9a5c" /><circle cx="213" cy="127" r="8" fill="#3f9a5c" /><circle cx="231" cy="127" r="8" fill="#3f9a5c" />
+            <circle cx="218" cy="116" r="5" fill="#5db574" />
           </g>
-          <g class="eco-tree eco-tree-right">
-            <g class="eco-tree-grow">
-              <rect x="220" y="126" width="4" height="24" fill="#8a6a4a" />
-              <circle cx="222" cy="120" r="12" fill="#3f9a5c" /><circle cx="213" cy="127" r="8" fill="#3f9a5c" /><circle cx="231" cy="127" r="8" fill="#3f9a5c" />
-              <circle cx="218" cy="116" r="5" fill="#5db574" />
-            </g>
-          </g>
+        </g>
 
-          <!-- Eco badge -->
-          <circle class="eco-badge-ring" cx="203" cy="80" r="11" fill="none" stroke="#168b59" stroke-width="2" />
-          <g class="eco-badge">
-            <circle cx="203" cy="80" r="11" fill="#168b59" />
-            <path d="M197 86 C 197 77, 203 74, 209 74 C 209 81, 204 86, 197 86 Z" fill="#ffffff" />
-            <line x1="198.5" y1="84.5" x2="205" y2="78" stroke="#168b59" stroke-width="1.2" stroke-linecap="round" />
-          </g>
-        </svg>
+        <!-- Eco badge -->
+        <circle class="eco-badge-ring" cx="203" cy="80" r="11" fill="none" stroke="#168b59" stroke-width="2" />
+        <g class="eco-badge">
+          <circle cx="203" cy="80" r="11" fill="#168b59" />
+          <path d="M197 86 C 197 77, 203 74, 209 74 C 209 81, 204 86, 197 86 Z" fill="#ffffff" />
+          <line x1="198.5" y1="84.5" x2="205" y2="78" stroke="#168b59" stroke-width="1.2" stroke-linecap="round" />
+        </g>
+      </svg>
 
-        <div class="app-loader-brand" aria-hidden="true">
-          <span class="app-loader-icon">⌂</span> HDB <span class="app-loader-green">EcoHome</span>
-        </div>
-        <div class="app-loader-bar" aria-hidden="true"></div>
-        <div class="app-loader-captions" aria-hidden="true">
-          <span>Clearing the air…</span>
-          <span>Installing solar panels…</span>
-          <span>Planting trees…</span>
-          <span>Growing green walls…</span>
-          <span class="eco-caption-final">Loading your eco home…</span>
-        </div>
+      <div class="app-loader-brand" aria-hidden="true">
+        <span class="app-loader-icon">⌂</span> HDB <span class="app-loader-green">EcoHome</span>
+      </div>
+      <div class="app-loader-bar" aria-hidden="true"></div>
+      <div class="app-loader-captions" aria-hidden="true">
+        <span>Clearing the air…</span>
+        <span>Installing solar panels…</span>
+        <span>Planting trees…</span>
+        <span>Growing green walls…</span>
+        <span class="eco-caption-final">Loading your eco home…</span>
       </div>
     </div>
+    <div id="app"></div>
     <noscript>HDB EcoHome needs JavaScript to run. Please enable it and reload the page.</noscript>
     <script type="module" src="/src/main.js"></script>
   </body>
