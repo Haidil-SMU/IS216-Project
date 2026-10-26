@@ -40,13 +40,13 @@
         white-space: nowrap;
       }
       .app-loader-brand {
-        font-size: 28px;
+        font-size: clamp(26px, 3vw, 34px);
         font-weight: 700;
         white-space: nowrap;
       }
       .app-loader-icon {
         color: #168b59;
-        font-size: 40px;
+        font-size: 1.43em;
         vertical-align: -3px;
       }
       .app-loader-green { color: #168b59; }
@@ -107,9 +107,11 @@
       /* Scene */
       .eco-scene {
         display: block;
-        width: min(300px, 80vw);
+        /* As large as fits, leaving ~240px of height for the logo, button and caption (280:180 scene) */
+        width: min(900px, 92vw, (100vh - 240px) * 1.556);
+        width: min(900px, 92vw, (100svh - 240px) * 1.556);
         height: auto;
-        border-radius: 20px;
+        border-radius: 24px;
         box-shadow: 0 10px 30px rgba(16, 47, 36, 0.1);
         animation: eco-color 3.6s ease-out both;
       }
