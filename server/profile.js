@@ -78,4 +78,4 @@ router.delete('/picture', requireAuth, async (req, res) => {
   res.sendStatus(204);
 });
 
-module.exports = { router };
+module.exports = { router, imageType };

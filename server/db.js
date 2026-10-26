@@ -103,6 +103,8 @@ async function connectDb() {
   );
   await db.collection('quotationRequests').createIndex({ contractorId: 1, createdAt: -1 });
   await db.collection('quotationRequests').createIndex({ userId: 1 });
+  await db.collection('portfolioProjects').createIndex({ contractorId: 1, createdAt: -1 });
+  await db.collection('projectPhotos').createIndex({ projectId: 1, createdAt: 1 });
 
   await tidyPlacementTicks(db);
 
