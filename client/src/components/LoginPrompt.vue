@@ -2,6 +2,7 @@
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { whenSplashGone } from '@/splash'
 
 const SECONDS = 5
 
@@ -11,6 +12,10 @@ const secondsLeft = ref(SECONDS)
 const loginButton = ref(null)
 // Bumped on every open so the button's countdown fill restarts from empty.
 const openId = ref(0)
+// A protected address opened from the address bar asks for login behind the first-load
+// splash; wait until the splash is gone so the popup and its countdown are actually seen.
+const splashGone = ref(false)
+whenSplashGone().then(() => (splashGone.value = true))
 let timer = null
 
 function stopTimer() {
@@ -26,10 +31,10 @@ function go() {
 
 // Restart the countdown each time the popup opens; stop it when it closes.
 watch(
-  () => auth.loginPrompt,
-  async (location) => {
+  [() => auth.loginPrompt, splashGone],
+  async ([location, ready]) => {
     stopTimer()
-    if (!location) return
+    if (!location || !ready) return
     openId.value += 1
     secondsLeft.value = SECONDS
     timer = setInterval(() => {
@@ -39,6 +44,7 @@ watch(
     await nextTick()
     loginButton.value?.focus()
   },
+  { immediate: true },
 )
 
 onBeforeUnmount(stopTimer)
@@ -47,7 +53,7 @@ onBeforeUnmount(stopTimer)
 <template>
   <Transition name="lp" appear>
     <div
-      v-if="auth.loginPrompt"
+      v-if="auth.loginPrompt && splashGone"
       class="login-prompt"
       role="dialog"
       aria-modal="true"

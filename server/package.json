@@ -5,6 +5,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
+    "test": "node --test \"test/*.test.js\"",
     "keys": "node scripts/generate-singpass-keys.js",
     "mockpass": "SHOW_LOGIN_PAGE=true FAPI_CLIENT_JWKS_ENDPOINT=http://127.0.0.1:8000/api/auth/singpass/jwks CP_RP_JWKS_ENDPOINT=http://127.0.0.1:8000/api/auth/singpass/jwks npx -y @opengovsg/mockpass@4.9.3"
   },

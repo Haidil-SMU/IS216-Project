@@ -8,9 +8,17 @@ const SCENE_MS = 4000
 const LIGHTS_MS = 1600
 const LEAVE_MS = 800
 
+let markGone
+const gone = new Promise((resolve) => (markGone = resolve))
+
+// Resolves once the splash has left the screen, so popups and timers can wait for it.
+export function whenSplashGone() {
+  return document.getElementById('app-loader') ? gone : Promise.resolve()
+}
+
 export function hideSplash() {
   const loader = document.getElementById('app-loader')
-  if (!loader) return
+  if (!loader) return markGone()
 
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
   const wait = reduceMotion ? 0 : Math.max(0, SCENE_MS - performance.now())
@@ -38,6 +46,7 @@ function switchOn(loader) {
     setTimeout(() => {
       loader.remove()
       app.classList.remove('app-reveal')
+      markGone()
     }, LEAVE_MS)
   }, LIGHTS_MS)
 }
