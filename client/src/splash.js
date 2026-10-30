@@ -1,7 +1,11 @@
-// Ends the first-load splash from index.html once the app is ready.
+// Ends the first-visit splash from index.html once the app is ready.
 // When the eco scene has finished building, dusk falls and the user switches
 // the lights on; the splash then fades into the home page. The styles live in index.html.
 
+// Set once the user has switched the lights on. A session cookie, so every tab shares it
+// and it clears when the browser closes. An inline script in index.html reads the same
+// cookie and removes the splash.
+const SEEN_COOKIE = 'ecohome.splashSeen=1; path=/; SameSite=Lax'
 // How long the scene in index.html takes to build, from page load.
 const SCENE_MS = 4000
 // Time for every window to light up before moving on.
@@ -35,6 +39,11 @@ function showSwitch(loader) {
 }
 
 function switchOn(loader) {
+  try {
+    document.cookie = SEEN_COOKIE
+  } catch {
+    // Cookies are blocked, so the splash shows again next time.
+  }
   loader.classList.add('is-lit')
   loader.querySelector('[role="status"]').textContent = 'Welcome home'
 

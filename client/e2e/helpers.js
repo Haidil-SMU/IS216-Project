@@ -7,7 +7,8 @@ export function uniqueEmail(label) {
   return `e2e+${label}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@test.local`
 }
 
-// Every full page load starts with the splash, which waits for the user to switch the lights on.
+// A first visit starts with the splash, which waits for the user to switch the lights on.
+// Each test gets a fresh browser context, so this only applies to a test's first page load.
 export async function dismissSplash(page) {
   const splash = page.locator('#app-loader')
   await splash.locator('.app-loader-switch').click()
