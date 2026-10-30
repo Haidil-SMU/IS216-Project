@@ -9,7 +9,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <title>HDB EcoHome</title>
     <!--
-      Styles for the first-load screen. Inlined so it shows before the JS bundle arrives.
+      Styles for the first-visit screen. Inlined so it shows before the JS bundle arrives.
       The scene shows an HDB block becoming greener: the smog clears, solar panels go up,
       trees grow, green walls climb and balcony planters appear. Each element's resting
       style is its final "eco" state and the animations only describe where it starts,
@@ -318,7 +318,7 @@
     </style>
   </head>
   <body>
-    <!-- Sits above the app until the user switches the lights on (see src/splash.js). -->
+    <!-- On a first visit, sits above the app until the user switches the lights on (see src/splash.js). -->
     <div id="app-loader" class="app-loader">
       <span class="app-loader-sr" role="status">Loading HDB EcoHome…</span>
 
@@ -528,6 +528,14 @@
         </button>
       </div>
     </div>
+    <!-- Skip the splash if it was already seen since the browser opened. The cookie is set in src/splash.js. -->
+    <script>
+      try {
+        if (document.cookie.split('; ').includes('ecohome.splashSeen=1')) document.getElementById('app-loader').remove()
+      } catch {
+        // Cookies are blocked, so treat this as a first visit.
+      }
+    </script>
     <div id="app"></div>
     <noscript>HDB EcoHome needs JavaScript to run. Please enable it and reload the page.</noscript>
     <script type="module" src="/src/main.js"></script>
