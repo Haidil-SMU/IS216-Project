@@ -28,7 +28,7 @@ test('protected pages need a login, and homeowners cannot reach contractor pages
   })
 
   await test.step('the router sends a homeowner away from the contractor dashboard', async () => {
-    await openPage(page, '/ContractorDashboard')
+    await page.goto('/ContractorDashboard')
     await expect(page).toHaveURL('/')
   })
 

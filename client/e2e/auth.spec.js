@@ -3,7 +3,6 @@ import {
   PASSWORD,
   uniqueEmail,
   closeHouseholdSetup,
-  dismissSplash,
   logInThroughForm,
   logOutButton,
   openPage,
@@ -27,7 +26,8 @@ test('a homeowner can sign up, stay logged in, log out and log back in safely', 
   const cookie = (await context.cookies()).find((c) => c.name === 'ecohome.sid')
   expect(cookie?.httpOnly).toBe(true)
   await page.reload()
-  await dismissSplash(page)
+  // The splash only shows on a first visit.
+  await expect(page.locator('#app-loader')).toHaveCount(0)
   await expect(page).toHaveURL('/MyProfile')
   await expect(logOutButton(page)).toBeVisible()
 
@@ -43,7 +43,7 @@ test('a homeowner can sign up, stay logged in, log out and log back in safely', 
 
   // The right password logs back in. A ?redirect= to another site is ignored, so the
   // login page can't be used to send users somewhere else.
-  await openPage(page, '/login?redirect=//evil.example')
+  await page.goto('/login?redirect=//evil.example')
   await logInThroughForm(page, email, PASSWORD)
   await expect(page).toHaveURL('/')
   await expect(logOutButton(page)).toBeVisible()
