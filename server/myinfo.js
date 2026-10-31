@@ -3,7 +3,7 @@
 const express = require('express');
 const { requireClient } = require('./auth');
 
-// Myinfo HDB type codes -> planner flat types (hdb_rooms.json).
+// Myinfo HDB type codes -> planner flat types (the flat_types collection).
 const HDB_TYPES = {
   111: '2-room', // 1-room flat: closest planner layout
   112: '2-room',
