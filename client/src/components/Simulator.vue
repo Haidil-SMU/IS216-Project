@@ -16,8 +16,8 @@ const finished = ref(false)
 const minute = ref(480)
 const energy = ref(0)
 const cost = ref(0)
-const electricityRate = 0.32 // Demonstration tariff (SGD per kWh)
-const gameSpeed = 1800 // Wait 1.8 real seconds between 10-minute game ticks
+const electricityRate = ref(0.32) // Demonstration tariff (SGD per kWh)
+const gameSpeed = 2800 // Wait 1.8 real seconds between 10-minute game ticks
 
 // Each situation lasts 3 game hours, from 8 AM until 11 PM.
 const currentSituation = ref(null)
@@ -336,6 +336,7 @@ async function loadRooms() {
 
     const records = response.data.rooms
     const items = response.data.items
+    electricityRate.value = response.data.electricityRate
 
     if (!Array.isArray(records) || !Array.isArray(items)) {
       throw new Error('Invalid rooms or catalogue response')
@@ -959,7 +960,7 @@ function gameTick() {
   const hoursPassed = step / 60
   const energyThisTick = currentPower.value * hoursPassed
   energy.value = energy.value + energyThisTick
-  cost.value = cost.value + energyThisTick * electricityRate
+  cost.value = cost.value + energyThisTick * electricityRate.value
   checkTimedGoals(step)
 
   // Every 3 game hours the old checklist is archived and replaced.
@@ -1046,7 +1047,7 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
         <div class="stat-card">
           <div class="stat-label">💳 ELECTRICITY COST</div>
           <div class="stat-number">S${{ cost.toFixed(2) }}</div>
-          <div class="stat-foot">DEMO TARIFF · S${{ electricityRate.toFixed(2) }}/kWh</div>
+          <div class="stat-foot">ESTIMATED ELECTRICITY RATE · S${{ electricityRate.toFixed(2) }}/kWh</div>
         </div>
         <div class="stat-card mission-stat">
           <div class="stat-label">✅ MISSIONS COMPLETED</div>
@@ -1094,7 +1095,9 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
               <p>Tap an appliance to switch it on or off. Open Settings to adjust supported appliances.</p>
               <div class="room-devices">
                 <div v-for="item in selectedRoom.appliances" :key="item.id" class="device-wrapper">
-                  <button type="button" class="device-tile" :class="{ powered: item.on }" :disabled="!playing || finished" @click="toggleAppliance(item)">
+                  <button
+  type="button" class="device-tile" :class="{powered: item.on,selected: settingsApplianceId === item.id}":disabled="!playing || finished" @click="toggleAppliance(item)"
+>
                     <span class="device-emoji">{{ item.icon }}</span>
                     <strong>{{ item.name }}</strong>
                     <span class="device-power">{{ item.basePowerKw != null ? item.basePowerKw.toFixed(3) + ' estimated kW' : 'Power estimate unavailable' }}</span>
@@ -1658,4 +1661,25 @@ button:focus-visible, .device-tile:focus-visible { outline: 3px solid #ffbb64; o
 .setting-stepper button { width: 34px; height: 34px; border: 1px solid #b7dec9; border-radius: 8px; background: #e6f7eb; color: #174632; font-size: 18px; cursor: pointer; }
 .setting-stepper button:disabled { opacity: .4; cursor: not-allowed; }
 .settings-note { display: block; color: var(--muted); margin-top: 14px; line-height: 1.5; }
+
+/* Highlight the appliance currently being adjusted */
+.device-tile.selected {
+  border: 3px solid #2563eb;
+  background: #dbeafe;
+  box-shadow: 0 0 0 3px #93c5fd;
+}
+
+/* Keep the blue highlight even when the appliance is ON */
+.device-tile.powered.selected {
+  border: 3px solid #2563eb;
+  background: #dbeafe;
+  box-shadow: 0 0 0 3px #93c5fd;
+}
+
+/* Selected appliance in nighttime mode */
+.sky-night .device-tile.selected {
+  border-color: #60a5fa;
+  background: #1e3a5f;
+  box-shadow: 0 0 0 3px #2563eb;
+}
 </style>
