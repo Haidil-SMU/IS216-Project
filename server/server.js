@@ -225,6 +225,17 @@ app.get('/api/contractors', async (req, res) => {
 // Each contractor's portfolio of past projects, shown from View Portfolio.
 app.use('/api/contractors', portfolio.publicRouter);
 
+// Resolve the optional saved energy plan a homeowner attached to a quotation request.
+// It must belong to them and to the chosen household, otherwise it is dropped.
+async function resolveAttachedPlanId(db, userId, householdId, planId) {
+  if (!planId || !householdId) return null;
+  const plan = await db.collection('plans').findOne({ id: String(planId), userId: new ObjectId(userId) });
+  if (!plan || !Array.isArray(plan.layout) || !plan.layout.length) return null;
+  const household = await db.collection('households').findOne({ _id: plan.householdId, userId: new ObjectId(userId) });
+  if (!household || household.id !== String(householdId)) return null;
+  return plan.id;
+}
+
 // ============================================================
 // POST - SUBMIT QUOTATION REQUEST
 // ============================================================
@@ -234,6 +245,7 @@ app.post('/api/quotation-requests', auth.requireClient, async (req, res) => {
     const {
       contractorId,
       householdId,
+      planId,
       household,
       services,
       description,
@@ -285,6 +297,7 @@ app.post('/api/quotation-requests', auth.requireClient, async (req, res) => {
       userId: new ObjectId(req.session.userId),
 
       householdId: householdId || null,
+      planId: await resolveAttachedPlanId(db, req.session.userId, householdId, planId),
 
       household: {
         name: household.name,
@@ -385,10 +398,15 @@ app.get('/api/quotation-requests/:requestId/floorplan', auth.requireContractor, 
     }
 
     // The household must belong to the homeowner who sent the request.
-    const plan = await spatialRoutes.floorplanOf(db, request.householdId, request.userId);
+    // If the homeowner attached a saved plan, show that plan's layout; otherwise the home's current layout.
+    // Always read it fresh so edits to the request or the layout show up for the contractor.
+    const plan = request.planId
+      ? await spatialRoutes.planFloorplanOf(db, request.planId, request.userId, request.householdId)
+      : await spatialRoutes.floorplanOf(db, request.householdId, request.userId);
     if (!plan) {
       return res.status(404).json({ error: 'The 3D layout is no longer available.' });
     }
+    res.set('Cache-Control', 'no-store');
     res.json(plan);
   } catch (error) {
     console.error('Error loading quotation request floor plan:', error);
@@ -413,6 +431,7 @@ app.put('/api/quotation-requests/:requestId', auth.requireClient, async (req, re
     const {
       contractorId,
       householdId,
+      planId,
       household,
       services,
       description,
@@ -454,6 +473,7 @@ app.put('/api/quotation-requests/:requestId', auth.requireClient, async (req, re
         {
           $set: {
             householdId: householdId || null,
+            planId: await resolveAttachedPlanId(db, req.session.userId, householdId, planId),
 
             household: {
               name: String(household.name).trim(),

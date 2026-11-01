@@ -20,6 +20,7 @@ const selectedServiceCodes = String(route.query.services || '')
 
 const contractor = ref(null)
 const households = ref([])
+const plans = ref([])
 const flatTypes = ref([])
 
 const loading = ref(true)
@@ -51,6 +52,14 @@ const fallbackFlatTypes = [
 
 const propertyMode = ref('saved')
 const selectedHouseholdId = ref('')
+
+// Optional: the saved energy plan whose 3D layout the contractor should see (empty = current home layout).
+const selectedPlanId = ref('')
+const planChoices = computed(() => {
+  return plans.value.filter(
+    plan => plan.householdId === selectedHouseholdId.value && Array.isArray(plan.layout) && plan.layout.length
+  )
+})
 
 // Keep the original quotation's property details when editing.
 const originalHouseholdId = ref('')
@@ -202,6 +211,10 @@ async function getData() {
       ? plannerResponse.data.users
       : []
 
+    plans.value = Array.isArray(plannerResponse.data.plans)
+      ? plannerResponse.data.plans
+      : []
+
     flatTypes.value = Array.isArray(plannerResponse.data.flatTypes)
       ? plannerResponse.data.flatTypes
       : []
@@ -266,6 +279,7 @@ async function loadExistingRequest() {
   }
 
   originalHouseholdId.value = getId(existingRequest.householdId)
+  const originalPlanId = getId(existingRequest.planId)
 
   originalHouseholdSnapshot.value = {
     householdName: existingRequest.household?.name || '',
@@ -292,6 +306,10 @@ async function loadExistingRequest() {
   if (matchesSavedHousehold) {
     propertyMode.value = 'saved'
     selectedHouseholdId.value = originalHouseholdId.value
+    // A plan that has since been deleted can't be attached any more.
+    selectedPlanId.value = plans.value.some(plan => plan.id === originalPlanId)
+      ? originalPlanId
+      : ''
 
     // Preserve the quotation snapshot instead of replacing it
     // with the household's current profile values.
@@ -346,6 +364,7 @@ function changePropertyMode() {
 
   // Keep the displayed details available for manual editing.
   selectedHouseholdId.value = ''
+  selectedPlanId.value = ''
 }
 
 // ============================================================
@@ -413,6 +432,10 @@ async function submitRequest() {
 
     householdId: propertyMode.value === 'saved'
       ? selectedHouseholdId.value
+      : null,
+
+    planId: propertyMode.value === 'saved' && selectedPlanId.value
+      ? selectedPlanId.value
       : null,
 
     household: {
@@ -616,6 +639,27 @@ onMounted(getData)
                     : 'Your saved household details have been filled in automatically. Choose Enter Manually to use different property details.'
                 }}
               </p>
+
+              <div v-if="planChoices.length || selectedPlanId" class="mt-3">
+                <label for="layoutPlan" class="form-label fw-semibold small mb-1">
+                  3D layout the contractor will see
+                </label>
+
+                <select
+                  id="layoutPlan"
+                  class="form-select form-select-sm"
+                  v-model="selectedPlanId"
+                >
+                  <option value="">My current home layout</option>
+                  <option
+                    v-for="plan in planChoices"
+                    :key="plan.id"
+                    :value="plan.id"
+                  >
+                    Plan: {{ plan.name }}
+                  </option>
+                </select>
+              </div>
             </div>
 
             <!-- PROPERTY FIELDS -->

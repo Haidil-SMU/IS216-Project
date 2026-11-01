@@ -47,7 +47,7 @@ export function counterPose(counter, spec, cu) {
   return { x: counter.x + u[0] * cu + n[0] * back, z: counter.z + u[1] * cu + n[1] * back, rotY: counter.rotY, wall: -1, t: 0, on: counter.id, cu }
 }
 
-export function onCounter(counter, spec, cu) {
+function onCounter(counter, spec, cu) {
   const lim = Math.max(0, counter.spec.w / 2 - spec.w / 2 - COUNTER_EDGE)
   cu = clamp(cu, -lim, lim)
   const sink = sinkSpan(counter.spec)
@@ -191,6 +191,24 @@ const rectOf = (r) => ({ x: r.origin.x, z: r.origin.z, w: r.dimension.w, d: r.di
 const tAlong = (r, wall, g) => [g - r.x, g - r.z, r.x + r.w - g, r.z + r.d - g][wall]
 const gAlong = (r, wall, t) => [r.x + t, r.z + t, r.x + r.w - t, r.z + r.d - t][wall]
 
+
+const NEAR = 0.02
+export function sharedWall(A, B) {
+  const a = rectOf(A), b = rectOf(B)
+  const tests = [
+    [0, Math.abs(a.z - (b.z + b.d)) < NEAR, a.x, a.x + a.w, b.x, b.x + b.w],
+    [1, Math.abs(a.x + a.w - b.x) < NEAR, a.z, a.z + a.d, b.z, b.z + b.d],
+    [2, Math.abs(a.z + a.d - b.z) < NEAR, a.x, a.x + a.w, b.x, b.x + b.w],
+    [3, Math.abs(a.x - (b.x + b.w)) < NEAR, a.z, a.z + a.d, b.z, b.z + b.d],
+  ]
+  for (const [wall, ok, a0, a1, b0, b1] of tests) {
+    if (!ok) continue
+    const lo = Math.max(a0, b0), hi = Math.min(a1, b1)
+    if (hi - lo > 0.05) return { wall, length: hi - lo, t: tAlong(a, wall, (lo + hi) / 2) }
+  }
+  return null
+}
+
 export function refitPlacements(oldR, newR, carry) {
   const od = oldR.dimension, nd = newR.dimension, oo = oldR.origin, no = newR.origin
   const out = (oldR.placements || []).map((p) => ({ ...p }))
@@ -230,7 +248,7 @@ export const itemsOfRoom = (r) => (r.placements || []).map((p) => ({
   connectsTo: p.connectsTo ?? null,
 }))
 
-export function neighbourAcross(rooms, r, wall, t) {
+function neighbourAcross(rooms, r, wall, t) {
   const a = r.origin, d = r.dimension
   const line = [a.z, a.x + d.w, a.z + d.d, a.x][wall]
   const g = [a.x + t, a.z + t, a.x + d.w - t, a.z + d.d - t][wall]

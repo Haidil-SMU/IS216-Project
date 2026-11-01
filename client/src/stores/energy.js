@@ -1,6 +1,6 @@
 import { NORMAL, TANGENT, wallPoint, nearestWall, wallLength, onWall, placeAt, isBlocked } from './placement.js'
 
-export const WEIGHTS = {
+const WEIGHTS = {
   sun: 12,    // direct sun on an aircon or fridge
   heat: 8,    // NEA: keep the fridge away from heat sources (cooker, oven, sun); aircon works harder next to them
   air: 8,     // aircon airflow cut short by furniture
@@ -10,9 +10,11 @@ export const WEIGHTS = {
   glare: 5,   // NEA: place TV and computer screens perpendicular to windows, so brightness need not go up
   corner: 5,  // NEA: put lamps in corners, where wall reflections add light
   overlap: 10, // two aircons cooling the same part of a room: the later one mostly adds running cost
+  window: 10, // an aircon close to a window loses cool air and picks up the sun's heat
+  reach: 10,  // rooms joined by an opened wall: an aircon should be able to cool the open area next to it
 }
 
-export const LABELS = {
+const LABELS = {
   sun: 'Sunlight near window',
   heat: 'Nearby heat source',
   air: 'Blocked airflow',
@@ -22,6 +24,8 @@ export const LABELS = {
   glare: 'Screen facing the window',
   corner: 'Lamp not in a corner',
   overlap: 'Another aircon already cools this spot',
+  window: 'Too close to a window',
+  reach: 'Not reaching the open area next door',
 }
 
 const REASONS = {
@@ -34,6 +38,9 @@ const REASONS = {
   glare: 'at a right angle to the window, so the screen has less glare',
   corner: 'in a corner, where the walls reflect more of its light',
   overlap: 'away from the other aircon, so the two are not cooling the same part of the room',
+  window: 'further from the window, so less cool air is lost',
+  reach: 'where it can also cool the open area next to it',
+  sunwindow: 'further from the window, out of its sunlight and warm air',
 }
 
 const FRIDGE_REAR_GAP = 0.05
@@ -48,6 +55,9 @@ const AC_OVERLAP_SPREAD = 3.0 // metres: two aircons closer than this mostly coo
 const AC_M2_PER_KW = 5 // NEA rule of thumb: cooling capacity (kW) = floor area (m²) ÷ 5
 const TALL = 1.2 // appliances this tall (fridge, dryer...) block a window if they stand in front of it
 const WINDOW_CLEAR = 0.8 // metres of floor in front of a window to keep clear (NEA: keep windows clear of large furniture)
+const WINDOW_KEEP = 2.0 // metres: an aircon this far from a window (or glass door) loses nothing to it
+const COOL_REACH = 4.5 // metres: how far an aircon's cool air is felt across an open floor
+const REACH_STEP = 0.75 // spacing of the sample points used to measure how much of an open area an aircon reaches
 const GOOD_TICKS = 3 // NEA checklist: choose a 3-tick air-conditioner, refrigerator or lamp
 const TICKED = ['ac', 'fridge', 'lamp']
 const SAME_SPOT_TOLERANCE = 0.005
@@ -117,7 +127,7 @@ export function throwOf(room, items, ac, { ignoreFans = false } = {}) {
   return reach
 }
 
-export function fanClash(items, ac) {
+function fanClash(items, ac) {
   const dir = airDirection(ac)
   let worst = 0
   for (const o of items) {
@@ -156,14 +166,71 @@ function cornerDistance(room, a) {
   return Math.min(...[[0, 0], [room.w, 0], [0, room.d], [room.w, room.d]].map(([cx, cz]) => Math.hypot(a.x - cx, a.z - cz)))
 }
 
-export function factors(room, others, a, { ownOnly = false } = {}) {
+const idOf = (x) => String(x.id ?? x._id ?? '')
+const placedBefore = (o, a) => { const p = idOf(o), q = idOf(a); return p !== q ? p < q : (o.rank ?? 0) < (a.rank ?? 0) }
+
+const isGlass = (spec) => spec.kind === 'window' || (spec.kind === 'door' && spec.variant === 'glass')
+
+function distanceToSegment(p, a, b) {
+  const vx = b[0] - a[0], vz = b[1] - a[1], len2 = vx * vx + vz * vz
+  const u = len2 ? clamp(((p[0] - a[0]) * vx + (p[1] - a[1]) * vz) / len2, 0, 1) : 0
+  return Math.hypot(p[0] - (a[0] + u * vx), p[1] - (a[1] + u * vz))
+}
+
+function windowGap(room, items, p) {
+  let best = Infinity
+  for (const w of items) {
+    if (!isGlass(w.spec) || !(w.wall >= 0)) continue
+    const half = w.spec.w / 2
+    best = Math.min(best, distanceToSegment(p, wallPoint(room, w.wall, w.t - half), wallPoint(room, w.wall, w.t + half)))
+  }
+  return best
+}
+
+
+function segmentsCross(p, q, a, b) {
+  const side = (o, u, v) => (u[0] - o[0]) * (v[1] - o[1]) - (u[1] - o[1]) * (v[0] - o[0])
+  return side(p, q, a) * side(p, q, b) <= 0 && side(a, b, p) * side(a, b, q) <= 0
+}
+
+function reachShare(room, ac, link) {
+  const from = [ac.x, ac.z]
+  let covered = 0, total = 0
+  for (let x = REACH_STEP / 2; x < room.w; x += REACH_STEP)
+    for (let z = REACH_STEP / 2; z < room.d; z += REACH_STEP) {
+      total++
+      if (Math.hypot(x - from[0], z - from[1]) <= COOL_REACH) covered++
+    }
+  for (const n of link.near) {
+    const gaps = link.open.filter((o) => o.to === n.name).map((o) => [wallPoint(room, o.wall, o.t0), wallPoint(room, o.wall, o.t1)])
+    for (let x = REACH_STEP / 2; x < n.w; x += REACH_STEP)
+      for (let z = REACH_STEP / 2; z < n.d; z += REACH_STEP) {
+        total++
+        const q = [x + n.dx, z + n.dz]
+        if (Math.hypot(q[0] - from[0], q[1] - from[1]) <= COOL_REACH && gaps.some(([a, b]) => segmentsCross(from, q, a, b))) covered++
+      }
+  }
+  return total ? covered / total : 1
+}
+
+
+const foreignItems = (link) => link?.foreign ?? []
+function withForeign(link) {
+  if (!link) return null
+  const foreign = (link.near || []).flatMap((n) => n.items
+    .filter((o) => o.spec.kind === 'ac' || HEAT_EMITTERS.includes(o.spec.kind))
+    .map((o) => ({ id: o.id, name: o.name, x: o.x + n.dx, z: o.z + n.dz, kwh: o.kwh, spec: { kind: o.spec.kind, mode: 'foreign' } })))
+  return { ...link, near: link.near || [], open: link.open || [], foreign }
+}
+
+export function factors(room, others, a, { ownOnly = false, link = null } = {}) {
   const kind = a.spec.kind, p = [a.x, a.z], f = {}
   if (!MOVABLE.includes(kind)) return f
 
   if (HEAT_SENSITIVE.includes(kind)) {
     f.sun = (WEIGHTS.sun / 100) * sunAt(room, others, p)
     let heat = 0
-    for (const o of others) if (HEAT_EMITTERS.includes(o.spec.kind)) heat += gauss(dist(a, o), 0.8)
+    for (const o of [...others, ...foreignItems(link)]) if (HEAT_EMITTERS.includes(o.spec.kind)) heat += gauss(dist(a, o), 0.8)
     f.heat = (WEIGHTS.heat / 100) * Math.min(1, heat)
   }
 
@@ -181,10 +248,11 @@ export function factors(room, others, a, { ownOnly = false } = {}) {
       f.side = (WEIGHTS.side / 100) * Math.max(0, AC_SIDE_GAP - sideSpaceAc) / AC_SIDE_GAP
     }
     if (!ownOnly) f.fan = (WEIGHTS.fan / 100) * fanClash(others, a)
-    // Only the aircon placed later is charged, so a pair is never counted twice.
     let overlap = 0
-    for (const o of others) if (o.spec.kind === 'ac' && o.rank < a.rank) overlap = Math.max(overlap, gauss(dist(a, o), AC_OVERLAP_SPREAD))
+    for (const o of [...others, ...foreignItems(link)]) if (o.spec.kind === 'ac' && placedBefore(o, a)) overlap = Math.max(overlap, gauss(dist(a, o), AC_OVERLAP_SPREAD))
     f.overlap = (WEIGHTS.overlap / 100) * overlap
+    f.window = (WEIGHTS.window / 100) * clamp(1 - windowGap(room, others, p) / WINDOW_KEEP, 0, 1)
+    if (link?.near?.length) f.reach = (WEIGHTS.reach / 100) * (1 - reachShare(room, a, link))
   }
 
   if (SCREENS.includes(kind)) f.glare = (WEIGHTS.glare / 100) * glareAt(room, others, a)
@@ -192,7 +260,7 @@ export function factors(room, others, a, { ownOnly = false } = {}) {
   return f
 }
 
-function candidates(room, a, others) {
+function candidates(room, a, others, link) {
   const out = []
   for (let wall = 0; wall < 4; wall++) {
     const length = wallLength(room, wall)
@@ -214,12 +282,12 @@ function candidates(room, a, others) {
         const pos = placeAt(room, a.spec, [x, z], a, others)
         if (pos && pos.wall < 0) out.push(pos)
       }
-  return out
+  return out.filter((pos) => pos.wall < 0 || !(link?.open || []).some((o) => o.wall === pos.wall && o.t0 < pos.t + a.spec.w / 2 && o.t1 > pos.t - a.spec.w / 2))
 }
 
 
-function costOf(room, others, test, a) {
-  const own = factors(room, others, test, { ownOnly: true })
+function costOf(room, others, test, a, link) {
+  const own = factors(room, others, test, { ownOnly: true, link })
   let knock = 0
   if (test.spec.kind === 'standfan') {
     const withFan = [...others, test]
@@ -228,12 +296,12 @@ function costOf(room, others, test, a) {
   return { own, knock, kwh: a.kwh * sumOf(own) + knock }
 }
 
-function findBestSpot(room, a, others) {
+function findBestSpot(room, a, others, link) {
   const tried = []
-  for (const pos of candidates(room, a, others)) {
+  for (const pos of candidates(room, a, others, link)) {
     const test = { ...a, ...pos }
     if (isBlocked(test, others)) continue
-    tried.push({ pos, ...costOf(room, others, test, a) })
+    tried.push({ pos, ...costOf(room, others, test, a, link) })
   }
   if (!tried.length) return null
   const lowest = Math.min(...tried.map((s) => s.kwh))
@@ -244,16 +312,18 @@ function findBestSpot(room, a, others) {
 
 const compass = (dx, dz) => (Math.abs(dx) > Math.abs(dz) ? (dx > 0 ? 'east' : 'west') : dz > 0 ? 'south' : 'north')
 const joinReasons = (list) => (list.length < 2 ? list.join('') : list.slice(0, -1).join(', ') + ' and ' + list[list.length - 1])
-const money = (v) => `S$${v >= 10 ? v.toFixed(0) : v.toFixed(2)}`
+const kwhText = (v) => `${v >= 10 ? Math.round(v) : v.toFixed(1)} kWh`
 const howFar = (m) => (m < 0.1 ? `${Math.max(1, Math.round(m * 100))} cm` : `${m.toFixed(1)} m`)
 
-function tipsFor(room, items, roomName) {
+function tipsFor(room, items, roomName, link) {
   const tips = []
   const area = room.w * room.d
   const acs = items.filter((o) => o.spec.kind === 'ac')
 
-  if (acs.length >= 2 && area / AC_M2_PER_KW <= 5)
+  if (!link && acs.length >= 2 && area / AC_M2_PER_KW <= 5)
     tips.push({ id: acs[acs.length - 1].id, text: `${roomName} is about ${area.toFixed(0)} m², which needs roughly ${(area / AC_M2_PER_KW).toFixed(1)} kW of cooling (NEA rule of thumb: floor area ÷ 5). One aircon is enough here; a second one mostly adds running cost, so consider keeping it for another room.` })
+
+  tips.push(...openSpaceTips(roomName, area, acs, link))
 
   if (acs.length && !items.some((o) => o.spec.kind === 'standfan'))
     tips.push({ id: acs[0].id, text: `Add a fan to ${roomName}. NEA says using a fan instead of the aircon can save about $460 a year, so keep the aircon for the hottest hours.` })
@@ -277,7 +347,29 @@ function tipsFor(room, items, roomName) {
   return tips
 }
 
-export function analyse(room, items, tariff, roomName = 'room') {
+function openSpaceTips(roomName, area, acs, link) {
+  if (!link?.near?.length) return []
+  const names = [roomName, ...link.near.map((n) => n.name)]
+  const together = names.length === 2 ? `${names[0]} and ${names[1]}` : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+  const totalArea = area + sum(link.near.map((n) => n.w * n.d))
+  const kw = (totalArea / AC_M2_PER_KW).toFixed(1)
+  const otherAcs = link.foreign.filter((o) => o.spec.kind === 'ac')
+  const allCount = acs.length + otherAcs.length
+
+  if (!allCount) return []
+  if (!acs.length)
+    return [{ id: null, text: `${roomName} is open to ${link.near.map((n) => n.name).join(' and ')}, so the aircon there can cool this space too. Put it close to the opening so its air reaches both, rather than adding another aircon here.` }]
+  if (allCount >= 2 && totalArea / AC_M2_PER_KW <= 5)
+    return [{ id: acs[acs.length - 1].id, text: `${together} are now one open space of about ${totalArea.toFixed(0)} m², which needs roughly ${kw} kW of cooling (NEA rule of thumb: floor area ÷ 5). One aircon placed near the opening can serve both, so a second one mostly adds running cost.` }]
+  if (allCount === 1 && totalArea / AC_M2_PER_KW <= 5)
+    return [{ id: acs[0].id, text: `${together} are one open space of about ${totalArea.toFixed(0)} m² (roughly ${kw} kW of cooling). This one aircon can serve both if it sits near the opening.` }]
+  if (allCount >= 2)
+    return [{ id: null, text: `${together} are one open space of about ${totalArea.toFixed(0)} m² (roughly ${kw} kW of cooling), more than one aircon covers. Two is reasonable here, but keep them well apart so each cools its own end.` }]
+  return [{ id: acs[0].id, text: `${together} are one open space of about ${totalArea.toFixed(0)} m² (roughly ${kw} kW of cooling). One aircon will struggle to cool the far end, so keep it near the opening and use a fan to move the air.` }]
+}
+
+export function analyse(room, items, roomName = 'room', openLink = null) {
+  const link = withForeign(openLink)
   const rows = []
   const recs = []
   items.forEach((item, i) => { item.rank = i })
@@ -285,14 +377,14 @@ export function analyse(room, items, tariff, roomName = 'room') {
   for (const a of items) {
     if (a.kwh <= 0) continue
     const others = items.filter((o) => o !== a)
-    const full = factors(room, others, a)
-    const now = costOf(room, others, a, a)
+    const full = factors(room, others, a, { link })
+    const now = costOf(room, others, a, a, link)
     const nowPenalty = sumOf(full)
 
     const avoidable = {}
     let best = null
     if (now.kwh > 0) {
-      const found = findBestSpot(room, a, others)
+      const found = findBestSpot(room, a, others, link)
       if (found && now.kwh - found.kwh >= WORTH_MOVING * a.kwh) {
         best = found
         for (const key of Object.keys(now.own)) avoidable[key] = Math.max(0, now.own[key] - (found.own[key] ?? 0))
@@ -303,7 +395,7 @@ export function analyse(room, items, tariff, roomName = 'room') {
     const avoidKwh = a.kwh * avoidFraction + knockSaved
 
     rows.push({
-      id: a.id, base: a.kwh, kwh: a.kwh * (1 + nowPenalty), cost: a.kwh * (1 + nowPenalty) * tariff, avoidKwh,
+      id: a.id, base: a.kwh, kwh: a.kwh * (1 + nowPenalty), avoidKwh,
       factors: Object.entries(avoidable).filter(([, v]) => v > 0.001).map(([key, v]) => ({ key, label: LABELS[key], pct: v * 100 })),
       causedByOthers: full.fan > 0.001 ? [{ key: 'fan', label: LABELS.fan, pct: full.fan * 100 }] : [],
       knockOn: knockSaved >= 0.5 ? [{ label: 'aircon', kwh: knockSaved }] : [],
@@ -314,13 +406,15 @@ export function analyse(room, items, tariff, roomName = 'room') {
     const distance = Math.hypot(moveX, moveZ)
     if (distance < 0.02 || (avoidFraction < WORTH_MOVING && knockSaved < 1)) continue
 
-    const reasonKeys = Object.entries(avoidable).filter(([, v]) => v > 0.002).sort((x, y) => y[1] - x[1]).map(([key]) => key)
+    let reasonKeys = Object.entries(avoidable).filter(([, v]) => v > 0.002).sort((x, y) => y[1] - x[1]).map(([key]) => key)
+    // The sun and the window are one reason to the reader: "further from the window, out of its sunlight".
+    if (reasonKeys.includes('sun') && reasonKeys.includes('window')) reasonKeys = reasonKeys.flatMap((k) => (k === 'window' ? [] : k === 'sun' ? ['sunwindow'] : [k]))
     if (knockSaved >= 1) reasonKeys.push('fan')
     const effects = []
     if (avoidFraction >= WORTH_MOVING)
-      effects.push(`It should use about ${(avoidFraction * 100).toFixed(0)}% less (around ${money(a.kwh * avoidFraction * tariff)} a year)`)
+      effects.push(`It should use about ${(avoidFraction * 100).toFixed(0)}% less (around ${kwhText(a.kwh * avoidFraction)} a year)`)
     if (knockSaved >= 1)
-      effects.push(`${effects.length ? 'and it' : 'It'} should cut the aircon's use by about ${money(knockSaved * tariff)} a year`)
+      effects.push(`${effects.length ? 'and it' : 'It'} should cut the aircon's use by about ${kwhText(knockSaved)} a year`)
     recs.push({
       id: a.id, to: best.pos, savedKwh: avoidKwh,
       text: `Move the ${a.name} ${howFar(distance)} ${compass(moveX, moveZ)}, ${joinReasons(reasonKeys.map((k) => REASONS[k]))}. ${effects.join(' ')}.`,
@@ -331,9 +425,9 @@ export function analyse(room, items, tariff, roomName = 'room') {
   const kwh = sum(rows.map((r) => r.kwh))
   const avoidKwh = sum(rows.map((r) => r.avoidKwh))
   return {
-    rows, base, kwh, cost: kwh * tariff, avoidKwh,
+    rows, base, kwh, avoidKwh,
     avoidPct: base ? (avoidKwh / base) * 100 : 0,
     recs: recs.sort((x, y) => y.savedKwh - x.savedKwh),
-    tips: tipsFor(room, items, roomName),
+    tips: tipsFor(room, items, roomName, link),
   }
 }

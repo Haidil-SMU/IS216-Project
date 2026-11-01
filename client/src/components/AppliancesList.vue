@@ -1,11 +1,12 @@
 <template>
   <div class="catalogue d-flex flex-column h-100 w-100">
     <div class="d-flex align-items-center justify-content-between gap-2 px-2 px-sm-3 pt-2 pb-1 flex-shrink-0">
-      <ul class="cat-tabs nav gap-1 flex-nowrap overflow-x-auto mb-0 flex-grow-1">
+      <ul class="cat-tabs nav gap-2 flex-nowrap overflow-x-auto mb-0 flex-grow-1" aria-label="Appliance categories">
         <li v-for="tab in tabs" :key="tab.id" class="nav-item">
           <button
             type="button"
             class="cat-tab text-nowrap"
+            :aria-pressed="activeTab === tab.id"
             :class="{ active: activeTab === tab.id }"
             @click="selectTab(tab.id)"
           >
@@ -13,11 +14,21 @@
           </button>
         </li>
       </ul>
-      <span class="source-chip d-none d-xl-inline flex-shrink-0">NEA energy benchmarks (SG)</span>
+      <span class="source-chip d-none d-md-inline-flex flex-shrink-0" title="Yearly energy figures use the Singapore NEA energy benchmarks.">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.5 19 2c1 2 2 4.2 2 8 0 5.5-4.8 10-10 10Z"/><path d="M2 21c0-3 1.9-5.4 5.1-6"/></svg>
+        NEA energy benchmarks (SG)
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+      </span>
     </div>
 
-    <div class="flex-grow-1 min-h-0 px-2 px-sm-3 pb-2">
-      <div class="card-row d-flex gap-2 overflow-x-auto overflow-y-hidden align-items-stretch h-100">
+    <div class="row-wrap flex-grow-1 min-h-0 px-2 px-sm-3 pb-2">
+      <button v-show="canScrollLeft" type="button" class="scroll-btn scroll-left" aria-label="Scroll left" @click="scrollRow(-1)">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+      </button>
+      <button v-show="canScrollRight" type="button" class="scroll-btn scroll-right" aria-label="Scroll right" @click="scrollRow(1)">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+      </button>
+      <div ref="row" class="card-row d-flex gap-3 overflow-x-auto overflow-y-hidden align-items-stretch h-100" @scroll.passive="measureRow">
         <template v-for="group in visibleGroups" :key="group.name">
           <div v-if="visibleGroups.length > 1" class="group-label flex-shrink-0 d-none d-sm-block" :title="group.name">{{ group.name }}</div>
 
@@ -43,12 +54,13 @@
             </span>
 
             <div class="details" @click.stop>
-              <div class="details-name text-truncate" :title="item.typeData.name">{{ shortName(item.typeData) }}</div>
+              <div class="details-name name-clamp" :title="item.typeData.name">{{ shortName(item.typeData) }}</div>
 
               <template v-if="item.categoryKey !== 'build'">
                 <select
                   class="form-select form-select-sm brand-select"
                   :value="productOf(item).brand"
+                  :title="brandLabel(productOf(item))"
                   :aria-label="`Brand for ${item.typeData.name}`"
                   @change="setBrand(item.typeKey, $event.target.value)"
                 >
@@ -57,7 +69,7 @@
                 <div class="details-figures">
                   <div class="kwh">{{ getKwhYear(item) }}<small> kWh/yr</small></div>
                   <div class="cost">
-                    ~${{ Math.round(getKwhYear(item) * tariff) }}/yr<template v-if="productOf(item).priceSgd != null"><span class="sep"> · </span><span class="price">S${{ productOf(item).priceSgd.toLocaleString() }}</span></template>
+                    <template v-if="productOf(item).priceSgd != null"><span class="price">S${{ productOf(item).priceSgd.toLocaleString() }}</span></template>
                   </div>
                 </div>
               </template>
@@ -72,9 +84,9 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import Appliance3D from './Appliance3D.vue'
-import { isBuild, catalogue, tariff } from '../stores/catalog.js'
+import { isBuild, catalogue, shortNameOf } from '../stores/catalog.js'
 
 const emit = defineEmits(['tab-changed', 'add-appliance'])
 
@@ -99,16 +111,38 @@ const productOf = (item) => {
   return list?.find((p) => p.brand === selectedBrands.value[item.typeKey]) ?? list?.[0]
 }
 
-const shortName = (type) => {
-  const base = (type.shortName || type.name || '').split(/\s+[(\u2013\u2014-]\s*|\s*\(|,/)[0].trim()
-  if (base.length <= 24) return base
-  const cut = base.slice(0, 24), space = cut.lastIndexOf(' ')
-  return (space > 8 ? cut.slice(0, space) : cut).trimEnd() + '\u2026'
-}
+const HOVER_NAME_MAX = 22
+const shortName = (type) => shortNameOf(type, HOVER_NAME_MAX)
 
-const brandLabel = (p) => (p.ticks ? `${p.brand} · ${p.ticks} ${p.ticks === 1 ? 'tick' : 'ticks'}` : p.brand)
+const brandLabel = (p) => (p?.ticks ? `${p.brand} (${p.ticks} ${p.ticks === 1 ? 'tick' : 'ticks'})` : p?.brand ?? '')
 
 const ticksOf = (item) => Math.max(0, Math.min(5, Number(productOf(item)?.ticks) || 0))
+
+const row = ref(null)
+const canScrollLeft = ref(false)
+const canScrollRight = ref(false)
+const measureRow = () => {
+  const el = row.value
+  if (!el) return
+  canScrollLeft.value = el.scrollLeft > 4
+  canScrollRight.value = el.scrollLeft + el.clientWidth < el.scrollWidth - 4
+}
+const scrollRow = (dir) => {
+  const el = row.value
+  if (!el) return
+  const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  el.scrollBy({ left: dir * Math.max(160, el.clientWidth * 0.7), behavior: reduce ? 'auto' : 'smooth' })
+}
+let rowObserver
+onMounted(() => {
+  measureRow()
+  if ('ResizeObserver' in window && row.value) { rowObserver = new ResizeObserver(measureRow); rowObserver.observe(row.value) }
+})
+onBeforeUnmount(() => rowObserver?.disconnect())
+
+watch(() => activeTab.value, async () => { await nextTick(); if (row.value) row.value.scrollLeft = 0; measureRow() })
+
+watch(visibleGroups, async () => { await nextTick(); measureRow() })
 
 const openKey = ref(null)
 const canHover = () => typeof window !== 'undefined' && window.matchMedia?.('(hover: hover)').matches
@@ -143,7 +177,6 @@ const handleAddAppliance = (item) => {
     name: item.typeData.name,
     ...(product ? { brand: product.brand, model: product.model } : {}),
     kwhYear,
-    annualCost: Math.round(kwhYear * tariff)
   })
 }
 </script>
@@ -152,27 +185,38 @@ const handleAddAppliance = (item) => {
 .min-h-0 { min-height: 0; }
 .catalogue { background: #fff; color: #19352a; }
 
-/* Category tabs: same green pill as the tabs on My Profile */
-.cat-tabs { scrollbar-width: none; }
+.cat-tabs { scrollbar-width: none; padding: 2px; }
 .cat-tabs::-webkit-scrollbar { display: none; }
 .cat-tab {
-  padding: 5px 14px;
-  border: 0;
+  padding: 6px 16px;
+  border: 1px solid #e3ece6;
   border-radius: 999px;
-  background: transparent;
-  color: #485950;
+  background: #fff;
+  color: #35604d;
   font-size: 0.82rem;
   font-weight: 600;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  box-shadow: 0 6px 14px -12px rgba(16, 40, 28, 0.5);
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
-.cat-tab:not(.active):hover { background: #eaf7ee; color: #168b59; }
-.cat-tab.active { background: linear-gradient(135deg, #198754, #2fbf71); color: #fff; box-shadow: 0 6px 14px -8px rgba(25, 135, 84, 0.7); }
+.cat-tab:not(.active):hover { background: #eaf7ee; border-color: #bfe3cd; color: #116a42; }
+.cat-tab.active { border-color: transparent; background: linear-gradient(135deg, #198754, #2fbf71); color: #fff; box-shadow: 0 8px 16px -10px rgba(25, 135, 84, 0.8); }
 .cat-tab:focus-visible { outline: 3px solid rgba(25, 135, 84, 0.45); outline-offset: 2px; }
-.source-chip { padding: 3px 10px; border-radius: 999px; background: #f4faf6; border: 1px solid #dcebe1; color: #5d6f65; font-size: 0.7rem; font-weight: 600; }
+.source-chip {
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: #eaf7ee;
+  border: 1px solid #cfe9d8;
+  color: #116a42;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: help;
+}
 
-/* Cards: a fixed, compact tile. Everything but the model is tucked into .details */
+.row-wrap { position: relative; }
 .card-row {
-  padding: 2px 2px 6px;
+  padding: 4px 4px 8px;
   scroll-snap-type: x proximity;
   -webkit-overflow-scrolling: touch;
 }
@@ -180,9 +224,10 @@ const handleAddAppliance = (item) => {
   position: relative;
   flex: 0 0 auto;
   width: clamp(112px, 22vw, 140px);
-  border: 1px solid #dcebe1;
-  border-radius: 14px;
+  border: 1px solid #e8efea;
+  border-radius: 18px;
   background: #fff;
+  box-shadow: 0 8px 18px -14px rgba(16, 40, 28, 0.5);
   overflow: hidden;
   cursor: pointer;
   scroll-snap-align: start;
@@ -193,9 +238,9 @@ const handleAddAppliance = (item) => {
 .item-card.open { border-color: #6fc28f; box-shadow: 0 14px 24px -14px rgba(16, 40, 28, 0.6); transform: translateY(-2px); }
 .item-card:focus-visible { outline: 3px solid rgba(25, 135, 84, 0.45); outline-offset: 2px; }
 
-.face { display: flex; flex-direction: column; height: 100%; padding: 6px 6px 8px; }
-.face :deep(.it) { flex: 1 1 auto; height: auto; min-height: 70px; border-radius: 10px; background: radial-gradient(circle at 50% 35%, #ffffff, #eaf5ee 85%); }
-.face-name { margin-top: 6px; text-align: center; font-size: 0.74rem; font-weight: 650; color: #264c3b; }
+.face { display: flex; flex-direction: column; height: 100%; padding: 7px 7px 9px; }
+.face :deep(.it) { flex: 1 1 auto; height: auto; min-height: 70px; border-radius: 12px; background: #f4f6f5; }
+.face-name { margin-top: 7px; text-align: center; font-size: 0.76rem; font-weight: 650; color: #264c3b; }
 
 .name-clamp {
   display: -webkit-box;
@@ -207,11 +252,32 @@ const handleAddAppliance = (item) => {
 }
 .face-name.name-clamp { min-height: 2.3em; }
 
-/* Green energy-label ticks, top-right corner */
+.scroll-btn {
+  position: absolute;
+  top: 50%;
+  z-index: 5;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  transform: translateY(-50%);
+  border: 1px solid #e3ece6;
+  border-radius: 50%;
+  background: #fff;
+  color: #19352a;
+  box-shadow: 0 8px 18px -8px rgba(16, 40, 28, 0.5);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.scroll-btn:hover { background: #eaf7ee; color: #116a42; }
+.scroll-btn:focus-visible { outline: 3px solid rgba(25, 135, 84, 0.45); outline-offset: 2px; }
+.scroll-left { left: 6px; }
+.scroll-right { right: 6px; }
+
 .ticks {
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: 10px;
+  right: 10px;
   z-index: 2;
   display: inline-flex;
   align-items: center;
@@ -228,16 +294,15 @@ const handleAddAppliance = (item) => {
 .item-card:focus-within .ticks,
 .item-card.open .ticks { opacity: 0; }
 
-/* Hover / focus / tap details cover the card */
 .details {
   position: absolute;
   inset: 0;
   z-index: 3;
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding: 8px;
-  overflow-y: auto;
+  gap: 4px;
+  padding: 8px 7px;
+  overflow: hidden;
   border-radius: inherit;
   background: rgba(255, 255, 255, 0.98);
   text-align: center;
@@ -252,16 +317,28 @@ const handleAddAppliance = (item) => {
 .item-card:focus-within .details,
 .item-card.open .details { opacity: 1; visibility: visible; transform: none; transition-delay: 0s; }
 
-.details-name { font-size: 0.8rem; font-weight: 700; color: #19352a; }
-.brand-select { padding: 1px 6px; font-size: 0.72rem; border-color: #dcebe1; color: #264c3b; background-color: #f9fcfa; }
+.details-name { flex-shrink: 0; font-size: 0.78rem; font-weight: 700; line-height: 1.2; color: #19352a; overflow-wrap: anywhere; }
+.details-name.name-clamp { -webkit-line-clamp: 2; line-clamp: 2; }
+
+.brand-select {
+  width: 100%;
+  padding: 2px 20px 2px 7px;
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  border-color: #dcebe1;
+  color: #264c3b;
+  background-color: #f9fcfa;
+  background-position: right 6px center;
+  background-size: 11px 9px;
+}
 .brand-select:focus { border-color: #168b59; box-shadow: 0 0 0 0.2rem rgba(25, 135, 84, 0.2); }
-.details-figures { margin: 2px 0 4px; line-height: 1.25; }
+.details-figures { margin: 1px 0 2px; line-height: 1.2; }
 .kwh { font-size: 0.9rem; font-weight: 750; color: #116a42; }
 .kwh small { font-size: 0.65rem; font-weight: 500; color: #75817b; }
 .cost { font-size: 0.7rem; font-weight: 600; color: #168b59; white-space: nowrap; }
-.cost .sep, .cost .price { color: #75817b; font-weight: 500; }
+.cost .price { color: #75817b; font-weight: 500; }
 
-.add-btn { padding: 3px 0; background: #168a56; border-color: #168a56; color: #fff; font-size: 0.76rem; font-weight: 700; }
+.add-btn { flex-shrink: 0; position: relative; z-index: 1; padding: 4px 0; border-radius: 999px; background: #168a56; border-color: #168a56; color: #fff; font-size: 0.76rem; font-weight: 700; }
 .add-btn:hover, .add-btn:focus-visible { background: #116a42; border-color: #116a42; color: #fff; }
 
 .group-label {
@@ -285,7 +362,8 @@ const handleAddAppliance = (item) => {
 .overflow-x-auto::-webkit-scrollbar-thumb { background: #bcd6c6; border-radius: 6px; }
 
 @media (max-width: 575px) {
-  .cat-tab { padding: 4px 11px; font-size: 0.78rem; }
+  .cat-tab { padding: 5px 12px; font-size: 0.78rem; }
+  .scroll-btn { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .details, .ticks, .item-card { transition: none; transform: none; }

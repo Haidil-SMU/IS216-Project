@@ -178,4 +178,4 @@ async function loadLayouts(db) {
   }
 }
 
-module.exports = { generateRooms, LAYOUTS, loadLayouts, OPENING_KEYS, isOpeningKey, CEILING_H, opening, wallPoint, NORMAL, TANGENT, WALL_THICKNESS };
+module.exports = { generateRooms, LAYOUTS, loadLayouts, isOpeningKey, opening, wallPoint, NORMAL };

@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
-import { WINDOW_KEYS, DOOR_KEYS } from './catalog.js'
+import { WINDOW_KEYS, DOOR_KEYS, FURNITURE_KEYS } from './catalog.js'
 
 const SIZES = {
   refrigerator_no_freezer: [0.55, 0.85, 0.58],
@@ -34,6 +34,20 @@ const SIZES = {
   dehumidifier: [0.35, 0.5, 0.25],
   desktop_computer: [1.2, 0.74, 0.6],
   floor_lamp: [0.3, 1.55, 0.3],
+  sofa_3_seater: [2.0, 0.85, 0.9],
+  sofa_2_seater: [1.5, 0.85, 0.9],
+  armchair: [0.85, 0.85, 0.85],
+  coffee_table: [1.0, 0.42, 0.55],
+  tv_console: [1.6, 0.5, 0.4],
+  dining_table: [1.2, 0.75, 0.75],
+  dining_chair: [0.45, 0.9, 0.5],
+  bed_single: [1.0, 0.95, 2.0],
+  bed_queen: [1.6, 0.95, 2.0],
+  bedside_table: [0.45, 0.5, 0.4],
+  wardrobe: [1.2, 2.0, 0.6],
+  bookshelf: [0.8, 1.8, 0.3],
+  study_desk: [1.2, 0.75, 0.6],
+  office_chair: [0.55, 0.95, 0.55],
 }
 
 const KINDS = {
@@ -55,12 +69,14 @@ const KINDS = {
   purifier: { mode: 'floor', size: [0.35, 0.6, 0.2], y: 0 },
   pc: { mode: 'floor', size: [1.2, 0.74, 0.6], y: 0 },
   lamp: { mode: 'floor', size: [0.3, 1.55, 0.3], y: 0 },
+  furniture: { mode: 'floor', size: [1, 0.8, 0.6], y: 0 },
 }
 
 function classify(type, category) {
   if (category === 'build') {
     if (WINDOW_KEYS.has(type)) return { kind: 'window', variant: type === 'double_glazed_window' ? 'double' : '' }
     if (DOOR_KEYS.has(type)) return { kind: 'door', variant: type === 'glass_sliding_door' ? 'glass' : '' }
+    if (FURNITURE_KEYS.has(type)) return { kind: 'furniture', variant: type }
     return { kind: 'counter', variant: type === 'plain_countertop' ? 'plain' : 'sink' }
   }
   if (type.startsWith('aircon_')) {
@@ -91,7 +107,7 @@ function classify(type, category) {
   return { kind: 'dryer', variant: '' }
 }
 
-export const SINK = { from: 0.2, to: 0.7 }
+const SINK = { from: 0.2, to: 0.7 }
 export const sinkSpan = (counter) => (counter.variant === 'sink' ? [-counter.w / 2 + SINK.from, -counter.w / 2 + SINK.to] : null)
 
 export function resolveSpec(type = '', category = '') {
@@ -127,6 +143,116 @@ function makeBuilder() {
 }
 
 const STEEL = 0xaab4bd, DARK = 0x1f2933, WHITE = 0xf4f4f0, METAL = { metalness: 0.8, roughness: 0.25 }
+const FABRIC = 0x7c8c99, FABRIC_DARK = 0x667684, OAK = 0xc8a47a, WALNUT = 0x7b5434, CREAM = 0xe9e4da
+
+function cornerLegs({ w, d }, b, height, size, color, inset) {
+  for (const sx of [-1, 1]) for (const sz of [-1, 1])
+    b.box(size, height, size, color, [sx * (w / 2 - inset), 0, sz * (d / 2 - inset)])
+}
+
+function seating({ w, h, d }, b, seats, arm) {
+  const back = 0.2, seatTop = 0.33
+  cornerLegs({ w, d }, b, 0.08, 0.05, DARK, 0.08)
+  b.box(w, 0.25, d, FABRIC_DARK, [0, 0.08, 0])
+  b.box(w, h - seatTop, back, FABRIC, [0, seatTop, -d / 2 + back / 2])
+  for (const side of [-1, 1]) b.box(arm, 0.3, d - back, FABRIC, [side * (w / 2 - arm / 2), seatTop, back / 2])
+  const cushionW = (w - 2 * arm) / seats
+  for (let i = 0; i < seats; i++) {
+    const x = -w / 2 + arm + cushionW * (i + 0.5)
+    b.box(cushionW - 0.02, 0.14, d - back - 0.04, FABRIC, [x, seatTop, back / 2])
+    b.box(cushionW - 0.04, 0.4, 0.14, FABRIC_DARK, [x, seatTop + 0.14, -d / 2 + back + 0.07])
+  }
+}
+
+function bed({ w, h, d }, b, pillows) {
+  b.box(w, 0.25, d, WALNUT, [0, 0.1, 0])
+  b.box(w, h - 0.1, 0.06, WALNUT, [0, 0.1, -d / 2 + 0.03])
+  b.box(w - 0.06, 0.2, d - 0.1, 0xf5f3ee, [0, 0.35, 0.02])
+  const pillowW = Math.min(0.55, (w - 0.1) / pillows)
+  for (let i = 0; i < pillows; i++)
+    b.box(pillowW - 0.04, 0.1, 0.32, 0xffffff, [-w / 2 + 0.05 + pillowW * (i + 0.5) + (w - 0.1 - pillowW * pillows) / 2, 0.55, -d / 2 + 0.32])
+  b.box(w - 0.04, 0.04, d * 0.5, 0x8fa6b8, [0, 0.55, d / 2 - d * 0.25 - 0.03])
+}
+
+const FURNITURE_PARTS = {
+  sofa_3_seater: (spec, b) => seating(spec, b, 3, 0.18),
+  sofa_2_seater: (spec, b) => seating(spec, b, 2, 0.18),
+  armchair: (spec, b) => seating(spec, b, 1, 0.14),
+  bed_single: (spec, b) => bed(spec, b, 1),
+  bed_queen: (spec, b) => bed(spec, b, 2),
+
+  coffee_table(spec, b) {
+    const { w, h, d } = spec
+    cornerLegs(spec, b, h - 0.04, 0.05, WALNUT, 0.06)
+    b.box(w - 0.14, 0.02, d - 0.14, WALNUT, [0, 0.12, 0])
+    b.box(w, 0.04, d, OAK, [0, h - 0.04, 0], { roughness: 0.4 })
+  },
+
+  tv_console({ w, h, d }, b) {
+    for (const sx of [-1, 1]) b.box(0.04, 0.08, d - 0.06, DARK, [sx * (w / 2 - 0.08), 0, 0])
+    b.box(w, h - 0.08, d, WALNUT, [0, 0.08, 0])
+    for (const x of [-w / 6, w / 6]) b.box(0.008, h - 0.16, 0.01, 0x4a3320, [x, 0.12, d / 2])
+    for (const x of [-w / 6 - 0.04, -w / 6 + 0.04, w / 6 - 0.04, w / 6 + 0.04]) b.box(0.015, 0.1, 0.02, STEEL, [x, h * 0.55, d / 2 + 0.01], METAL)
+  },
+
+  dining_table(spec, b) {
+    const { w, h, d } = spec
+    cornerLegs(spec, b, h - 0.04, 0.06, WALNUT, 0.05)
+    b.box(w, 0.04, d, OAK, [0, h - 0.04, 0], { roughness: 0.4 })
+  },
+
+  dining_chair({ w, h, d }, b) {
+    const seat = 0.45
+    cornerLegs({ w, d }, b, seat - 0.05, 0.04, WALNUT, 0.03)
+    b.box(w, 0.05, d, 0xd6c3a5, [0, seat - 0.05, 0])
+    b.box(w, h - seat, 0.04, 0xd6c3a5, [0, seat, -d / 2 + 0.02])
+  },
+
+  bedside_table({ w, h, d }, b) {
+    cornerLegs({ w, d }, b, 0.1, 0.04, DARK, 0.03)
+    b.box(w, h - 0.1, d, WALNUT, [0, 0.1, 0])
+    b.box(w - 0.06, 0.012, 0.01, 0x4a3320, [0, h * 0.6, d / 2])
+    b.ball(0.015, STEEL, [0, h * 0.78, d / 2 + 0.01], METAL)
+    b.ball(0.015, STEEL, [0, h * 0.42, d / 2 + 0.01], METAL)
+  },
+
+  wardrobe({ w, h, d }, b) {
+    b.box(w, h, d, CREAM, [0, 0, 0])
+    const doors = Math.max(2, Math.round(w / 0.6)), step = w / doors
+    for (let i = 1; i < doors; i++) b.box(0.008, h - 0.1, 0.01, 0x9a9488, [-w / 2 + i * step, 0.05, d / 2])
+    for (let i = 1; i < doors; i++) for (const side of [-1, 1])
+      b.box(0.015, 0.25, 0.02, STEEL, [-w / 2 + i * step + side * 0.04, h * 0.5, d / 2 + 0.01], METAL)
+  },
+
+  bookshelf({ w, h, d }, b) {
+    const books = [0xb45309, 0x1d4ed8, 0x15803d, 0x9f1239, 0x6d28d9, 0xca8a04]
+    for (const side of [-1, 1]) b.box(0.03, h, d, WALNUT, [side * (w / 2 - 0.015), 0, 0])
+    b.box(w, h, 0.01, 0x5a3d22, [0, 0, -d / 2 + 0.005])
+    const shelves = 5, gap = (h - 0.03) / shelves
+    for (let s = 0; s <= shelves; s++) b.box(w - 0.06, 0.025, d - 0.02, WALNUT, [0, s * gap, 0])
+    for (let s = 1; s < shelves - 1; s++) {
+      const count = Math.floor((w - 0.14) / 0.055)
+      for (let k = 0; k < count; k++) {
+        const bookH = 0.2 - ((k + s) % 3) * 0.03
+        b.box(0.045, bookH, d * 0.7, books[(s * 5 + k) % books.length], [-w / 2 + 0.07 + k * 0.055, s * gap + 0.025, 0])
+      }
+    }
+  },
+
+  study_desk({ w, h, d }, b) {
+    b.box(0.03, h - 0.03, d - 0.04, CREAM, [-w / 2 + 0.015, 0, 0])
+    b.box(0.4, h - 0.03, d - 0.04, CREAM, [w / 2 - 0.2, 0, 0])
+    for (const y of [0.15, 0.4]) b.box(0.12, 0.015, 0.01, STEEL, [w / 2 - 0.2, y + 0.1, d / 2 - 0.015], METAL)
+    b.box(w, 0.03, d, OAK, [0, h - 0.03, 0], { roughness: 0.4 })
+  },
+
+  office_chair({ w, h }, b) {
+    b.cyl(w * 0.4, 0.03, DARK, [0, 0.05, 0])
+    b.cyl(0.025, 0.3, STEEL, [0, 0.08, 0], METAL)
+    b.box(w * 0.9, 0.08, w * 0.9, DARK, [0, 0.4, 0.02])
+    b.box(w * 0.85, h - 0.48, 0.06, DARK, [0, 0.48, -w * 0.4])
+  },
+}
 
 const BUILDERS = {
   window({ w, h, d, variant }, b) {
@@ -399,6 +525,12 @@ const BUILDERS = {
 
     b.box(0.38, 0.015, 0.13, 0x2d3748, [mx, top, 0.12])
     b.box(0.06, 0.025, 0.1, 0x2d3748, [mx + 0.34, top, 0.12])
+  },
+
+  furniture(spec, b) {
+    const parts = FURNITURE_PARTS[spec.variant]
+    if (parts) return parts(spec, b)
+    b.box(spec.w, spec.h, spec.d, FABRIC, [0, 0, 0])
   },
 
   lamp({ h }, b) {

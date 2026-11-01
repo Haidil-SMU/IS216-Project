@@ -1,4 +1,5 @@
-const { opening, wallPoint, NORMAL, isOpeningKey } = require('./floorplan');
+const { ObjectId } = require('mongodb');
+const { opening, wallPoint, NORMAL, isOpeningKey, generateRooms } = require('./floorplan');
 
 const EPS = 0.02;
 const MIN = { living: 3.0, kitchen: 1.8, bedroom: 2.4, bathroom: 1.2 };
@@ -50,14 +51,6 @@ function touching(A, B) {
 
 const exteriorAt = (room, wall, g, rooms) =>
   !rooms.some((o) => { if (o === room) return false; const s = touching(room, o); return s && s.wallA === wall && g > s.lo - EPS && g < s.hi + EPS; });
-
-function assertNoOverlap(rooms) {
-  for (let i = 0; i < rooms.length; i++) for (let j = i + 1; j < rooms.length; j++) {
-    const a = rect(rooms[i]), b = rect(rooms[j]);
-    if (span(a.x, a.x + a.w, b.x, b.x + b.w) > EPS && span(a.z, a.z + a.d, b.z, b.z + b.d) > EPS)
-      throw new LayoutError(`The ${rooms[i].name} would overlap the ${rooms[j].name}`);
-  }
-}
 
 function addLink(a, b, kind, g) {
   const s = touching(a, b);
@@ -354,6 +347,28 @@ function removeOpening(rooms, roomId, placementId) {
   return work;
 }
 
+// Open or close the wall between two rooms that share one (open-plan kitchen and living room, say).
+// Opening replaces any door between them with one wide gap. Closing puts a door back so the rooms stay joined;
+// the door can then be removed with its own button if a fully closed wall is wanted.
+function setWallOpen(rooms, idA, idB, open) {
+  const work = rooms.map(cloneRoom);
+  const a = work.find((r) => key(r) === String(idA)), b = work.find((r) => key(r) === String(idB));
+  if (!a || !b || a === b) throw new LayoutError('Room not found');
+  if (!touching(a, b)) throw new LayoutError(`The ${a.name} and ${b.name} don't share a wall`);
+  const isOpen = a.openWalls.some((o) => o.to === b.name) && b.openWalls.some((o) => o.to === a.name);
+  if (open) {
+    if (isOpen) return work;
+    for (const [x, y] of [[a, b], [b, a]]) x.placements = x.placements.filter((p) => !(isLink(p) && p.connectsTo === y.name));
+    addLink(a, b, 'open');
+  } else {
+    if (!isOpen && !a.openWalls.some((o) => o.to === b.name) && !b.openWalls.some((o) => o.to === a.name)) return work;
+    a.openWalls = a.openWalls.filter((o) => o.to !== b.name);
+    b.openWalls = b.openWalls.filter((o) => o.to !== a.name);
+    try { addLink(a, b, 'door'); } catch (e) { if (!(e instanceof LayoutError)) throw e; }
+  }
+  return work;
+}
+
 function validateLayout(rooms) {
   if (!Array.isArray(rooms) || !rooms.length) throw new LayoutError('A flat needs at least one room');
   if (rooms.length > 40) throw new LayoutError('Too many rooms');
@@ -373,4 +388,121 @@ function validateLayout(rooms) {
   return rooms;
 }
 
-module.exports = { LayoutError, footprintOf, warnings, setRoomRect, moveOpening, addOpening, removeOpening, validateLayout };
+
+class PlacementError extends Error {}
+
+const TOL = 0.1;
+const SAME_SPOT = 0.1;
+const POSE_EPS = 1e-6;
+
+const isOpening = (p) => p.category === 'build' && isOpeningKey(p.applianceTypeKey);
+const wallLength = (dim, wall) => (wall % 2 ? dim.d : dim.w);
+const sameId = (a, b) => String(a) === String(b);
+const num = (v) => (Number.isFinite(v) ? v : 0);
+
+function samePose(a, b) {
+  return ['x', 'z', 'rotY', 't', 'cu', 'wall'].every((k) => Math.abs(num(a[k]) - num(b[k])) < POSE_EPS) &&
+    sameId(a.onPlacementId ?? '', b.onPlacementId ?? '') && a.applianceTypeKey === b.applianceTypeKey;
+}
+
+function checkRoomPlacements(room, { previous = null, openings = 'keep' } = {}) {
+  const dim = room.dimension, list = room.placements || [];
+  const before = new Map((previous?.placements || []).map((p) => [String(p._id), p]));
+  const ids = new Set(list.map((p) => String(p._id)));
+  const fail = (msg) => { throw new PlacementError(msg); };
+  const changed = (p) => { const old = before.get(String(p._id)); return !old || !samePose(old, p); };
+
+  if (openings === 'keep') {
+    for (const old of before.values()) if (isOpening(old) && !ids.has(String(old._id))) fail('Doors and windows are removed with their own button, so the rooms they join stay consistent.');
+  }
+
+  for (const p of list) {
+    if (p.onPlacementId != null && (sameId(p.onPlacementId, p._id) || !ids.has(String(p.onPlacementId))))
+      fail(`That ${p.applianceTypeKey} is meant to sit on an item that is not in the ${room.name}`);
+
+    if (isOpening(p)) {
+      const old = before.get(String(p._id));
+      if (openings === 'keep' && !(old && isOpening(old) && old.wall === p.wall && Math.abs(num(old.t) - num(p.t)) < POSE_EPS))
+        fail('Doors and windows are added and moved with their own tools so the rooms stay joined.');
+      if (changed(p) && (![0, 1, 2, 3].includes(p.wall) || p.t < 0 || p.t > wallLength(dim, p.wall) + TOL))
+        fail(`That ${p.applianceTypeKey} would be off the wall of the ${room.name}`);
+      continue;
+    }
+
+    if (!changed(p)) continue;
+    if (!(p.x >= -TOL && p.x <= dim.w + TOL && p.z >= -TOL && p.z <= dim.d + TOL))
+      fail(`That would put the ${p.applianceTypeKey} outside the ${room.name}`);
+    if (p.wall >= 0 && !(p.t >= 0 && p.t <= wallLength(dim, p.wall)))
+      fail(`That would put the ${p.applianceTypeKey} past the end of its wall`);
+  }
+
+  const floor = list.filter((p) => !isOpening(p) && p.wall < 0 && p.onPlacementId == null);
+  for (let i = 0; i < floor.length; i++) for (let j = i + 1; j < floor.length; j++) {
+    const a = floor[i], b = floor[j];
+    if (!changed(a) && !changed(b)) continue;
+    if (Math.hypot(a.x - b.x, a.z - b.z) < SAME_SPOT) fail(`The ${a.applianceTypeKey} and the ${b.applianceTypeKey} would be on the same spot`);
+  }
+}
+
+
+const halfWidth = (p) => (p.category === 'build' ? 0.95 : 0.5);
+const FLOOR_MARGIN = 0.3;
+
+function carryOver(oldRoom, newRoom) {
+  const { w: W, d: D } = newRoom.dimension;
+  const items = (oldRoom.placements || []).filter((p) => !isOpening(p));
+  const shift = new Map();
+  const out = [];
+  let adjusted = 0;
+
+  const place = (p, x, z, extra = {}) => {
+    const dx = x - p.x, dz = z - p.z;
+    if (Math.abs(dx) > 1e-6 || Math.abs(dz) > 1e-6) adjusted++;
+    shift.set(String(p._id), [dx, dz]);
+    out.push({ ...p, x, z, ...extra });
+  };
+
+  for (const p of items.filter((q) => !q.onPlacementId)) {
+    if (p.wall >= 0) {
+      const length = p.wall % 2 ? D : W;
+      const margin = halfWidth(p);
+      if (length < margin * 2 + 0.1) continue; 
+      const [ox, oz] = wallPoint(oldRoom.dimension, p.wall, p.t), n = NORMAL[p.wall];
+      const offset = (p.x - ox) * n[0] + (p.z - oz) * n[1];
+      const t = clamp(p.t, margin, length - margin);
+      const [nx, nz] = wallPoint(newRoom.dimension, p.wall, t);
+      place(p, nx + n[0] * offset, nz + n[1] * offset, { t });
+    } else {
+      place(p, clamp(p.x, FLOOR_MARGIN, W - FLOOR_MARGIN), clamp(p.z, FLOOR_MARGIN, D - FLOOR_MARGIN));
+    }
+  }
+  for (const p of items.filter((q) => q.onPlacementId)) {
+    const moved = shift.get(String(p.onPlacementId));
+    if (!moved) continue;
+    place(p, p.x + moved[0], p.z + moved[1]);
+  }
+  return { placements: out, adjusted, dropped: items.length - out.length };
+}
+
+function reconcileRooms(oldRooms, flatTypeId, householdId) {
+  const { rooms: fresh } = generateRooms(flatTypeId);
+  const unmatched = new Map(oldRooms.map((r) => [r.name, r]));
+  const keep = [], add = [];
+  let adjusted = 0, dropped = 0;
+
+  for (const room of fresh) {
+    const old = unmatched.get(room.name);
+    unmatched.delete(room.name);
+    if (!old) { add.push({ ...room, _id: new ObjectId(), householdId }); continue; }
+    const carried = carryOver(old, room);
+    adjusted += carried.adjusted; dropped += carried.dropped;
+    keep.push({ ...room, _id: old._id, householdId, placements: [...room.placements, ...carried.placements] });
+  }
+
+  const remove = [...unmatched.values()];
+  for (const r of remove) dropped += (r.placements || []).filter((p) => !isOpening(p)).length;
+
+  return { keep, add, remove, adjusted, dropped };
+}
+
+module.exports = { LayoutError, footprintOf, warnings, setRoomRect, moveOpening, addOpening, removeOpening, setWallOpen, validateLayout, touching, refit, checkRoomPlacements, PlacementError, isOpening, reconcileRooms };
