@@ -14,7 +14,7 @@ const slides = [
     tag: 'WELCOME TO HDB ECOHOME',
     title: 'A better home starts with smarter choices.',
     description: 'Explore your home in 3D, understand your electricity use, and find the right professionals for your next home improvement.',
-    image: 'https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&w=2000&q=85',
+    image: 'https://images.unsplash.com/photo-1655027766428-7faa226db325?auto=format&fit=crop&w=2000&q=85',
     button: 'Explore our tools',
     link: '#explore'
   },
@@ -22,7 +22,7 @@ const slides = [
     tag: 'DESIGN YOUR SPACE',
     title: 'See the possibilities before you begin.',
     description: 'Plan your rooms and appliances in an interactive 3D space built around your home.',
-    image: 'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=2000&q=85',
+    image: 'https://unsplash.com/photos/9lB0cUTt9IQ/download?force=true&w=1600',
     button: 'Explore 3D Spatial',
     link: spatialPage
   },
@@ -30,7 +30,7 @@ const slides = [
     tag: 'LIVE MORE SUSTAINABLY',
     title: 'Small changes. Smarter energy habits.',
     description: 'Discover how your household choices influence electricity consumption, costs and comfort.',
-    image: 'https://images.unsplash.com/photo-1600607687920-4e2a09cf159d?auto=format&fit=crop&w=2000&q=85',
+    image: 'https://images.unsplash.com/photo-1607835498554-2c5519af1730?auto=format&fit=crop&w=2000&q=85',
     button: 'Try the simulation',
     link: simulatorPage
   },
@@ -38,7 +38,7 @@ const slides = [
     tag: 'PLAN YOUR ENERGY',
     title: 'Understand your home’s electricity costs.',
     description: 'Explore energy use from your household appliances and make more informed decisions with the Energy Planner.',
-    image: 'https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=2000&q=85',
+    image: 'https://images.unsplash.com/photo-1658753145551-8f44e5811d21?auto=format&fit=crop&w=2000&q=85',
     button: 'Explore Energy Planner',
     link: plannerPage
   },
@@ -46,7 +46,7 @@ const slides = [
     tag: 'FIND HOME PROFESSIONALS',
     title: 'Find the right help for your home.',
     description: 'Explore renovation services and connect with contractors suited to your home improvement needs.',
-    image: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=2000&q=85',
+    image: 'https://images.unsplash.com/photo-1642749776312-aa42ce20c9f5?auto=format&fit=crop&w=2000&q=85',
     button: 'Find Contractors',
     link: contractorPage
   }
@@ -141,25 +141,25 @@ function previousSlide() {
         <div class="row g-4 mt-2">
           <div class="col-md-6 col-xl-3">
             <RouterLink :to="spatialPage" class="feature-card">
-              <div class="feature-photo"><img src="https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=850&q=85" alt="Contemporary residential living room" loading="lazy"><span class="photo-tag">01 / VISUALISE</span></div>
+              <div class="feature-photo"><img src="https://unsplash.com/photos/9lB0cUTt9IQ/download?force=true&w=1600" alt="Contemporary residential living room" loading="lazy"><span class="photo-tag">01 / VISUALISE</span></div>
               <div class="feature-body"><div class="feature-icon">▣</div><h3>3D Spatial</h3><p>Build your virtual room, adjust its dimensions and explore different appliance arrangements in 3D.</p><span class="feature-link">Explore your space <span>↗</span></span></div>
             </RouterLink>
           </div>
           <div class="col-md-6 col-xl-3">
             <RouterLink :to="plannerPage" class="feature-card">
-              <div class="feature-photo"><img src="https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=850&q=85" alt="Bright interior with natural lighting" loading="lazy"><span class="photo-tag">02 / PLAN</span></div>
+              <div class="feature-photo"><img src="https://images.unsplash.com/photo-1658753145551-8f44e5811d21?auto=format&fit=crop&w=850&q=85" alt="Bright interior with natural lighting" loading="lazy"><span class="photo-tag">02 / PLAN</span></div>
               <div class="feature-body"><div class="feature-icon">⚡</div><h3>Energy Planner</h3><p>Explore household appliance energy use and better understand your estimated electricity costs.</p><span class="feature-link">Plan your energy <span>↗</span></span></div>
             </RouterLink>
           </div>
           <div class="col-md-6 col-xl-3">
             <RouterLink :to="simulatorPage" class="feature-card">
-              <div class="feature-photo"><img src="https://images.unsplash.com/photo-1600607687920-4e2a09cf159d?auto=format&fit=crop&w=850&q=85" alt="Comfortable modern home interior" loading="lazy"><span class="photo-tag">03 / EXPERIENCE</span></div>
+              <div class="feature-photo"><img src="https://images.unsplash.com/photo-1607835498554-2c5519af1730?auto=format&fit=crop&w=850&q=85" alt="Comfortable modern home interior" loading="lazy"><span class="photo-tag">03 / EXPERIENCE</span></div>
               <div class="feature-body"><div class="feature-icon">◷</div><h3>Energy Simulation</h3><p>Take on real-time household decisions and balance electricity usage, daily costs and comfort.</p><span class="feature-link">Play simulation <span>↗</span></span></div>
             </RouterLink>
           </div>
           <div class="col-md-6 col-xl-3">
             <RouterLink :to="contractorPage" class="feature-card">
-              <div class="feature-photo"><img src="https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=850&q=85" alt="Renovated residential home" loading="lazy"><span class="photo-tag">04 / IMPROVE</span></div>
+              <div class="feature-photo"><img src="https://images.unsplash.com/photo-1642749776312-aa42ce20c9f5?auto=format&fit=crop&w=850&q=85" alt="Renovated residential home" loading="lazy"><span class="photo-tag">04 / IMPROVE</span></div>
               <div class="feature-body"><div class="feature-icon">⌂</div><h3>Find Contractors</h3><p>Choose the renovation services you need and find matching contractors for your home project.</p><span class="feature-link">Find a contractor <span>↗</span></span></div>
             </RouterLink>
           </div>
@@ -171,7 +171,7 @@ function previousSlide() {
     <section class="spotlight-section">
       <div class="container">
         <div class="row align-items-center g-5">
-          <div class="col-lg-6"><div class="spotlight-photo"><img src="https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&w=1200&q=85" alt="Modern apartment interior" loading="lazy"><div class="photo-label">YOUR HOME, YOUR POSSIBILITIES <span>↗</span></div></div></div>
+          <div class="col-lg-6"><div class="spotlight-photo"><img src="https://images.unsplash.com/photo-1655027766428-7faa226db325?auto=format&fit=crop&w=1200&q=85" alt="Modern apartment interior" loading="lazy"><div class="photo-label">YOUR HOME, YOUR POSSIBILITIES <span>↗</span></div></div></div>
           <div class="col-lg-6"><span class="eyebrow">DESIGN WITH CONFIDENCE</span><h2 class="spotlight-title">See your home in a whole new dimension.</h2><p class="spotlight-text">Make more informed choices about your space. With 3D Spatial, you can visualise a room, place appliances and explore how your layout works before moving on to energy planning.</p>
             <div class="spotlight-points"><div><span class="check-icon">✓</span> Customise room dimensions</div><div><span class="check-icon">✓</span> Add and arrange household appliances</div><div><span class="check-icon">✓</span> Explore your setup in an interactive 3D view</div></div>
             <RouterLink :to="spatialPage" class="btn btn-success btn-lg mt-4">Start designing →</RouterLink>
@@ -195,7 +195,7 @@ function previousSlide() {
     <section class="energy-banner"><div class="container"><div class="row align-items-center g-4"><div class="col-lg-8"><span class="eyebrow light-eyebrow">ENERGY-SMART LIVING</span><h2>What if every household choice made a difference?</h2><p>Try the interactive simulation and discover how your decisions about appliances, weather and comfort shape your household's electricity consumption.</p></div><div class="col-lg-4 text-lg-end"><RouterLink :to="simulatorPage" class="btn btn-light btn-lg">Start the simulation →</RouterLink></div></div></div></section>
 
     <!-- EDUCATIONAL CONTENT -->
-    <section class="section-space learning-section"><div class="container"><div class="row align-items-center g-5"><div class="col-lg-5"><span class="eyebrow">WHY ENERGY MATTERS</span><h2>Smarter habits begin with better awareness.</h2><p>Everyday actions such as cooling a room, switching on lights or using a water heater contribute to household electricity consumption.</p><p>EcoHome makes these decisions easier to understand through practical planning tools and an interactive simulation, helping you consider both comfort and efficiency.</p><RouterLink :to="plannerPage" class="text-link">Explore the Energy Planner →</RouterLink></div><div class="col-lg-7"><img class="learning-image" src="https://images.unsplash.com/photo-1600566753190-17f0baa2a6c3?auto=format&fit=crop&w=1200&q=85" alt="Sunlit modern residential living space" loading="lazy"></div></div></div></section>
+    <section class="section-space learning-section"><div class="container"><div class="row align-items-center g-5"><div class="col-lg-5"><span class="eyebrow">WHY ENERGY MATTERS</span><h2>Smarter habits begin with better awareness.</h2><p>Everyday actions such as cooling a room, switching on lights or using a water heater contribute to household electricity consumption.</p><p>EcoHome makes these decisions easier to understand through practical planning tools and an interactive simulation, helping you consider both comfort and efficiency.</p><RouterLink :to="plannerPage" class="text-link">Explore the Energy Planner →</RouterLink></div><div class="col-lg-7"><img class="learning-image" src="https://images.unsplash.com/photo-1615630859219-0459703c34e6?auto=format&fit=crop&w=1200&q=85" alt="Sunlit modern residential living space" loading="lazy"></div></div></div></section>
 
     <!-- FINAL CTA -->
     <section class="final-cta"><div class="container text-center"><span class="eyebrow">GET STARTED TODAY</span><h2>Your smarter home journey starts here.</h2><p>Explore the tools, discover new possibilities and make your next home decision with confidence.</p><a href="#explore" class="btn btn-success btn-lg">Explore all services →</a></div></section>
