@@ -509,6 +509,46 @@ app.put('/api/quotation-requests/:requestId', auth.requireClient, async (req, re
     })
   }
 })
+// Homeowners can remove only their own pending requests.
+app.delete(
+  '/api/quotation-requests/:requestId',
+  auth.requireClient,
+  async (req, res) => {
+    try {
+      const { requestId } = req.params
+
+      if (!ObjectId.isValid(requestId)) {
+        return res.status(400).json({
+          error: 'Invalid quotation request ID'
+        })
+      }
+
+      const result = await getDb()
+        .collection('quotationRequests')
+        .deleteOne({
+          _id: new ObjectId(requestId),
+          userId: new ObjectId(req.session.userId),
+          status: 'pending'
+        })
+
+      if (result.deletedCount === 0) {
+        return res.status(404).json({
+          error: 'Pending quotation request not found'
+        })
+      }
+
+      return res.status(200).json({
+        message: 'Quotation request removed successfully'
+      })
+    } catch (error) {
+      console.error('Error removing quotation request:', error)
+
+      return res.status(500).json({
+        error: 'Unable to remove quotation request'
+      })
+    }
+  }
+)
 // Contractor responds to a quotation request
 app.patch('/api/quotation-requests/:requestId/respond', auth.requireContractor, ownContractorProfile, async (req, res) => {
   try {

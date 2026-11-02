@@ -3,7 +3,11 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import axios from 'axios'
 import { useAuthStore } from '@/stores/auth'
 import FloorPlan3D from '@/components/FloorPlan3D.vue'
-
+import {
+  getItemAmount,
+  getDraftTotal,
+  hasMissingPrices
+} from '@/utils/quotationCalculations'
 const API = '/api'
 const auth = useAuthStore()
 
@@ -1115,41 +1119,6 @@ async function generateAIQuotation(request) {
 }
 
 // QUOTATION CALCULATIONS
-
-function getItemAmount(item) {
-  if (
-    item.unitPrice == null ||
-    item.unitPrice === '' ||
-    item.quantity == null ||
-    item.quantity === '' ||
-    !Number.isFinite(Number(item.unitPrice)) ||
-    !Number.isFinite(Number(item.quantity)) ||
-    Number(item.unitPrice) < 0 ||
-    Number(item.quantity) <= 0
-  ) return null
-
-  const amount = Math.round(
-    Number(item.quantity) * Number(item.unitPrice) * 100
-  ) / 100
-
-  return Number.isFinite(amount) ? amount : null
-}
-
-function getDraftTotal(request) {
-  if (!request.aiDraft) return 0
-
-  return Math.round(
-    request.aiDraft.items.reduce(
-      (total, item) => total + (getItemAmount(item) ?? 0),
-      0
-    ) * 100
-  ) / 100
-}
-
-function hasMissingPrices(request) {
-  return !request.aiDraft ||
-    request.aiDraft.items.some(item => getItemAmount(item) === null)
-}
 
 function addQuotationItem(request) {
   if (!request.aiDraft || dashboardBusy.value) return
