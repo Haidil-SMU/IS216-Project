@@ -1,3 +1,29 @@
+<!--
+  FloorPlan3D.vue
+  The 3D picture of the flat: every room with its floor, walls, doors, windows and appliances.
+  Built with three.js.
+
+  Props:
+    rooms           - the rooms to draw (each has _id, name, type, origin, dimension, placements, openWalls)
+    footprint       - the box { x, z, w, d } around the whole flat
+    selectedId      - id of the selected room
+    selectedItemId  - id of the selected appliance / door / window
+    readonly        - true = only look (no mouse editing)
+    hammer          - true = "knock out a wall" mode is on
+    locked          - true = room sizes cannot be changed
+    layoutKey       - changes when a different layout is shown (the camera is framed again)
+    planName        - name of the saved plan being edited (shown in a small label)
+    overlays        - { sun, heat, air } which pictures to draw on the floors
+    plain           - true = plain white background (used on the contractor page)
+
+  Events sent to the parent:
+    select-room, select-item, edit-rect, move-items, move-opening, drag-preview,
+    rotate-blocked, door-blocked, move-blocked, hammer-wall, update:hammer, locked, ready
+
+  Used by: views/ThreeDSpatial.vue and views/ContractorDashboard.vue
+  The maths comes from stores/placement.js and stores/energy.js,
+  the appliance models from stores/applianceModels.js.
+-->
 <template>
   <div class="floorplan w-100 h-100 position-relative">
     <div ref="host" class="w-100 h-100"></div>
@@ -41,15 +67,22 @@
       <template v-if="hammer">Click a wall between two rooms to knock it out, or a green gap to build it back · Esc to stop</template>
       <template v-else-if="focusedId">Editing one room · Drag items to move them, or the edges to resize</template>
       <template v-else-if="locked && !selectedItemId">Room sizes are locked · Drag items to move them</template>
+      <template v-else-if="selectedItemId && isTouch">Drag to move the item · Use the list to remove it</template>
       <template v-else-if="selectedItemId">Drag to move · Arrow keys nudge · R rotates · Delete removes</template>
       <template v-else-if="selectedId">Drag items to move · Drag edges to resize · Drag the floor to move the room</template>
+      <template v-else-if="isTouch">Drag to pan · Pinch to zoom · Two fingers to orbit · Tap a room in the list to edit it</template>
       <template v-else>Right-drag to orbit · Drag to pan · Scroll to zoom · Double-click a room to edit it alone</template>
     </div>
   </div>
 </template>
-
 <script setup>
-import { watch, ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
+// ============================================================
+// IMPORTS
+// ============================================================
+import { watch, ref, computed, onMounted, onUnmounted } from 'vue'
+
+// True on phones and tablets (no mouse), so the on-screen hints talk about fingers, not clicks
+const isTouch = window.matchMedia('(pointer: coarse)').matches
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
@@ -57,6 +90,9 @@ import { createAppliance3DModel, resolveSpec } from '../stores/applianceModels.j
 import { wallPieces, wallPoint, wallLength, placeAt, onWall, counterPose, isBlocked, sharedRange, sameSpotOn, sharedWall, refitPlacements, itemsOfRoom, doorBlockedBeyond, roomBehindOpening, needsOutsideWall, outsideOnlyMessage, nearestWall, NORMAL, WALL_THICKNESS } from '../stores/placement.js'
 import { sunAt, heatAt, throwOf, airDirection } from '../stores/energy.js'
 
+// ============================================================
+// PROPS AND EVENTS
+// ============================================================
 const props = defineProps({
   rooms: { type: Array, default: () => [] },
   footprint: { type: Object, default: null },
@@ -73,177 +109,657 @@ const props = defineProps({
 
 const emit = defineEmits(['select-room', 'select-item', 'edit-rect', 'move-items', 'move-opening', 'drag-preview', 'rotate-blocked', 'door-blocked', 'move-blocked', 'hammer-wall', 'update:hammer', 'locked', 'ready'])
 
-
-const glError = ref('')
+// ============================================================
+// CONSTANTS
+// ============================================================
 const GL_UNAVAILABLE = 'Your browser could not start 3D graphics. WebGL may be turned off or blocked by the graphics driver. Check your browser settings, then reload the view.'
 const GL_LOST = 'The browser reclaimed the graphics context (this can happen after many tabs, or when the computer sleeps). Reload the view to bring the model back.'
 
+// Colour of the stripe on each room's name tag
 const ACCENT = { living: '#f59e0b', kitchen: '#0ea5e9', bedroom: '#8b5cf6', bathroom: '#10b981' }
+
+// How many metres one floor tile picture covers
 const FLOOR_TILE = { living: 0.6, bedroom: 0.6, kitchen: 1.2, bathroom: 1.2 }
+
+// Smallest allowed side (metres) of each room type, the largest side, and the allowed area
 const MIN = { living: 3.0, kitchen: 1.8, bedroom: 2.4, bathroom: 1.2 }
 const MAX = 15
 const AREA = { min: -20, max: 40 }
-const MAGNET = 0.25
-const host = ref(null)
 
-let scene, camera, renderer, controls, sun, observer
-const world = new THREE.Group()
-const handles = new THREE.Group()
-// The squares are always there (not only when a room is selected), so the surroundings are never an empty white page.
-const grid = new THREE.GridHelper(60, 60, props.plain ? 0xc4d3ca : 0x94a3b8, props.plain ? 0xdde7e1 : 0xd5dbe3)
+// A dragged room edge sticks to another room's edge when it is this close (metres)
+const MAGNET = 0.25
+
+// How the floor tiles look: n = tiles per side of the picture, base = colour, grout = line colour
+const TILE_STYLE = {
+  living: { n: 1, base: [226, 228, 229], grout: '#b4babe' },
+  bedroom: { n: 1, base: [222, 225, 227], grout: '#b4babe' },
+  kitchen: { n: 4, base: [190, 196, 200], grout: '#8f979c' },
+  bathroom: { n: 4, base: [214, 222, 226], grout: '#9aa7ad' },
+}
+
+// The sun / heat pictures are drawn on a small square canvas of this many pixels
+const HEATMAP_SIZE = 64
+
+// Colour of the airflow arrows
+const AIR_COLOR = { ac: 0x22b8cf, fan: 0x38bdf8, exhaust: 0xf59e0b }
+
+// Colours of the resize handles
+const HANDLE_BLUE = 0x168b59
+const HANDLE_HOT = 0xf59e0b
+
+// Sliding a door or window along a wall: step size and how far it may jump (metres)
+const SLIDE_STEP = 0.1
+const SLIDE_REACH = 1.2
+
+// Arrow keys: [forward, right] direction of each key
+const ARROWS = { ArrowUp: [1, 0], ArrowDown: [-1, 0], ArrowRight: [0, 1], ArrowLeft: [0, -1] }
+
+// Arrow key nudge sizes (metres) and how long to wait before saving (milliseconds)
+const NUDGE = 0.1
+const NUDGE_BIG = 0.5
+const NUDGE_SAVE_MS = 350
+
+// The hammer only works on a shared wall at least this long (metres)
+const MIN_OPEN_WALL = 0.6
+
+// The mouse cursor shown in hammer mode (a little hammer drawn as an SVG picture)
+const HAMMER_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#19352a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m14 13-8.4 8.4a2 2 0 0 1-2.8-2.8L11 10.8"/><path d="m16 16 6-6"/><path d="m8 8 6-6"/><path d="m9 7 8 8"/><path d="m21 11-8-8"/></svg>')}") 4 28, pointer`
+
+// How long (milliseconds) the animation keeps running after the last mouse movement
+const IDLE_MS = 3000
+
+// ============================================================
+// DATA THAT THE PAGE SHOWS (refs and computed)
+// ============================================================
+const host = ref(null)         // the <div> that holds the 3D canvas
+const glError = ref('')        // message shown when 3D graphics cannot start
+const focusedId = ref(null)    // id of the room being edited alone (null = whole flat)
+
+// The hammer prop, as a computed so that it can be watched
+const hammer = computed(function () {
+  return props.hammer
+})
+
+// The rooms prop, as a computed so that it can be watched
+const roomsList = computed(function () {
+  return props.rooms
+})
+
+// The footprint prop, as a computed so that it can be watched
+const footprintValue = computed(function () {
+  return props.footprint
+})
+
+// The overlays prop, as a computed so that it can be watched
+const overlaysValue = computed(function () {
+  return props.overlays
+})
+
+// The selected room id, the selected item id and the locked switch, as computeds so that they can be watched
+const selectedIdValue = computed(function () {
+  return props.selectedId
+})
+
+const selectedItemIdValue = computed(function () {
+  return props.selectedItemId
+})
+
+const lockedValue = computed(function () {
+  return props.locked
+})
+
+// ============================================================
+// DATA THAT THE PAGE DOES NOT SHOW (plain variables)
+// ============================================================
+
+// The three.js objects (created in start())
+let scene = null
+let camera = null
+let renderer = null
+let controls = null
+let sun = null
+let envTexture = null
+
+// Things that are always in the scene
+const world = new THREE.Group()     // holds one group per room
+const handles = new THREE.Group()   // the resize handles of the selected room
+const base = new THREE.Group()      // the ground and the slab under the flat
+const gaps = new THREE.Group()      // the green "gaps" shown in hammer mode
+
+// The squares on the ground (always there, so the surroundings are never an empty white page)
+let gridColor1 = 0x94a3b8
+let gridColor2 = 0xd5dbe3
+if (props.plain) {
+  gridColor1 = 0xc4d3ca
+  gridColor2 = 0xdde7e1
+}
+const grid = new THREE.GridHelper(60, 60, gridColor1, gridColor2)
 grid.position.set(10, 0.002, 10)
-const groups = new Map()
-const itemModels = new Map()
+
+// The box drawn around the selected item
 const outline = new THREE.BoxHelper(new THREE.Object3D(), 0x0ea5e9)
 outline.visible = false
-const floors = new Map()
-const tags = new Map()
+
+// The red/green glow shown over the wall under the hammer
+const wallGlow = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0xdc2626, transparent: true, opacity: 0.5, depthTest: false }))
+wallGlow.visible = false
+wallGlow.renderOrder = 9
+
+// The 4 wall materials (one per wall number) and the 4 materials for the top edge of the walls
+const wallMats = []
+const capMats = []
+for (let i = 0; i < 4; i++) {
+  wallMats.push(new THREE.MeshStandardMaterial({ color: 0xf8f4ec, roughness: 0.92, transparent: true }))
+  capMats.push(new THREE.MeshStandardMaterial({ color: 0xcfc6b6, roughness: 0.8, transparent: true }))
+}
+
+// Lookups by room id (the id is the key). Each room has one entry in each.
+let roomGroups = {}     // room id -> the three.js group of that room
+let floors = {}         // room id -> the floor mesh
+let tags = {}           // room id -> the name tag sprite
+let overlayParts = {}   // room id -> { sun, heat, arrows } (the sun/heat/air pictures)
+
+// Lookup by item id: item id -> { model, roomId }
+let itemModels = {}
+
+// Floor textures are drawn once per room type and then reused: room type -> texture
+let floorTextures = {}
+
+// All the wall meshes of all rooms
 let wallMeshes = []
+
+// While a room is being resized: { id, room } with the room's temporary shape (else null)
 let live = null
 
-const wallMats = [0, 1, 2, 3].map(() => new THREE.MeshStandardMaterial({ color: 0xf8f4ec, roughness: 0.92, transparent: true }))
-const capMats = [0, 1, 2, 3].map(() => new THREE.MeshStandardMaterial({ color: 0xcfc6b6, roughness: 0.8, transparent: true }))
-const base = new THREE.Group()
-let envTexture = null, tween = null
-const floorTextures = new Map()
-const ray = new THREE.Raycaster()
+// Camera movement in progress (else null)
+let tween = null
+
+// The room under the mouse, and where the mouse was pressed
 let hoverId = null
 let downAt = null
+let hoverHandle = null
+let lastPointer = null
 
-const snap = (v) => Math.round(v * 10) / 10
-const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v))
+// The current mouse drags (else null): resizing / moving a room, dragging an item, arrow key nudge
+let bd = null
+let idrag = null
+let nudge = null
+let nudgeTimer = 0
 
-function label(text, sub, type) {
-  const c = document.createElement('canvas')
-  c.width = 512; c.height = 176
-  const g = c.getContext('2d')
-  g.shadowColor = 'rgba(15,40,28,0.28)'; g.shadowBlur = 18; g.shadowOffsetY = 6
+// The room whose overlays must be redrawn on the next frame
+let overlayDirtyRoom = null
+
+// Remember the last drawn rooms so that syncRooms() can see what changed
+let roomSigs = {}
+let footSig = ''
+let dirtyRooms = {}
+
+// Camera framing
+let framed = false
+let framedFor = null
+
+// Animation loop
+let rafId = 0
+let awakeUntil = 0
+let lastTick = 0
+
+// Keeping the canvas the same size as its box
+let resizeTimer = 0
+let lastWidth = 0
+let lastHeight = 0
+
+// The ray used to find what is under the mouse, and the flat plane used to find the floor point
+const ray = new THREE.Raycaster()
+const liftedPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+
+// Seed for the little random number generator used when painting floor tiles
+let randomSeed = 0
+
+// ============================================================
+// SMALL HELPERS
+// ============================================================
+
+// Is this value missing (undefined or null)?
+function isMissing(value) {
+  return value === undefined || value === null
+}
+
+// Keep a number between a low and a high limit.
+function clamp(value, low, high) {
+  return Math.max(low, Math.min(high, value))
+}
+
+// Round a number to 1 decimal place.
+function snap(value) {
+  return Math.round(value * 10) / 10
+}
+
+// Copy every key of "source" onto "target".
+function copyInto(target, source) {
+  for (const key in source) {
+    target[key] = source[key]
+  }
+}
+
+// What isBlocked() wants: the spec of an item together with a position.
+function candidateOf(spec, pos) {
+  const candidate = { spec: spec }
+  copyInto(candidate, pos)
+  return candidate
+}
+
+// All the items of a list except one.
+function othersOf(all, item) {
+  const others = []
+  for (const o of all) {
+    if (o !== item) {
+      others.push(o)
+    }
+  }
+  return others
+}
+
+// The footprint of the flat, or a default one when there is none.
+function getFootprint() {
+  if (isMissing(props.footprint)) {
+    return { x: 0, z: 0, w: 10, d: 8 }
+  }
+  return props.footprint
+}
+
+// Smallest allowed side of a room type.
+function minSize(type) {
+  const size = MIN[type]
+  if (isMissing(size)) {
+    return 1.2
+  }
+  return size
+}
+
+// Is this room id the one being edited alone (or is the whole flat showing)?
+function inFocus(id) {
+  return !focusedId.value || id === focusedId.value
+}
+
+// The rooms, but with the room that is being resized replaced by its temporary shape.
+function liveRooms() {
+  if (!live) {
+    return props.rooms
+  }
+  const list = []
+  for (const r of props.rooms) {
+    if (String(r._id) === live.id) {
+      list.push(live.room)
+    } else {
+      list.push(r)
+    }
+  }
+  return list
+}
+
+// Find a room by its id (using the temporary shape while resizing).
+function roomById(id) {
+  const list = liveRooms()
+  for (const r of list) {
+    if (String(r._id) === id) {
+      return r
+    }
+  }
+  return null
+}
+
+// Is there a room with this id in the props?
+function propsHasRoom(id) {
+  for (const r of props.rooms) {
+    if (String(r._id) === id) {
+      return true
+    }
+  }
+  return false
+}
+
+// Find a room by its name in a list of rooms.
+function roomByName(list, name) {
+  for (const r of list) {
+    if (r.name === name) {
+      return r
+    }
+  }
+  return null
+}
+
+// Find an item by its id in a list of items.
+function itemById(all, id) {
+  for (const i of all) {
+    if (i.id === id) {
+      return i
+    }
+  }
+  return null
+}
+
+// How high above the floor the model of an item sits.
+function modelY(spec, h) {
+  if (spec.mode === 'ceiling') {
+    return h - spec.h
+  }
+  return spec.y
+}
+
+// Free the memory of an object's geometry and material (used with traverse).
+function disposeNode(o) {
+  if (o.geometry && o.geometry.dispose) {
+    o.geometry.dispose()
+  }
+  if (o.material && o.material.dispose) {
+    o.material.dispose()
+  }
+}
+
+// Free the memory of a whole group, then empty it.
+function disposeGroup(g) {
+  g.traverse(disposeNode)
+  g.clear()
+}
+
+// Free the memory of one object: geometry, materials and the textures inside the materials.
+function disposeOneObject(o) {
+  if (o.geometry && o.geometry.dispose) {
+    o.geometry.dispose()
+  }
+  let materials = []
+  if (Array.isArray(o.material)) {
+    materials = o.material
+  } else if (o.material) {
+    materials = [o.material]
+  }
+  for (const m of materials) {
+    const keys = Object.keys(m)
+    for (const key of keys) {
+      const v = m[key]
+      if (v && v.isTexture) {
+        v.dispose()
+      }
+    }
+    m.dispose()
+  }
+}
+
+// Free the memory of an object and everything inside it.
+function disposeObject(root) {
+  root.traverse(disposeOneObject)
+}
+
+// Free the memory of the geometry of an object (used with traverse).
+function disposeGeometry(o) {
+  if (o.geometry && o.geometry.dispose) {
+    o.geometry.dispose()
+  }
+}
+
+// ============================================================
+// DRAWING: NAME TAGS, FLOOR TILES, SKY
+// ============================================================
+
+// Make the name tag of a room: a small picture with the name and size, shown as a sprite.
+function makeLabel(text, sub, type) {
+  const canvas = document.createElement('canvas')
+  canvas.width = 512
+  canvas.height = 176
+  const g = canvas.getContext('2d')
+  g.shadowColor = 'rgba(15,40,28,0.28)'
+  g.shadowBlur = 18
+  g.shadowOffsetY = 6
   g.fillStyle = 'rgba(255,255,255,0.94)'
-  g.beginPath(); g.roundRect(16, 12, 480, 128, 30); g.fill()
+  g.beginPath()
+  g.roundRect(16, 12, 480, 128, 30)
+  g.fill()
   g.shadowColor = 'transparent'
-  g.fillStyle = ACCENT[type] ?? '#168b59'
-  g.beginPath(); g.roundRect(16, 12, 16, 128, [30, 0, 0, 30]); g.fill()
-  g.fillStyle = '#19352a'; g.textAlign = 'center'
+
+  let accent = ACCENT[type]
+  if (isMissing(accent)) {
+    accent = '#168b59'
+  }
+  g.fillStyle = accent
+  g.beginPath()
+  g.roundRect(16, 12, 16, 128, [30, 0, 0, 30])
+  g.fill()
+
+  g.fillStyle = '#19352a'
+  g.textAlign = 'center'
   g.font = '700 54px "Segoe UI", system-ui, sans-serif'
   g.fillText(text, 264, 70, 430)
-  g.font = '500 33px "Segoe UI", system-ui, sans-serif'; g.fillStyle = '#5d6f65'
+  g.font = '500 33px "Segoe UI", system-ui, sans-serif'
+  g.fillStyle = '#5d6f65'
   g.fillText(sub, 264, 116, 430)
-  const map = new THREE.CanvasTexture(c)
+
+  const map = new THREE.CanvasTexture(canvas)
   map.colorSpace = THREE.SRGBColorSpace
   map.anisotropy = 4
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map, depthTest: false, transparent: true, toneMapped: false }))
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: map, depthTest: false, transparent: true, toneMapped: false }))
   sprite.scale.set(1.9, 0.653, 1)
   sprite.renderOrder = 10
   return sprite
 }
 
-function rng(seed) { return () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296 } }
-const shade = ([r, g, b], k) => `rgb(${Math.round(r * k)},${Math.round(g * k)},${Math.round(b * k)})`
-
-const TILE_STYLE = {
-  living:   { n: 1, base: [226, 228, 229], grout: '#b4babe' },
-  bedroom:  { n: 1, base: [222, 225, 227], grout: '#b4babe' },
-  kitchen:  { n: 4, base: [190, 196, 200], grout: '#8f979c' },
-  bathroom: { n: 4, base: [214, 222, 226], grout: '#9aa7ad' },
+// A small random number generator: gives a number from 0 up to (not including) 1.
+// The same seed always gives the same numbers, so the tiles always look the same.
+function nextRandom() {
+  randomSeed = randomSeed | 0
+  randomSeed = (randomSeed + 0x6d2b79f5) | 0
+  let t = Math.imul(randomSeed ^ (randomSeed >>> 15), 1 | randomSeed)
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296
 }
 
+// Make a colour text like "rgb(200,200,200)" from [r, g, b], made lighter or darker by k.
+function shade(color, k) {
+  const r = Math.round(color[0] * k)
+  const g = Math.round(color[1] * k)
+  const b = Math.round(color[2] * k)
+  return `rgb(${r},${g},${b})`
+}
+
+// Draw the picture of the floor tiles of one room type.
 function paintFloor(type) {
-  const S = 512, c = document.createElement('canvas')
-  c.width = c.height = S
-  const g = c.getContext('2d'), rand = rng(type.length * 977 + type.charCodeAt(0))
-  const { n, base, grout } = TILE_STYLE[type] ?? TILE_STYLE.living
-  const tile = S / n, line = 3
-  g.fillStyle = grout; g.fillRect(0, 0, S, S)
-  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
-    g.fillStyle = shade(base, 0.97 + rand() * 0.06)
-    g.fillRect(i * tile + line / 2, j * tile + line / 2, tile - line, tile - line)
-    const sheen = g.createLinearGradient(i * tile, j * tile, (i + 1) * tile, (j + 1) * tile)
-    sheen.addColorStop(0, 'rgba(255,255,255,0.22)'); sheen.addColorStop(0.7, 'rgba(255,255,255,0)')
-    g.fillStyle = sheen; g.fillRect(i * tile + line / 2, j * tile + line / 2, tile - line, tile - line)
+  const S = 512
+  const canvas = document.createElement('canvas')
+  canvas.width = S
+  canvas.height = S
+  const g = canvas.getContext('2d')
+  randomSeed = type.length * 977 + type.charCodeAt(0)
+
+  let style = TILE_STYLE[type]
+  if (isMissing(style)) {
+    style = TILE_STYLE.living
   }
-  const tex = new THREE.CanvasTexture(c)
+  const n = style.n
+  const tile = S / n
+  const line = 3
+
+  g.fillStyle = style.grout
+  g.fillRect(0, 0, S, S)
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      g.fillStyle = shade(style.base, 0.97 + nextRandom() * 0.06)
+      g.fillRect(i * tile + line / 2, j * tile + line / 2, tile - line, tile - line)
+      const sheen = g.createLinearGradient(i * tile, j * tile, (i + 1) * tile, (j + 1) * tile)
+      sheen.addColorStop(0, 'rgba(255,255,255,0.22)')
+      sheen.addColorStop(0.7, 'rgba(255,255,255,0)')
+      g.fillStyle = sheen
+      g.fillRect(i * tile + line / 2, j * tile + line / 2, tile - line, tile - line)
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(canvas)
   tex.colorSpace = THREE.SRGBColorSpace
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+  tex.wrapS = THREE.RepeatWrapping
+  tex.wrapT = THREE.RepeatWrapping
   tex.anisotropy = 8
   return tex
 }
 
+// The floor material of a room type (its tile picture is drawn only once, then copied).
 function floorMaterial(type) {
-  if (!floorTextures.has(type)) floorTextures.set(type, paintFloor(type))
-  const map = floorTextures.get(type).clone()
+  if (floorTextures[type] === undefined) {
+    floorTextures[type] = paintFloor(type)
+  }
+  const map = floorTextures[type].clone()
   map.needsUpdate = true
-  return new THREE.MeshStandardMaterial({ map, color: 0xffffff, roughness: type === 'kitchen' || type === 'bathroom' ? 0.55 : 0.4, metalness: 0 })
+  let roughness = 0.4
+  if (type === 'kitchen' || type === 'bathroom') {
+    roughness = 0.55
+  }
+  return new THREE.MeshStandardMaterial({ map: map, color: 0xffffff, roughness: roughness, metalness: 0 })
 }
 
+// Repeat the tile picture so that every tile keeps the same real-world size.
 function fitFloor(floor, type, w, d) {
-  const m = FLOOR_TILE[type] ?? 2
-  floor.material.map?.repeat.set(w / m, d / m)
+  let m = FLOOR_TILE[type]
+  if (isMissing(m)) {
+    m = 2
+  }
+  if (floor.material.map) {
+    floor.material.map.repeat.set(w / m, d / m)
+  }
 }
 
+// The picture of the sky behind the flat (a colour fade from top to bottom).
 function skyTexture() {
-  const c = document.createElement('canvas')
-  c.width = 4; c.height = 512
-  const g = c.getContext('2d'), grad = g.createLinearGradient(0, 0, 0, 512)
-  grad.addColorStop(0, '#9fdcf0'); grad.addColorStop(0.5, '#cdeee6'); grad.addColorStop(1, '#e3f4e6')
-  g.fillStyle = grad; g.fillRect(0, 0, 4, 512)
-  const tex = new THREE.CanvasTexture(c)
+  const canvas = document.createElement('canvas')
+  canvas.width = 4
+  canvas.height = 512
+  const g = canvas.getContext('2d')
+  const gradient = g.createLinearGradient(0, 0, 0, 512)
+  gradient.addColorStop(0, '#9fdcf0')
+  gradient.addColorStop(0.5, '#cdeee6')
+  gradient.addColorStop(1, '#e3f4e6')
+  g.fillStyle = gradient
+  g.fillRect(0, 0, 4, 512)
+  const tex = new THREE.CanvasTexture(canvas)
   tex.colorSpace = THREE.SRGBColorSpace
   return tex
 }
 
+// ============================================================
+// BUILDING THE SCENE: GROUND, WALLS, ROOMS
+// ============================================================
+
+// Build the ground and the slab under the flat.
 function buildBase() {
   disposeGroup(base)
-  const fp = props.footprint ?? { x: 0, z: 0, w: 10, d: 8 }
+  const fp = getFootprint()
   const pad = 1.0
+
   const slab = new THREE.Mesh(
     new THREE.BoxGeometry(fp.w + pad * 2, 0.24, fp.d + pad * 2),
     new THREE.MeshStandardMaterial({ color: 0xf3f6f3, roughness: 0.9 }),
   )
   slab.position.set(fp.x + fp.w / 2, -0.055 - 0.12, fp.z + fp.d / 2)
-  slab.receiveShadow = slab.castShadow = true
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), props.plain ? new THREE.ShadowMaterial({ color: 0x1f3a2d, opacity: 0.12 }) : new THREE.MeshStandardMaterial({ color: 0xe6efe9, roughness: 1 }))
+  slab.receiveShadow = true
+  slab.castShadow = true
+
+  let groundMaterial
+  if (props.plain) {
+    groundMaterial = new THREE.ShadowMaterial({ color: 0x1f3a2d, opacity: 0.12 })
+  } else {
+    groundMaterial = new THREE.MeshStandardMaterial({ color: 0xe6efe9, roughness: 1 })
+  }
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), groundMaterial)
   ground.rotation.x = -Math.PI / 2
   ground.position.set(fp.x + fp.w / 2, -0.3, fp.z + fp.d / 2)
   ground.receiveShadow = true
+
   base.add(ground, slab)
 }
 
-function buildWalls(r, moved = {}) {
-  const id = String(r._id), group = groups.get(id), { w, d, h } = r.dimension
-  if (!group) return
+// Is the point (gx, gz) inside another room that is showing?
+// Used to decide whether the start of a wall must be trimmed.
+function insideOtherRoom(id, gx, gz) {
+  const list = liveRooms()
+  for (const o of list) {
+    if (String(o._id) === id) {
+      continue
+    }
+    if (!inFocus(String(o._id))) {
+      continue
+    }
+    if (gx > o.origin.x + 0.001 && gx < o.origin.x + o.dimension.w - 0.001 &&
+      gz > o.origin.z + 0.001 && gz < o.origin.z + o.dimension.d - 0.001) {
+      return true
+    }
+  }
+  return false
+}
 
-  wallMeshes = wallMeshes.filter((mesh) => {
-    if (mesh.userData.wall.roomId !== id) return true
-    group.remove(mesh)
-    mesh.geometry.dispose()
-    return false
-  })
-
-  const items = []
-  for (const p of r.placements || []) {
-    const at = moved[String(p._id)] ?? p
-    items.push({ spec: resolveSpec(p.applianceTypeKey, p.category), wall: at.wall, t: at.t })
+// (Re)build the walls of one room.
+// "moved" is optional: { item id: { wall, t } } for doors/windows that are being dragged.
+function buildWalls(r, moved) {
+  if (moved === undefined) {
+    moved = {}
+  }
+  const id = String(r._id)
+  const group = roomGroups[id]
+  const w = r.dimension.w
+  const d = r.dimension.d
+  const h = r.dimension.h
+  if (!group) {
+    return
   }
 
-  for (const o of r.openWalls || [])
+  // Remove the old wall meshes of this room
+  const keptMeshes = []
+  for (const mesh of wallMeshes) {
+    if (mesh.userData.wall.roomId !== id) {
+      keptMeshes.push(mesh)
+    } else {
+      group.remove(mesh)
+      mesh.geometry.dispose()
+    }
+  }
+  wallMeshes = keptMeshes
+
+  // Everything that cuts a hole in a wall: doors, windows and knocked-out wall parts
+  const items = []
+  const placements = r.placements || []
+  for (const p of placements) {
+    let at = moved[String(p._id)]
+    if (isMissing(at)) {
+      at = p
+    }
+    items.push({ spec: resolveSpec(p.applianceTypeKey, p.category), wall: at.wall, t: at.t })
+  }
+  const openWalls = r.openWalls || []
+  for (const o of openWalls) {
     items.push({ spec: { mode: 'opening', w: o.t1 - o.t0, y: 0, h: h }, wall: o.wall, t: (o.t0 + o.t1) / 2 })
+  }
 
-  const trimStart = [0, 1, 2, 3].map((i) => {
-    const n = NORMAL[i], [px, pz] = wallPoint({ w, d }, i, -WALL_THICKNESS / 2)
-    const gx = r.origin.x + px - (n[0] * WALL_THICKNESS) / 2, gz = r.origin.z + pz - (n[1] * WALL_THICKNESS) / 2
-    return liveRooms().some((o) => String(o._id) !== id && inFocus(String(o._id)) &&
-      gx > o.origin.x + 0.001 && gx < o.origin.x + o.dimension.w - 0.001 &&
-      gz > o.origin.z + 0.001 && gz < o.origin.z + o.dimension.d - 0.001)
-  })
+  // For each of the 4 walls: should its start be trimmed (because another room is in the way)?
+  const trimStart = []
+  for (let i = 0; i < 4; i++) {
+    const n = NORMAL[i]
+    const point = wallPoint({ w: w, d: d }, i, -WALL_THICKNESS / 2)
+    const gx = r.origin.x + point[0] - (n[0] * WALL_THICKNESS) / 2
+    const gz = r.origin.z + point[1] - (n[1] * WALL_THICKNESS) / 2
+    trimStart.push(insideOtherRoom(id, gx, gz))
+  }
 
-  for (const pc of wallPieces({ w, d, h }, items, trimStart)) {
-    const len = pc.t1 - pc.t0, hh = pc.y1 - pc.y0
-    const [px, pz] = wallPoint({ w, d }, pc.wall, (pc.t0 + pc.t1) / 2)
+  // One box for each piece of wall
+  const pieces = wallPieces({ w: w, d: d, h: h }, items, trimStart)
+  for (const pc of pieces) {
+    const len = pc.t1 - pc.t0
+    const hh = pc.y1 - pc.y0
+    const point = wallPoint({ w: w, d: d }, pc.wall, (pc.t0 + pc.t1) / 2)
     const n = NORMAL[pc.wall]
-    const geo = pc.wall % 2 ? new THREE.BoxGeometry(WALL_THICKNESS, hh, len) : new THREE.BoxGeometry(len, hh, WALL_THICKNESS)
+    let geo
+    if (pc.wall % 2) {
+      geo = new THREE.BoxGeometry(WALL_THICKNESS, hh, len)
+    } else {
+      geo = new THREE.BoxGeometry(len, hh, WALL_THICKNESS)
+    }
     const wm = wallMats[pc.wall]
     const mesh = new THREE.Mesh(geo, [wm, wm, capMats[pc.wall], wm, wm, wm])
-    mesh.position.set(px - (n[0] * WALL_THICKNESS) / 2, (pc.y0 + pc.y1) / 2, pz - (n[1] * WALL_THICKNESS) / 2)
+    mesh.position.set(point[0] - (n[0] * WALL_THICKNESS) / 2, (pc.y0 + pc.y1) / 2, point[1] - (n[1] * WALL_THICKNESS) / 2)
     mesh.castShadow = true
     mesh.receiveShadow = false
     mesh.userData.wall = { roomId: id, wall: pc.wall }
@@ -252,8 +768,11 @@ function buildWalls(r, moved = {}) {
   }
 }
 
+// Build one room: floor, appliance models, walls, overlays and name tag.
 function buildRoom(r) {
-  const { w, d, h } = r.dimension
+  const w = r.dimension.w
+  const d = r.dimension.d
+  const h = r.dimension.h
   const id = String(r._id)
   const group = new THREE.Group()
   group.position.set(r.origin.x, 0, r.origin.z)
@@ -265,17 +784,18 @@ function buildRoom(r) {
   floor.receiveShadow = true
   floor.userData.roomId = id
   group.add(floor)
-  floors.set(id, floor)
-  groups.set(id, group)
+  floors[id] = floor
+  roomGroups[id] = group
   group.visible = inFocus(id)
 
-  for (const p of r.placements || []) {
+  const placements = r.placements || []
+  for (const p of placements) {
     const model = createAppliance3DModel(p.applianceTypeKey, p.category)
     const spec = model.userData.spec
-    model.position.set(p.x, spec.mode === 'ceiling' ? h - spec.h : spec.y, p.z)
+    model.position.set(p.x, modelY(spec, h), p.z)
     model.rotation.y = p.rotY
     group.add(model)
-    itemModels.set(String(p._id), { model, roomId: id })
+    itemModels[String(p._id)] = { model: model, roomId: id }
   }
 
   buildWalls(r)
@@ -285,103 +805,163 @@ function buildRoom(r) {
   world.add(group)
 }
 
-const tenth = (v) => Math.round(v * 10) / 10
-
+// (Re)make the name tag of a room.
 function setTag(id, r) {
-  const group = groups.get(id)
-  if (!group) return
-  const old = tags.get(id)
-  if (old) { group.remove(old); old.material.map.dispose(); old.material.dispose() }
-  const { w, d } = r.dimension
-  const tag = label(r.name, `${tenth(w)} × ${tenth(d)} m · ${tenth(w * d)} m²`, r.type)
+  const group = roomGroups[id]
+  if (!group) {
+    return
+  }
+  const old = tags[id]
+  if (old) {
+    group.remove(old)
+    old.material.map.dispose()
+    old.material.dispose()
+  }
+  const w = r.dimension.w
+  const d = r.dimension.d
+  const tag = makeLabel(r.name, `${snap(w)} × ${snap(d)} m · ${snap(w * d)} m²`, r.type)
   tag.position.set(w / 2, 0.4, d / 2)
   group.add(tag)
-  tags.set(id, tag)
+  tags[id] = tag
 }
 
-const HEATMAP_SIZE = 64
-const overlayParts = new Map()
-let overlayDirtyRoom = null
+// ============================================================
+// SUN / HEAT / AIR OVERLAYS
+// ============================================================
 
+// Make a flat coloured picture (a "heatmap") lying on the floor of a room.
 function makeHeatmap(color, height, w, d) {
   const canvas = document.createElement('canvas')
-  canvas.width = canvas.height = HEATMAP_SIZE
+  canvas.width = HEATMAP_SIZE
+  canvas.height = HEATMAP_SIZE
   const texture = new THREE.CanvasTexture(canvas)
   const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false })
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, d), material)
   mesh.rotation.x = -Math.PI / 2
   mesh.position.set(w / 2, height, d / 2)
   mesh.renderOrder = 2
-  return { mesh, canvas, texture, color: new THREE.Color(color) }
+  return { mesh: mesh, canvas: canvas, texture: texture, color: new THREE.Color(color) }
 }
 
+// Add the sun picture, the heat picture and the arrows group to a room.
 function addOverlays(roomId, group, w, d) {
-  const parts = { sun: makeHeatmap(0xffc929, 0.02, w, d), heat: makeHeatmap(0xe8420f, 0.03, w, d), arrows: new THREE.Group() }
-  group.add(parts.sun.mesh, parts.heat.mesh, parts.arrows)
-  overlayParts.set(roomId, parts)
-}
-
-function disposeOverlays() {
-  for (const parts of overlayParts.values()) {
-    for (const map of [parts.sun, parts.heat]) { map.texture.dispose(); map.mesh.material.dispose() }
-    parts.arrows.children.forEach((arrow) => arrow.dispose())
+  const parts = {
+    sun: makeHeatmap(0xffc929, 0.02, w, d),
+    heat: makeHeatmap(0xe8420f, 0.03, w, d),
+    arrows: new THREE.Group(),
   }
-  overlayParts.clear()
+  group.add(parts.sun.mesh, parts.heat.mesh, parts.arrows)
+  overlayParts[roomId] = parts
 }
 
-function paintHeatmap(map, valueAt, room) {
-  const ctx = map.canvas.getContext('2d'), image = ctx.createImageData(HEATMAP_SIZE, HEATMAP_SIZE)
-  const { r, g, b } = map.color
-  for (let row = 0; row < HEATMAP_SIZE; row++)
+// Free the memory of the arrows of one room.
+function disposeArrows(parts) {
+  for (const arrow of parts.arrows.children) {
+    arrow.dispose()
+  }
+}
+
+// Free the memory of the sun picture, heat picture and arrows of one room.
+function disposeOverlayParts(parts) {
+  const maps = [parts.sun, parts.heat]
+  for (const map of maps) {
+    map.texture.dispose()
+    map.mesh.material.dispose()
+  }
+  disposeArrows(parts)
+}
+
+// Free the memory of the overlays of every room.
+function disposeOverlays() {
+  for (const id in overlayParts) {
+    disposeOverlayParts(overlayParts[id])
+  }
+  overlayParts = {}
+}
+
+// The sun or heat value (0 to 1) at one point of the room.
+function heatmapValue(kind, room, items, point) {
+  if (kind === 'sun') {
+    return sunAt(room, items, point)
+  }
+  return heatAt(room, items, point)
+}
+
+// Colour every pixel of a heatmap picture. kind is 'sun' or 'heat'.
+function paintHeatmap(map, kind, items, room) {
+  const ctx = map.canvas.getContext('2d')
+  const image = ctx.createImageData(HEATMAP_SIZE, HEATMAP_SIZE)
+  const r = map.color.r
+  const g = map.color.g
+  const b = map.color.b
+  for (let row = 0; row < HEATMAP_SIZE; row++) {
     for (let col = 0; col < HEATMAP_SIZE; col++) {
       const point = [((col + 0.5) / HEATMAP_SIZE) * room.w, ((row + 0.5) / HEATMAP_SIZE) * room.d]
-      image.data.set([r * 255, g * 255, b * 255, valueAt(point) * 150], (row * HEATMAP_SIZE + col) * 4)
+      const start = (row * HEATMAP_SIZE + col) * 4
+      image.data[start] = r * 255
+      image.data[start + 1] = g * 255
+      image.data[start + 2] = b * 255
+      image.data[start + 3] = heatmapValue(kind, room, items, point) * 150
     }
+  }
   ctx.putImageData(image, 0, 0)
   map.texture.needsUpdate = true
 }
 
-const AIR_COLOR = { ac: 0x22b8cf, fan: 0x38bdf8, exhaust: 0xf59e0b }
-
+// Add one arrow (skipped when it would be too short to see).
 function addArrow(parts, direction, from, length, color) {
-  if (length < 0.1) return
+  if (length < 0.1) {
+    return
+  }
   parts.arrows.add(new THREE.ArrowHelper(direction.normalize(), from, length, color, Math.min(0.18, length * 0.4), 0.1))
 }
 
+// Draw a fan of arrows from a point, all turned a little differently ("spreads" are the turns).
 function fanOut(parts, item, from, reach, tilt, spreads, color) {
-  const [fx, fz] = airDirection(item)
+  const dir = airDirection(item)
+  const fx = dir[0]
+  const fz = dir[1]
   for (const spread of spreads) {
-    const cos = Math.cos(spread), sin = Math.sin(spread)
+    const cos = Math.cos(spread)
+    const sin = Math.sin(spread)
     const direction = new THREE.Vector3(fx * cos - fz * sin, tilt, fx * sin + fz * cos)
     addArrow(parts, direction, from, reach * (1 - Math.abs(spread) * 0.3), color)
   }
 }
 
+// Redraw the airflow arrows of a room (air conditioner, fans and exhaust fan).
 function drawAirflow(parts, room, items) {
-  parts.arrows.children.forEach((arrow) => arrow.dispose())
+  disposeArrows(parts)
   parts.arrows.clear()
   for (const item of items) {
-    const { kind, y, h } = item.spec
+    const kind = item.spec.kind
+    const y = item.spec.y
+    const h = item.spec.h
+
     if (kind === 'ac') {
       const reach = Math.min(throwOf(room, items, item), 3.5)
-      fanOut(parts, item, new THREE.Vector3(item.x, y + h / 2, item.z), reach, -0.25, [-0.5, -0.25, 0, 0.25, 0.5], AIR_COLOR.ac)
+      const from = new THREE.Vector3(item.x, y + h / 2, item.z)
+      fanOut(parts, item, from, reach, -0.25, [-0.5, -0.25, 0, 0.25, 0.5], AIR_COLOR.ac)
     } else if (kind === 'standfan') {
       const reach = Math.min(throwOf(room, items, item), 2.8)
-      const [fx, fz] = airDirection(item)
-      const head = new THREE.Vector3(item.x + fx * 0.2, h * 0.72, item.z + fz * 0.2)
+      const dir = airDirection(item)
+      const head = new THREE.Vector3(item.x + dir[0] * 0.2, h * 0.72, item.z + dir[1] * 0.2)
       fanOut(parts, item, head, reach, -0.05, [-0.35, -0.17, 0, 0.17, 0.35], AIR_COLOR.fan)
     } else if (kind === 'ceilingfan') {
       const top = room.h - h - 0.02
-      const nearestWall = Math.min(item.x, room.w - item.x, item.z, room.d - item.z)
+      const wallDistance = Math.min(item.x, room.w - item.x, item.z, room.d - item.z)
       const length = Math.max(0.5, Math.min(top - 0.3, 1.7))
-      const spread = Math.min(0.5, Math.max(0.15, nearestWall - 0.45))
+      const spread = Math.min(0.5, Math.max(0.15, wallDistance - 0.45))
       for (let i = 0; i < 8; i++) {
         const a = (i / 8) * Math.PI * 2
         const from = new THREE.Vector3(item.x + Math.cos(a) * 0.45, top, item.z + Math.sin(a) * 0.45)
         addArrow(parts, new THREE.Vector3(Math.cos(a) * spread, -1, Math.sin(a) * spread), from, length, AIR_COLOR.fan)
       }
     } else if (kind === 'exhaust') {
-      for (const [dx, dz] of [[0.45, 0], [-0.45, 0], [0, 0.45], [0, -0.45]]) {
+      const offsets = [[0.45, 0], [-0.45, 0], [0, 0.45], [0, -0.45]]
+      for (const offset of offsets) {
+        const dx = offset[0]
+        const dz = offset[1]
         const from = new THREE.Vector3(item.x + dx, room.h - 0.75, item.z + dz)
         addArrow(parts, new THREE.Vector3(-dx * 0.8, 0.75, -dz * 0.8), from, 0.7, AIR_COLOR.exhaust)
       }
@@ -389,113 +969,217 @@ function drawAirflow(parts, room, items) {
   }
 }
 
+// Redraw the overlays (sun, heat, air) of one room, and show or hide them as the props say.
 function refreshOverlays(roomId) {
-  const r = roomById(roomId), parts = overlayParts.get(roomId)
-  if (!r || !parts) return
-  const active = idrag ?? nudge
-  const items = active && active.roomId === roomId ? active.all : itemsOf(r)
-  parts.sun.mesh.visible = !!props.overlays.sun
-  parts.heat.mesh.visible = !!props.overlays.heat
-  parts.arrows.visible = !!props.overlays.air
-  if (props.overlays.sun) paintHeatmap(parts.sun, (p) => sunAt(r.dimension, items, p), r.dimension)
-  if (props.overlays.heat) paintHeatmap(parts.heat, (p) => heatAt(r.dimension, items, p), r.dimension)
-  if (props.overlays.air) drawAirflow(parts, r.dimension, items)
+  const r = roomById(roomId)
+  const parts = overlayParts[roomId]
+  if (!r || !parts) {
+    return
+  }
+  // While an item is being dragged or nudged, use its temporary position
+  let active = idrag
+  if (isMissing(active)) {
+    active = nudge
+  }
+  let items
+  if (active && active.roomId === roomId) {
+    items = active.all
+  } else {
+    items = itemsOfRoom(r)
+  }
+  parts.sun.mesh.visible = Boolean(props.overlays.sun)
+  parts.heat.mesh.visible = Boolean(props.overlays.heat)
+  parts.arrows.visible = Boolean(props.overlays.air)
+  if (props.overlays.sun) {
+    paintHeatmap(parts.sun, 'sun', items, r.dimension)
+  }
+  if (props.overlays.heat) {
+    paintHeatmap(parts.heat, 'heat', items, r.dimension)
+  }
+  if (props.overlays.air) {
+    drawAirflow(parts, r.dimension, items)
+  }
 }
 
-function disposeObject(root) {
-  root.traverse((o) => {
-    o.geometry?.dispose?.()
-    for (const m of Array.isArray(o.material) ? o.material : o.material ? [o.material] : []) {
-      for (const v of Object.values(m)) if (v && v.isTexture) v.dispose()
-      m.dispose()
-    }
-  })
-}
+// ============================================================
+// REBUILDING: EVERYTHING, OR ONLY THE ROOMS THAT CHANGED
+// ============================================================
 
+// Remove everything from the scene and free its memory.
 function clearWorld() {
   disposeOverlays()
-  for (const f of floors.values()) { f.material.map?.dispose(); f.material.dispose() }
-  for (const tag of tags.values()) { tag.material.map?.dispose(); tag.material.dispose() }
-  for (const { model } of itemModels.values()) disposeObject(model)
-  world.traverse((o) => o.geometry?.dispose?.())
+  for (const id in floors) {
+    if (floors[id].material.map) {
+      floors[id].material.map.dispose()
+    }
+    floors[id].material.dispose()
+  }
+  for (const id in tags) {
+    if (tags[id].material.map) {
+      tags[id].material.map.dispose()
+    }
+    tags[id].material.dispose()
+  }
+  for (const id in itemModels) {
+    disposeObject(itemModels[id].model)
+  }
+  world.traverse(disposeGeometry)
   world.clear()
-  floors.clear(); groups.clear(); itemModels.clear(); tags.clear()
+  floors = {}
+  roomGroups = {}
+  itemModels = {}
+  tags = {}
   wallMeshes = []
 }
 
-let framed = false, framedFor = null
+// Build the whole scene again from the rooms prop.
 function build() {
-  if (!scene) return
-  if (framedFor !== props.layoutKey) { framedFor = props.layoutKey; framed = false; focusedId.value = null }
-  if (focusedId.value && !props.rooms.some((r) => String(r._id) === focusedId.value)) focusedId.value = null
+  if (!scene) {
+    return
+  }
+  if (framedFor !== props.layoutKey) {
+    framedFor = props.layoutKey
+    framed = false
+    focusedId.value = null
+  }
+  if (focusedId.value && !propsHasRoom(focusedId.value)) {
+    focusedId.value = null
+  }
   live = null
   clearWorld()
   buildBase()
   base.visible = !focusedId.value
-  props.rooms.forEach(buildRoom)
-  props.rooms.forEach((r) => refreshOverlays(String(r._id)))
+  for (const r of props.rooms) {
+    buildRoom(r)
+  }
+  for (const r of props.rooms) {
+    refreshOverlays(String(r._id))
+  }
   refreshHammer()
   highlight()
   drawHandles()
-  if (!framed && props.rooms.length) { frameCamera(); framed = true }
-  dirtyRooms.clear()
+  if (!framed && props.rooms.length) {
+    frameCamera()
+    framed = true
+  }
+  dirtyRooms = {}
   rememberSigs()
   fitShadow()
   wake()
-  if (props.rooms.length) emit('ready')
+  if (props.rooms.length) {
+    emit('ready')
+  }
 }
 
-const roomSigs = new Map()
-let footSig = ''
-const dirtyRooms = new Set()
-const sigOf = (r) => ({ all: JSON.stringify(r), rect: JSON.stringify([r.origin, r.dimension]) })
+// A "signature" of a room: its whole data as text, and just its position and size as text.
+// Comparing signatures tells us if a room changed.
+function sigOf(r) {
+  return { all: JSON.stringify(r), rect: JSON.stringify([r.origin, r.dimension]) }
+}
 
+// Remember the signature of every room (and of the footprint) as they are drawn now.
 function rememberSigs() {
-  roomSigs.clear()
-  props.rooms.forEach((r) => roomSigs.set(String(r._id), sigOf(r)))
+  roomSigs = {}
+  for (const r of props.rooms) {
+    roomSigs[String(r._id)] = sigOf(r)
+  }
   footSig = JSON.stringify(props.footprint)
 }
 
+// Remove one room from the scene and free its memory.
 function disposeRoom(id) {
-  const group = groups.get(id)
-  if (!group) return
-  const parts = overlayParts.get(id)
-  if (parts) {
-    for (const map of [parts.sun, parts.heat]) { map.texture.dispose(); map.mesh.material.dispose() }
-    parts.arrows.children.forEach((arrow) => arrow.dispose())
-    overlayParts.delete(id)
+  const group = roomGroups[id]
+  if (!group) {
+    return
   }
-  const floor = floors.get(id)
-  if (floor) { floor.material.map?.dispose(); floor.material.dispose(); floor.geometry.dispose(); floors.delete(id) }
-  const tag = tags.get(id)
-  if (tag) { tag.material.map?.dispose(); tag.material.dispose(); tags.delete(id) }
-  for (const [pid, entry] of itemModels) if (entry.roomId === id) { disposeObject(entry.model); itemModels.delete(pid) }
-  wallMeshes = wallMeshes.filter((mesh) => {
-    if (mesh.userData.wall.roomId !== id) return true
-    mesh.geometry.dispose()
-    return false
-  })
+  const parts = overlayParts[id]
+  if (parts) {
+    disposeOverlayParts(parts)
+    delete overlayParts[id]
+  }
+  const floor = floors[id]
+  if (floor) {
+    if (floor.material.map) {
+      floor.material.map.dispose()
+    }
+    floor.material.dispose()
+    floor.geometry.dispose()
+    delete floors[id]
+  }
+  const tag = tags[id]
+  if (tag) {
+    if (tag.material.map) {
+      tag.material.map.dispose()
+    }
+    tag.material.dispose()
+    delete tags[id]
+  }
+  for (const itemId in itemModels) {
+    if (itemModels[itemId].roomId === id) {
+      disposeObject(itemModels[itemId].model)
+      delete itemModels[itemId]
+    }
+  }
+  const keptMeshes = []
+  for (const mesh of wallMeshes) {
+    if (mesh.userData.wall.roomId !== id) {
+      keptMeshes.push(mesh)
+    } else {
+      mesh.geometry.dispose()
+    }
+  }
+  wallMeshes = keptMeshes
   world.remove(group)
-  groups.delete(id)
+  delete roomGroups[id]
 }
 
+// Called when the rooms or footprint props change.
+// Rebuild everything if rooms were added or removed, otherwise only the rooms that changed.
 function syncRooms() {
-  if (!scene) return
-  const ids = props.rooms.map((r) => String(r._id))
-  if (live || ids.length !== roomSigs.size || ids.some((id) => !roomSigs.has(id))) return build()
+  if (!scene) {
+    return
+  }
+  const ids = []
+  for (const r of props.rooms) {
+    ids.push(String(r._id))
+  }
+  let sameRooms = ids.length === Object.keys(roomSigs).length
+  for (const id of ids) {
+    if (roomSigs[id] === undefined) {
+      sameRooms = false
+    }
+  }
+  if (live || !sameRooms) {
+    build()
+    return
+  }
 
   const fp = JSON.stringify(props.footprint)
-  const changed = props.rooms.filter((r) => {
-    const id = String(r._id), sig = sigOf(r)
-    return dirtyRooms.has(id) || sig.all !== roomSigs.get(id).all
-  })
-  if (!changed.length && fp === footSig) return
+  const changed = []
+  for (const r of props.rooms) {
+    const id = String(r._id)
+    const sig = sigOf(r)
+    if (dirtyRooms[id] || sig.all !== roomSigs[id].all) {
+      changed.push(r)
+    }
+  }
+  if (changed.length === 0 && fp === footSig) {
+    return
+  }
 
-  if (fp !== footSig) { buildBase(); fitShadow() }
-  const reshaped = changed.some((r) => sigOf(r).rect !== roomSigs.get(String(r._id)).rect)
-  const changedIds = new Set(changed.map((r) => String(r._id)))
-  for (const r of changed) { disposeRoom(String(r._id)); buildRoom(r) }
-  changedIds.forEach((id) => { dirtyRooms.delete(id); refreshOverlays(id) })
+  if (fp !== footSig) {
+    buildBase()
+    fitShadow()
+  }
+  for (const r of changed) {
+    disposeRoom(String(r._id))
+    buildRoom(r)
+  }
+  for (const r of changed) {
+    const id = String(r._id)
+    delete dirtyRooms[id]
+    refreshOverlays(id)
+  }
   rememberSigs()
   refreshHammer()
   highlight()
@@ -503,143 +1187,265 @@ function syncRooms() {
   wake()
 }
 
-function setTint(id, hex, strength = 0.35) {
-  const f = floors.get(id)
-  if (!f) return
-  f.material.emissive.setHex(hex)
-  f.material.emissiveIntensity = hex ? strength : 0
-}
+// ============================================================
+// HIGHLIGHT, CAMERA AND VIEWS
+// ============================================================
 
-function highlight() {
-  for (const id of floors.keys()) {
-    const on = id === props.selectedId, hov = id === hoverId
-    setTint(id, on ? 0x16a34a : hov ? 0x64748b : 0x000000, on ? 0.3 : 0.2)
+// Give a room's floor a coloured glow (hex 0 = no glow).
+function setTint(id, hex, strength) {
+  if (strength === undefined) {
+    strength = 0.35
+  }
+  const f = floors[id]
+  if (!f) {
+    return
+  }
+  f.material.emissive.setHex(hex)
+  if (hex) {
+    f.material.emissiveIntensity = strength
+  } else {
+    f.material.emissiveIntensity = 0
   }
 }
 
-function viewPose(kind, area = null) {
-  const fp = area ?? props.footprint ?? { x: 0, z: 0, w: 10, d: 8 }
-  const cx = fp.x + fp.w / 2, cz = fp.z + fp.d / 2, reach = Math.max(fp.w, fp.d) * 1.2
-  const target = new THREE.Vector3(cx, 0, cz)
-  if (kind === 'top') return { target, pos: new THREE.Vector3(cx, reach * 1.9, cz + 0.001) }
-  if (kind === 'front') return { target, pos: new THREE.Vector3(cx, reach * 0.42, fp.z + fp.d + reach * 1.25) }
-  return { target, pos: new THREE.Vector3(cx + reach * 0.3, reach * 0.95, fp.z + fp.d + reach * 0.75) }
+// Glow green on the selected room, grey on the room under the mouse.
+function highlight() {
+  for (const id in floors) {
+    const on = id === props.selectedId
+    const hov = id === hoverId
+    if (on) {
+      setTint(id, 0x16a34a, 0.3)
+    } else if (hov) {
+      setTint(id, 0x64748b, 0.2)
+    } else {
+      setTint(id, 0x000000, 0.2)
+    }
+  }
 }
 
+// Where the camera should stand and look for a view: 'iso', 'top' or 'front'.
+// "area" is optional: a box { x, z, w, d } to look at instead of the whole flat.
+function viewPose(kind, area) {
+  let fp = area
+  if (isMissing(fp)) {
+    fp = getFootprint()
+  }
+  const cx = fp.x + fp.w / 2
+  const cz = fp.z + fp.d / 2
+  const reach = Math.max(fp.w, fp.d) * 1.2
+  const target = new THREE.Vector3(cx, 0, cz)
+  if (kind === 'top') {
+    return { target: target, pos: new THREE.Vector3(cx, reach * 1.9, cz + 0.001) }
+  }
+  if (kind === 'front') {
+    return { target: target, pos: new THREE.Vector3(cx, reach * 0.42, fp.z + fp.d + reach * 1.25) }
+  }
+  return { target: target, pos: new THREE.Vector3(cx + reach * 0.3, reach * 0.95, fp.z + fp.d + reach * 0.75) }
+}
+
+// Move the sun light and its shadow area so that they cover the whole flat.
 function fitShadow() {
-  if (!sun) return
-  const fp = props.footprint ?? { x: 0, z: 0, w: 10, d: 8 }
+  if (!sun) {
+    return
+  }
+  const fp = getFootprint()
   const c = new THREE.Vector3(fp.x + fp.w / 2, 0, fp.z + fp.d / 2)
   const half = clamp(Math.max(fp.w, fp.d) * 0.75 + 6, 12, 30)
   sun.target.position.copy(c)
   sun.position.set(c.x + 8, 16, c.z + 10)
-  Object.assign(sun.shadow.camera, { left: -half, right: half, top: half, bottom: -half })
+  sun.shadow.camera.left = -half
+  sun.shadow.camera.right = half
+  sun.shadow.camera.top = half
+  sun.shadow.camera.bottom = -half
   sun.shadow.camera.updateProjectionMatrix()
   sun.target.updateMatrixWorld()
 }
 
+// Put the camera in the isometric view straight away (no animation).
 function frameCamera() {
-  const { target, pos } = viewPose('iso')
-  controls.target.copy(target)
-  camera.position.copy(pos)
+  const pose = viewPose('iso')
+  controls.target.copy(pose.target)
+  camera.position.copy(pose.pos)
 }
 
-const focusedId = ref(null)
-const inFocus = (id) => !focusedId.value || id === focusedId.value
+// Start an animated camera move to a new position and target.
+function startTween(pose) {
+  tween = { t: 0, fromPos: camera.position.clone(), toPos: pose.pos, fromTarget: controls.target.clone(), toTarget: pose.target }
+}
 
+// Show one room alone and fly the camera to it.
 function focusRoom(id) {
   const r = roomById(id)
-  if (!r) return
+  if (!r) {
+    return
+  }
   setHammer(false)
   focusedId.value = id
   build()
-  const { w, d } = r.dimension
-  const { target, pos } = viewPose('iso', { x: r.origin.x, z: r.origin.z, w: w * 1.15 + 1, d: d * 1.15 + 1 })
-  tween = { t: 0, fromPos: camera.position.clone(), toPos: pos, fromTarget: controls.target.clone(), toTarget: target }
+  const pose = viewPose('iso', { x: r.origin.x, z: r.origin.z, w: r.dimension.w * 1.15 + 1, d: r.dimension.d * 1.15 + 1 })
+  startTween(pose)
   wake()
 }
 
+// Double-click on a room: select it and show it alone.
 function onDblClick(e) {
-  if (hammer.value || idrag || bd) return
+  if (hammer.value || idrag || bd) {
+    return
+  }
   const id = pickRoom(e)
-  if (!id) return
-  if (id !== props.selectedId) emit('select-room', id)
-  if (id !== focusedId.value) focusRoom(id)
+  if (!id) {
+    return
+  }
+  if (id !== props.selectedId) {
+    emit('select-room', id)
+  }
+  if (id !== focusedId.value) {
+    focusRoom(id)
+  }
 }
 
+// Buttons "3D", "Plan", "Front" (and "Whole flat"): show every room and fly to that view.
 function setView(kind) {
-  if (focusedId.value) { focusedId.value = null; build() }
-  const { target, pos } = viewPose(kind)
-  tween = { t: 0, fromPos: camera.position.clone(), toPos: pos, fromTarget: controls.target.clone(), toTarget: target }
+  if (focusedId.value) {
+    focusedId.value = null
+    build()
+  }
+  startTween(viewPose(kind))
   wake()
 }
 
+// One step of the camera animation (called every frame).
 function stepTween() {
-  if (!tween) return
+  if (!tween) {
+    return
+  }
   tween.t = Math.min(1, tween.t + 0.05)
   const k = 1 - Math.pow(1 - tween.t, 3)
   camera.position.lerpVectors(tween.fromPos, tween.toPos, k)
   controls.target.lerpVectors(tween.fromTarget, tween.toTarget, k)
-  if (tween.t >= 1) tween = null
+  if (tween.t >= 1) {
+    tween = null
+  }
 }
 
+// Make the walls that are between the camera and the rooms see-through.
 function fadeWalls() {
-  if (controls.getPolarAngle() < 0.3) { wallMats.forEach((m, i) => { m.opacity = capMats[i].opacity = 1; m.depthWrite = capMats[i].depthWrite = true }); return }
-  const fp = props.footprint ?? { x: 0, z: 0, w: 10, d: 8 }
-  const dx = camera.position.x - (fp.x + fp.w / 2), dz = camera.position.z - (fp.z + fp.d / 2)
+  // Looking straight down: every wall is solid
+  if (controls.getPolarAngle() < 0.3) {
+    for (let i = 0; i < wallMats.length; i++) {
+      wallMats[i].opacity = 1
+      capMats[i].opacity = 1
+      wallMats[i].depthWrite = true
+      capMats[i].depthWrite = true
+    }
+    return
+  }
+  const fp = getFootprint()
+  const dx = camera.position.x - (fp.x + fp.w / 2)
+  const dz = camera.position.z - (fp.z + fp.d / 2)
   const facing = [dz < 0, dx > 0, dz > 0, dx < 0]
-  wallMats.forEach((m, i) => {
-    m.opacity = capMats[i].opacity = facing[i] ? 0.1 : 1
-    m.depthWrite = capMats[i].depthWrite = !facing[i]
-  })
+  for (let i = 0; i < wallMats.length; i++) {
+    if (facing[i]) {
+      wallMats[i].opacity = 0.1
+      capMats[i].opacity = 0.1
+    } else {
+      wallMats[i].opacity = 1
+      capMats[i].opacity = 1
+    }
+    wallMats[i].depthWrite = !facing[i]
+    capMats[i].depthWrite = !facing[i]
+  }
 }
 
+// ============================================================
+// FINDING WHAT IS UNDER THE MOUSE
+// ============================================================
+
+// Point the ray from the camera through the mouse position.
 function aim(e) {
-  const r = renderer.domElement.getBoundingClientRect()
-  ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera)
+  const box = renderer.domElement.getBoundingClientRect()
+  const x = ((e.clientX - box.left) / box.width) * 2 - 1
+  const y = -((e.clientY - box.top) / box.height) * 2 + 1
+  ray.setFromCamera(new THREE.Vector2(x, y), camera)
 }
-function pickRoom(e, exceptId = null) {
+
+// The id of the room whose floor is under the mouse (or null).
+function pickRoom(e) {
   aim(e)
-  const hit = ray.intersectObjects([...floors.values()].filter((f) => inFocus(f.userData.roomId)), false).find((h) => h.object.userData.roomId !== exceptId)
-  return hit ? hit.object.userData.roomId : null
+  const targets = []
+  for (const id in floors) {
+    if (inFocus(floors[id].userData.roomId)) {
+      targets.push(floors[id])
+    }
+  }
+  const hits = ray.intersectObjects(targets, false)
+  if (hits.length > 0) {
+    return hits[0].object.userData.roomId
+  }
+  return null
 }
-const liftedPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
-function groundPoint(e, y = 0) {
+
+// The point on the flat plane at height y that is under the mouse (or null).
+function groundPoint(e, y) {
+  if (y === undefined) {
+    y = 0
+  }
   aim(e)
   const p = new THREE.Vector3()
   liftedPlane.constant = -y
-  return ray.ray.intersectPlane(liftedPlane, p) ? p : null
+  if (ray.ray.intersectPlane(liftedPlane, p)) {
+    return p
+  }
+  return null
 }
 
-const liveRooms = () => (live ? props.rooms.map((r) => (String(r._id) === live.id ? live.room : r)) : props.rooms)
-const roomById = (id) => liveRooms().find((r) => String(r._id) === id)
+// ============================================================
+// RESIZE HANDLES OF THE SELECTED ROOM
+// ============================================================
 
-function disposeGroup(g) { g.traverse((o) => { o.geometry?.dispose?.(); o.material?.dispose?.() }); g.clear() }
-
-const HANDLE_BLUE = 0x168b59, HANDLE_HOT = 0xf59e0b
-let hoverHandle = null
-
+// Make one handle: a white shape with a coloured rim around it.
 function makeGrip(geometry, rimScale) {
   const grip = new THREE.Group()
   const body = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, toneMapped: false }))
   const rim = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: HANDLE_BLUE, side: THREE.BackSide, depthTest: false, toneMapped: false }))
   rim.scale.setScalar(rimScale)
-  body.renderOrder = 7; rim.renderOrder = 6
+  body.renderOrder = 7
+  rim.renderOrder = 6
   grip.add(rim, body)
   grip.userData.body = body
   return grip
 }
 
+// Draw the 4 edge lines and the 8 handles (4 sides and 4 corners) of the selected room.
 function drawHandles() {
   disposeGroup(handles)
   const r = roomById(props.selectedId)
-  if (!r || props.locked) return
-  const { x, z } = r.origin, { w, d } = r.dimension
+  if (!r || props.locked) {
+    return
+  }
+  const x = r.origin.x
+  const z = r.origin.z
+  const w = r.dimension.w
+  const d = r.dimension.d
 
+  // The 4 edge lines: [centre x, centre z, length along x, length along z]
   const line = 0.05
-  for (const [cx, cz, lw, ld] of [[w / 2, 0, w, line], [w / 2, d, w, line], [0, d / 2, line, d], [w, d / 2, line, d]]) {
+  const edgeSpecs = [[w / 2, 0, w, line], [w / 2, d, w, line], [0, d / 2, line, d], [w, d / 2, line, d]]
+  for (const spec of edgeSpecs) {
+    const cx = spec[0]
+    const cz = spec[1]
+    const lw = spec[2]
+    const ld = spec[3]
+    let extraW = 0
+    if (lw > line) {
+      extraW = line
+    }
+    let extraD = 0
+    if (ld > line) {
+      extraD = line
+    }
     const edge = new THREE.Mesh(
-      new THREE.BoxGeometry(lw + (lw > line ? line : 0), 0.01, ld + (ld > line ? line : 0)),
+      new THREE.BoxGeometry(lw + extraW, 0.01, ld + extraD),
       new THREE.MeshBasicMaterial({ color: HANDLE_BLUE, transparent: true, opacity: 0.9, depthTest: false, toneMapped: false }),
     )
     edge.position.set(x + cx, 0.02, z + cz)
@@ -647,103 +1453,249 @@ function drawHandles() {
     handles.add(edge)
   }
 
-  for (const [sx, sz] of [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-    const corner = sx && sz
+  // The 8 handles: [sx, sz] says which side (-1, 0 or 1 in each direction)
+  const handleSpots = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]]
+  for (const spot of handleSpots) {
+    const sx = spot[0]
+    const sz = spot[1]
     let grip
-    if (corner) {
+    if (sx !== 0 && sz !== 0) {
+      // a corner: a ball
       grip = makeGrip(new THREE.SphereGeometry(0.15, 20, 14), 1.28)
       grip.position.set(x + w / 2 + (sx * w) / 2, 0.15, z + d / 2 + (sz * d) / 2)
     } else {
-      const side = sx ? d : w
+      // a side: a pill shape lying along the edge
+      let side = w
+      if (sx !== 0) {
+        side = d
+      }
       const length = Math.max(0.2, Math.min(0.9, side * 0.35))
       grip = makeGrip(new THREE.CapsuleGeometry(0.07, length, 6, 16), 1.3)
-      if (sx) grip.rotation.x = Math.PI / 2
-      else grip.rotation.z = Math.PI / 2
+      if (sx !== 0) {
+        grip.rotation.x = Math.PI / 2
+      } else {
+        grip.rotation.z = Math.PI / 2
+      }
       grip.position.set(x + w / 2 + (sx * w) / 2, 0.08, z + d / 2 + (sz * d) / 2)
     }
-    grip.userData.handle = { sx, sz }
+    grip.userData.handle = { sx: sx, sz: sz }
     handles.add(grip)
   }
 }
 
-const RESIZE_CURSOR = (h) => (!h.sx ? 'ns-resize' : !h.sz ? 'ew-resize' : h.sx === h.sz ? 'nwse-resize' : 'nesw-resize')
+// The mouse cursor to show over a handle.
+function resizeCursor(h) {
+  if (h.sx === 0) {
+    return 'ns-resize'
+  }
+  if (h.sz === 0) {
+    return 'ew-resize'
+  }
+  if (h.sx === h.sz) {
+    return 'nwse-resize'
+  }
+  return 'nesw-resize'
+}
 
+// Keep the handles the same size on screen, and make the one under the mouse orange.
 function animateHandles() {
-  if (!handles.children.length) return
+  if (!handles.children.length) {
+    return
+  }
   const k = Math.max(0.7, Math.min(2.2, camera.position.distanceTo(controls.target) / 14))
   for (const g of handles.children) {
     const h = g.userData.handle
-    if (!h) continue
-    const hot = !!hoverHandle && h.sx === hoverHandle.sx && h.sz === hoverHandle.sz
-    g.scale.setScalar(k * (hot ? 1.25 : 1))
-    g.userData.body.material.color.setHex(hot ? HANDLE_HOT : 0xffffff)
+    if (!h) {
+      continue
+    }
+    const hot = Boolean(hoverHandle) && h.sx === hoverHandle.sx && h.sz === hoverHandle.sz
+    if (hot) {
+      g.scale.setScalar(k * 1.25)
+      g.userData.body.material.color.setHex(HANDLE_HOT)
+    } else {
+      g.scale.setScalar(k)
+      g.userData.body.material.color.setHex(0xffffff)
+    }
   }
 }
 
+// The handle under the mouse, as { sx, sz } (or null).
+function pickHandle(e) {
+  aim(e)
+  const hits = ray.intersectObjects(handles.children, true)
+  for (const hit of hits) {
+    let o = hit.object
+    while (o && !o.userData.handle) {
+      o = o.parent
+    }
+    if (o) {
+      return o.userData.handle
+    }
+  }
+  return null
+}
+
+// ============================================================
+// MOVING AND RESIZING A ROOM
+// ============================================================
+
+// The x (or z) positions of the edges of all other rooms.
 function edgesOf(axis, exceptId) {
   const out = []
   for (const o of props.rooms) {
-    if (String(o._id) === exceptId) continue
-    const a = axis === 'x' ? o.origin.x : o.origin.z, len = axis === 'x' ? o.dimension.w : o.dimension.d
-    out.push(a, a + len)
+    if (String(o._id) === exceptId) {
+      continue
+    }
+    let start = o.origin.z
+    let length = o.dimension.d
+    if (axis === 'x') {
+      start = o.origin.x
+      length = o.dimension.w
+    }
+    out.push(start)
+    out.push(start + length)
   }
   return out
 }
 
+// Snap one coordinate to the closest edge of another room (or to the 0.1 m grid).
 function snapCoord(v, axis, exceptId) {
   let best = null
-  for (const e of edgesOf(axis, exceptId)) if (Math.abs(e - v) <= MAGNET && (best === null || Math.abs(e - v) < Math.abs(best - v))) best = e
-  return best ?? snap(v)
+  for (const e of edgesOf(axis, exceptId)) {
+    if (Math.abs(e - v) <= MAGNET && (best === null || Math.abs(e - v) < Math.abs(best - v))) {
+      best = e
+    }
+  }
+  if (best === null) {
+    return snap(v)
+  }
+  return best
 }
 
+// How far to shift a room (from a0 to a1 along an axis) so that one of its edges meets another room's edge.
 function snapShift(a0, a1, axis, exceptId) {
   let best = null
-  for (const e of edgesOf(axis, exceptId)) for (const mine of [a0, a1]) {
-    const dlt = e - mine
-    if (Math.abs(dlt) <= MAGNET && (best === null || Math.abs(dlt) < Math.abs(best))) best = dlt
+  for (const e of edgesOf(axis, exceptId)) {
+    for (const mine of [a0, a1]) {
+      const dlt = e - mine
+      if (Math.abs(dlt) <= MAGNET && (best === null || Math.abs(dlt) < Math.abs(best))) {
+        best = dlt
+      }
+    }
   }
-  return best ?? snap(a0) - a0
+  if (best === null) {
+    return snap(a0) - a0
+  }
+  return best
 }
 
+// Is this room shape allowed? (big enough, small enough, inside the area, not overlapping another room)
 function rectOk(rect, type, exceptId) {
   const EPS = 0.02
-  if (rect.w < (MIN[type] ?? 1.2) - EPS || rect.d < (MIN[type] ?? 1.2) - EPS) return false
-  if (rect.w > MAX + EPS || rect.d > MAX + EPS) return false
-  if (rect.x < AREA.min || rect.z < AREA.min || rect.x + rect.w > AREA.max || rect.z + rect.d > AREA.max) return false
-  return !props.rooms.some((o) => String(o._id) !== exceptId &&
-    Math.min(rect.x + rect.w, o.origin.x + o.dimension.w) - Math.max(rect.x, o.origin.x) > EPS &&
-    Math.min(rect.z + rect.d, o.origin.z + o.dimension.d) - Math.max(rect.z, o.origin.z) > EPS)
+  const lo = minSize(type)
+  if (rect.w < lo - EPS || rect.d < lo - EPS) {
+    return false
+  }
+  if (rect.w > MAX + EPS || rect.d > MAX + EPS) {
+    return false
+  }
+  if (rect.x < AREA.min || rect.z < AREA.min || rect.x + rect.w > AREA.max || rect.z + rect.d > AREA.max) {
+    return false
+  }
+  for (const o of props.rooms) {
+    if (String(o._id) === exceptId) {
+      continue
+    }
+    const overlapX = Math.min(rect.x + rect.w, o.origin.x + o.dimension.w) - Math.max(rect.x, o.origin.x)
+    const overlapZ = Math.min(rect.z + rect.d, o.origin.z + o.dimension.d) - Math.max(rect.z, o.origin.z)
+    if (overlapX > EPS && overlapZ > EPS) {
+      return false
+    }
+  }
+  return true
 }
 
-function dragRect(bd, p) {
-  const dx = p.x - bd.start.x, dz = p.z - bd.start.z
-  const o = bd.rect0
-  if (bd.kind === 'move')
-    return { x: snap(o.x + dx + snapShift(o.x + dx, o.x + dx + o.w, 'x', bd.id)), z: snap(o.z + dz + snapShift(o.z + dz, o.z + dz + o.d, 'z', bd.id)), w: o.w, d: o.d }
-  let { x, z, w, d } = o
-  const lo = MIN[bd.type] ?? 1.2
-  if (bd.sx === 1) w = clamp(snapCoord(o.x + o.w + dx, 'x', bd.id) - o.x, lo, MAX)
-  if (bd.sx === -1) { w = clamp(o.x + o.w - snapCoord(o.x + dx, 'x', bd.id), lo, MAX); x = o.x + o.w - w }
-  if (bd.sz === 1) d = clamp(snapCoord(o.z + o.d + dz, 'z', bd.id) - o.z, lo, MAX)
-  if (bd.sz === -1) { d = clamp(o.z + o.d - snapCoord(o.z + dz, 'z', bd.id), lo, MAX); z = o.z + o.d - d }
+// The shape the mouse is asking for while dragging a room ("move") or one of its handles.
+function dragRect(drag, p) {
+  const dx = p.x - drag.start.x
+  const dz = p.z - drag.start.z
+  const o = drag.rect0
+
+  if (drag.kind === 'move') {
+    const x = snap(o.x + dx + snapShift(o.x + dx, o.x + dx + o.w, 'x', drag.id))
+    const z = snap(o.z + dz + snapShift(o.z + dz, o.z + dz + o.d, 'z', drag.id))
+    return { x: x, z: z, w: o.w, d: o.d }
+  }
+
+  let x = o.x
+  let z = o.z
+  let w = o.w
+  let d = o.d
+  const lo = minSize(drag.type)
+  if (drag.sx === 1) {
+    w = clamp(snapCoord(o.x + o.w + dx, 'x', drag.id) - o.x, lo, MAX)
+  }
+  if (drag.sx === -1) {
+    w = clamp(o.x + o.w - snapCoord(o.x + dx, 'x', drag.id), lo, MAX)
+    x = o.x + o.w - w
+  }
+  if (drag.sz === 1) {
+    d = clamp(snapCoord(o.z + o.d + dz, 'z', drag.id) - o.z, lo, MAX)
+  }
+  if (drag.sz === -1) {
+    d = clamp(o.z + o.d - snapCoord(o.z + dz, 'z', drag.id), lo, MAX)
+    z = o.z + o.d - d
+  }
   return { x: snap(x), z: snap(z), w: snap(w), d: snap(d) }
 }
 
-const sameRect = (a, b) => a.x === b.x && a.z === b.z && a.w === b.w && a.d === b.d
-
-function allowedRect(want) {
-  const last = bd.rect
-  const tries = [want, { x: want.x, w: want.w, z: last.z, d: last.d }, { x: last.x, w: last.w, z: want.z, d: want.d }]
-  return tries.find((r) => rectOk(r, bd.type, bd.id)) ?? last
+// Are two room shapes exactly the same?
+function sameRect(a, b) {
+  return a.x === b.x && a.z === b.z && a.w === b.w && a.d === b.d
 }
 
+// The shape to really use: the wanted one if allowed, else the wanted one but keeping the
+// old z and depth, else the wanted one but keeping the old x and width, else the old shape.
+function allowedRect(want) {
+  const last = bd.rect
+  const tries = [
+    want,
+    { x: want.x, w: want.w, z: last.z, d: last.d },
+    { x: last.x, w: last.w, z: want.z, d: want.d },
+  ]
+  for (const attempt of tries) {
+    if (rectOk(attempt, bd.type, bd.id)) {
+      return attempt
+    }
+  }
+  return last
+}
+
+// Show a room with a new shape while dragging (before it is saved).
 function showRect(id, rect) {
-  const base = props.rooms.find((r) => String(r._id) === id), group = groups.get(id), floor = floors.get(id)
-  if (!base || !group || !floor) return
-  const resized = rect.w !== base.dimension.w || rect.d !== base.dimension.d
-  const room = { ...base, origin: { x: rect.x, z: rect.z }, dimension: { ...base.dimension, w: rect.w, d: rect.d } }
-  room.placements = refitPlacements(base, room, !resized)
-  live = { id, room }
+  let original = null
+  for (const r of props.rooms) {
+    if (original === null && String(r._id) === id) {
+      original = r
+    }
+  }
+  const group = roomGroups[id]
+  const floor = floors[id]
+  if (!original || !group || !floor) {
+    return
+  }
+  const resized = rect.w !== original.dimension.w || rect.d !== original.dimension.d
+
+  // A copy of the room with the new position and size
+  const room = {}
+  copyInto(room, original)
+  room.origin = { x: rect.x, z: rect.z }
+  room.dimension = {}
+  copyInto(room.dimension, original.dimension)
+  room.dimension.w = rect.w
+  room.dimension.d = rect.d
+  room.placements = refitPlacements(original, room, !resized)
+  live = { id: id, room: room }
 
   group.position.set(rect.x, 0, rect.z)
   floor.geometry.dispose()
@@ -751,205 +1703,462 @@ function showRect(id, rect) {
   floor.position.set(rect.w / 2, -0.025, rect.d / 2)
   fitFloor(floor, room.type, rect.w, rect.d)
   for (const p of room.placements) {
-    const model = itemModels.get(String(p._id))?.model
-    if (model) model.position.set(p.x, modelY(model.userData.spec, room.dimension.h), p.z)
+    const entry = itemModels[String(p._id)]
+    if (entry) {
+      entry.model.position.set(p.x, modelY(entry.model.userData.spec, room.dimension.h), p.z)
+    }
   }
-  for (const r of liveRooms()) buildWalls(r)
+  for (const r of liveRooms()) {
+    buildWalls(r)
+  }
   setTag(id, room)
-  const parts = overlayParts.get(id)
-  if (parts) parts.sun.mesh.visible = parts.heat.mesh.visible = parts.arrows.visible = false
+  const parts = overlayParts[id]
+  if (parts) {
+    parts.sun.mesh.visible = false
+    parts.heat.mesh.visible = false
+    parts.arrows.visible = false
+  }
   drawHandles()
 }
 
-function pickHandle(e) {
-  aim(e)
-  for (const hit of ray.intersectObjects(handles.children, true)) {
-    let o = hit.object
-    while (o && !o.userData.handle) o = o.parent
-    if (o) return o.userData.handle
+// ============================================================
+// PICKING AND MOVING ITEMS
+// ============================================================
+
+// Find which entry of the list holds this model (or null).
+// An entry looks like { id, roomId, model }.
+function entryOfModel(entries, model) {
+  for (const entry of entries) {
+    if (entry.model === model) {
+      return entry
+    }
   }
   return null
 }
 
-const modelY = (spec, h) => (spec.mode === 'ceiling' ? h - spec.h : spec.y)
+// Which item does a ray hit belong to? Climb up from the part that was hit until we reach a whole model.
+function ownerOf(hit, entries) {
+  let obj = hit.object
+  while (obj.parent && !entryOfModel(entries, obj)) {
+    obj = obj.parent
+  }
+  const found = entryOfModel(entries, obj)
+  if (found) {
+    return { id: found.id, roomId: found.roomId }
+  }
+  return null
+}
 
-const itemsOf = itemsOfRoom
+// The item under the mouse, as { id, roomId } (or null).
+// A hit that is nearly as close but belongs to the selected room is preferred.
 function pickItem(e) {
   aim(e)
-  const entries = [...itemModels.entries()].filter(([, v]) => inFocus(v.roomId))
-  const hits = ray.intersectObjects(entries.map(([, v]) => v.model), true)
-  if (!hits.length) return null
-  const ownerOf = (hit) => {
-    let obj = hit.object
-    while (obj.parent && !entries.some(([, v]) => v.model === obj)) obj = obj.parent
-    const found = entries.find(([, v]) => v.model === obj)
-    return found ? { id: found[0], roomId: found[1].roomId } : null
+  const entries = []
+  const models = []
+  for (const id in itemModels) {
+    if (inFocus(itemModels[id].roomId)) {
+      entries.push({ id: id, roomId: itemModels[id].roomId, model: itemModels[id].model })
+      models.push(itemModels[id].model)
+    }
+  }
+  const hits = ray.intersectObjects(models, true)
+  if (hits.length === 0) {
+    return null
   }
   const first = hits[0]
-  const mine = props.selectedId && hits.find((h) => h.distance - first.distance < 0.35 && ownerOf(h)?.roomId === props.selectedId)
-  return ownerOf(mine || first)
+  let chosen = first
+  if (props.selectedId) {
+    for (const hit of hits) {
+      if (hit.distance - first.distance < 0.35) {
+        const owner = ownerOf(hit, entries)
+        if (owner && owner.roomId === props.selectedId) {
+          chosen = hit
+          break
+        }
+      }
+    }
+  }
+  return ownerOf(chosen, entries)
 }
-const poseModel = (it, h) => {
-  const m = itemModels.get(it.id)?.model
-  if (!m) return
-  m.position.set(it.x, modelY(it.spec, h), it.z)
-  m.rotation.y = it.rotY
-}
-const poseOf = (it) => ({ x: it.x, z: it.z, rotY: it.rotY, wall: it.wall, t: it.t, cu: it.cu ?? 0 })
 
-let bd = null
-let idrag = null
-
-function onMove(e) {
-  if (hammer.value) return hammerHover(e)
-  if (idrag) return dragItem(e)
-  if (bd) {
-    const p = groundPoint(e)
-    if (!p) return
-    bd.moved = bd.moved || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4
-    if (!bd.moved) return
-    bd.exact = dragRect(bd, p)
-    const next = allowedRect(bd.exact)
-    if (rectOk(bd.exact, bd.type, bd.id)) highlight()
-    else setTint(bd.id, 0xdc2626, 0.5)
-    if (!sameRect(next, bd.rect)) { bd.rect = next; showRect(bd.id, next) }
+// Put the 3D model of an item where the item is now.
+function poseModel(it, h) {
+  const entry = itemModels[it.id]
+  if (!entry) {
     return
   }
-  const id = pickRoom(e), item = pickItem(e), grip = item || props.locked ? null : pickHandle(e)
-  hoverHandle = grip
-  renderer.domElement.style.cursor = item ? 'grab' : grip ? RESIZE_CURSOR(grip) : id && id === props.selectedId && !props.locked ? 'move' : ''
-  if (id !== hoverId) { hoverId = id; highlight() }
+  entry.model.position.set(it.x, modelY(it.spec, h), it.z)
+  entry.model.rotation.y = it.rotY
 }
 
-const SLIDE_STEP = 0.1, SLIDE_REACH = 1.2
+// The position data of an item that is sent to the parent.
+function poseOf(it) {
+  let cu = it.cu
+  if (isMissing(cu)) {
+    cu = 0
+  }
+  return { x: it.x, z: it.z, rotY: it.rotY, wall: it.wall, t: it.t, cu: cu }
+}
 
-function openingPos(r, d, local, others) {
-  const room = r.dimension, spec = d.item.spec
+// Like poseOf, with the item id in front.
+function poseWithId(it) {
+  const pose = poseOf(it)
+  return { id: it.id, x: pose.x, z: pose.z, rotY: pose.rotY, wall: pose.wall, t: pose.t, cu: pose.cu }
+}
+
+// ============================================================
+// SLIDING DOORS AND WINDOWS ALONG A WALL
+// ============================================================
+
+// Is there another door/window/opening on this wall too close to position t?
+function openingTooClose(others, wall, t, spec) {
+  for (const o of others) {
+    if (o.spec.mode === 'opening' && o.wall === wall && Math.abs(o.t - t) < (o.spec.w + spec.w) / 2 + 0.1) {
+      return true
+    }
+  }
+  return false
+}
+
+// Find a free spot for a door/window close to where the mouse is.
+// Gives { pos } when found, or { pos: null, why, key } with the reason when nothing fits.
+function openingPos(r, drag, local, others) {
+  const room = r.dimension
+  const spec = drag.item.spec
   const wall = nearestWall(room, local).i
-  const along = [local[0], local[1], room.w - local[0], room.d - local[1]][wall]
+  const alongList = [local[0], local[1], room.w - local[0], room.d - local[1]]
+  const along = alongList[wall]
   const end = Math.max(0.6, spec.w / 2 + 0.15)
-  let lo = end, hi = wallLength(room, wall) - end
-  const linked = !!d.shared && wall === d.wall0
+  let lo = end
+  let hi = wallLength(room, wall) - end
+
+  // A door between two rooms may only slide along the wall the rooms share
+  const linked = Boolean(drag.shared) && wall === drag.wall0
   if (linked) {
     const margin = spec.w / 2 + 0.1
-    lo = d.shared.t0 + margin; hi = d.shared.t1 - margin
-    if (hi < lo) return { pos: null, why: 'The wall these rooms share is too short for this door to slide.' }
+    lo = drag.shared.t0 + margin
+    hi = drag.shared.t1 - margin
+    if (hi < lo) {
+      return { pos: null, why: 'The wall these rooms share is too short for this door to slide.' }
+    }
   }
+
+  // All the spots to try, the closest to the wanted spot first
   const want = clamp(snap(along), lo, hi)
   const ts = []
-  for (let t = lo; t <= hi + 1e-9; t += SLIDE_STEP) ts.push(Math.round(t * 10) / 10)
+  for (let t = lo; t <= hi + 1e-9; t += SLIDE_STEP) {
+    ts.push(Math.round(t * 10) / 10)
+  }
   ts.push(want)
-  ts.sort((a, b) => Math.abs(a - want) - Math.abs(b - want))
+  ts.sort(function (a, b) {
+    return Math.abs(a - want) - Math.abs(b - want)
+  })
 
   let blocker = null
   for (const t of ts) {
-    if (Math.abs(t - want) > SLIDE_REACH) break
-    const pos = onWall(room, spec, wall, t)
-    if (!pos || isBlocked({ spec, ...pos }, others)) continue
-    if (others.some((o) => o.spec.mode === 'opening' && o.wall === wall && Math.abs(o.t - t) < (o.spec.w + spec.w) / 2 + 0.1)) continue
-    if (needsOutsideWall(spec)) {
-      const facing = roomBehindOpening(liveRooms(), r, spec, pos)
-      if (facing) { blocker ||= { name: facing.name, outsideOnly: true }; continue }
-    } else if (spec.kind === 'door') {
-      const behind = doorBlockedBeyond(liveRooms(), r, spec, pos, { ignoreId: d.partner ? d.partner.placement._id : null, cache: d.beyond })
-      if (behind) { blocker ||= behind; continue }
+    if (Math.abs(t - want) > SLIDE_REACH) {
+      break
     }
-    return { pos }
+    const pos = onWall(room, spec, wall, t)
+    if (!pos || isBlocked(candidateOf(spec, pos), others)) {
+      continue
+    }
+    if (openingTooClose(others, wall, t, spec)) {
+      continue
+    }
+    if (needsOutsideWall(spec)) {
+      // windows and similar must face the outside
+      const facing = roomBehindOpening(liveRooms(), r, spec, pos)
+      if (facing) {
+        if (!blocker) {
+          blocker = { name: facing.name, outsideOnly: true }
+        }
+        continue
+      }
+    } else if (spec.kind === 'door') {
+      // a door must not open onto something in the room behind it
+      let ignoreId = null
+      if (drag.partner) {
+        ignoreId = drag.partner.placement._id
+      }
+      const behind = doorBlockedBeyond(liveRooms(), r, spec, pos, { ignoreId: ignoreId, cache: drag.beyond })
+      if (behind) {
+        if (!blocker) {
+          blocker = behind
+        }
+        continue
+      }
+    }
+    return { pos: pos }
   }
-  return { pos: null, why: !blocker ? 'There is no clear space for it there.' : blocker.outsideOnly ? outsideOnlyMessage(spec, blocker.name) : blocker.straddle ? 'A door needs a clear stretch of wall, and that part sits between two rooms.' : `Something in the ${blocker.name} is in the way of a door there.`, key: `${wall}:${blocker?.name ?? ''}` }
+
+  // Nothing fits: say why
+  let why
+  if (!blocker) {
+    why = 'There is no clear space for it there.'
+  } else if (blocker.outsideOnly) {
+    why = outsideOnlyMessage(spec, blocker.name)
+  } else if (blocker.straddle) {
+    why = 'A door needs a clear stretch of wall, and that part sits between two rooms.'
+  } else {
+    why = `Something in the ${blocker.name} is in the way of a door there.`
+  }
+  let blockerName = ''
+  if (blocker && !isMissing(blocker.name)) {
+    blockerName = blocker.name
+  }
+  return { pos: null, why: why, key: `${wall}:${blockerName}` }
 }
 
-function poseDoorPartner(d) {
-  const { room, placement, spec } = d.partner
-  const pos = onWall(room.dimension, spec, placement.wall, sameSpotOn(roomById(d.roomId), d.item.wall, d.item.t, room, placement.wall))
-  const model = itemModels.get(String(placement._id))?.model
-  if (pos && model) { model.position.set(pos.x, spec.y, pos.z); model.rotation.y = pos.rotY }
+// A door between two rooms is really two doors (one in each room). Move the partner door too.
+function poseDoorPartner(drag) {
+  const room = drag.partner.room
+  const placement = drag.partner.placement
+  const spec = drag.partner.spec
+  const otherT = sameSpotOn(roomById(drag.roomId), drag.item.wall, drag.item.t, room, placement.wall)
+  const pos = onWall(room.dimension, spec, placement.wall, otherT)
+  const entry = itemModels[String(placement._id)]
+  if (pos && entry) {
+    entry.model.position.set(pos.x, spec.y, pos.z)
+    entry.model.rotation.y = pos.rotY
+  }
   return pos
 }
 
-function rebuildDragWalls(d) {
-  buildWalls(roomById(d.roomId), { [d.item.id]: d.item })
-  if (d.partner) buildWalls(d.partner.room, { [String(d.partner.placement._id)]: d.partnerPos })
+// Rebuild the walls around a door/window that is being dragged.
+function rebuildDragWalls(drag) {
+  const moved = {}
+  moved[drag.item.id] = drag.item
+  buildWalls(roomById(drag.roomId), moved)
+  if (drag.partner) {
+    const partnerMoved = {}
+    partnerMoved[String(drag.partner.placement._id)] = drag.partnerPos
+    buildWalls(drag.partner.room, partnerMoved)
+  }
 }
 
+// If the item is a door that joins two rooms, find the shared wall and the partner door.
+// Gives { shared, partner } (both null when the item is not such a door).
 function linkedDoorInfo(r, item) {
-  if (item.spec.kind !== 'door' || !item.connectsTo || item.connectsTo === 'outside') return {}
-  const other = props.rooms.find((o) => o.name === item.connectsTo)
-  const shared = other && sharedRange(r, other, item.wall)
-  const placement = other && (other.placements || []).find((q) => q.connectsTo === r.name && q.wall === (item.wall + 2) % 4)
-  return { shared, partner: placement && { room: other, placement, spec: item.spec } }
+  const info = { shared: null, partner: null }
+  if (item.spec.kind !== 'door' || !item.connectsTo || item.connectsTo === 'outside') {
+    return info
+  }
+  const other = roomByName(props.rooms, item.connectsTo)
+  if (!other) {
+    return info
+  }
+  info.shared = sharedRange(r, other, item.wall)
+  const otherPlacements = other.placements || []
+  for (const q of otherPlacements) {
+    if (info.partner === null && q.connectsTo === r.name && q.wall === (item.wall + 2) % 4) {
+      info.partner = { room: other, placement: q, spec: item.spec }
+    }
+  }
+  return info
 }
 
+// Dragging an item with the mouse.
 function dragItem(e) {
-  const d = idrag, r = roomById(d.roomId)
-  if (!r) return
+  const d = idrag
+  const r = roomById(d.roomId)
+  if (!r) {
+    return
+  }
   const p = groundPoint(e, d.planeY)
-  if (!p) return
-  d.moved = d.moved || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4
-  if (!d.moved) return
-  const room = r.dimension, others = d.all.filter((o) => o !== d.item)
+  if (!p) {
+    return
+  }
+  if (!d.moved) {
+    d.moved = Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4
+  }
+  if (!d.moved) {
+    return
+  }
+  const room = r.dimension
+  const others = othersOf(d.all, d.item)
   const local = [p.x - r.origin.x + d.dx, p.z - r.origin.z + d.dz]
   let pos
   if (d.item.spec.mode === 'opening') {
     const found = openingPos(r, d, local, others)
     pos = found.pos
     if (!pos) {
-      if (d.warnedFor !== found.key) { d.warnedFor = found.key; emit('door-blocked', found.why) }
+      // tell the parent why, but only once for each reason
+      if (d.warnedFor !== found.key) {
+        d.warnedFor = found.key
+        emit('door-blocked', found.why)
+      }
       return
     }
     d.warnedFor = null
   } else {
     pos = placeAt(room, d.item.spec, local, d.item, others)
-    if (!pos || isBlocked({ spec: d.item.spec, ...pos }, others)) return
+    if (!pos || isBlocked(candidateOf(d.item.spec, pos), others)) {
+      return
+    }
   }
   applyDragPose(d, room, pos)
 }
 
+// Put an item (and everything that depends on it) at its new position while dragging or nudging.
 function applyDragPose(d, room, pos) {
-  Object.assign(d.item, pos)
-  dirtyRooms.add(d.roomId)
-  if (d.partner) dirtyRooms.add(String(d.partner.room._id))
+  copyInto(d.item, pos)
+  dirtyRooms[d.roomId] = true
+  if (d.partner) {
+    dirtyRooms[String(d.partner.room._id)] = true
+  }
   poseModel(d.item, room.h)
   if (d.partner) {
     const stays = d.item.wall === d.wall0
-    const partnerModel = itemModels.get(String(d.partner.placement._id))?.model
-    if (partnerModel) partnerModel.visible = stays
-    d.partnerPos = stays ? poseDoorPartner(d) : { wall: -1, t: 0 }
+    const partnerEntry = itemModels[String(d.partner.placement._id)]
+    if (partnerEntry) {
+      partnerEntry.model.visible = stays
+    }
+    if (stays) {
+      d.partnerPos = poseDoorPartner(d)
+    } else {
+      d.partnerPos = { wall: -1, t: 0 }
+    }
   }
-  if (d.item.spec.mode === 'opening') rebuildDragWalls(d)
+  if (d.item.spec.mode === 'opening') {
+    rebuildDragWalls(d)
+  }
   overlayDirtyRoom = d.roomId
-  if (d.item.spec.kind === 'counter')
-    for (const o of d.all) if (o.on === d.item.id) { Object.assign(o, counterPose(d.item, o.spec, o.cu)); poseModel(o, room.h) }
+  // Things standing on a counter move together with the counter
+  if (d.item.spec.kind === 'counter') {
+    for (const o of d.all) {
+      if (o.on === d.item.id) {
+        copyInto(o, counterPose(d.item, o.spec, o.cu))
+        poseModel(o, room.h)
+      }
+    }
+  }
 }
 
+// The drag is over: send the new position(s) to the parent so that they are saved.
 function commitDrag(d) {
   if (d.item.spec.mode === 'opening') {
     emit('move-opening', { roomId: d.roomId, id: d.item.id, wall: d.item.wall, t: d.item.t })
     return
   }
-  const updates = d.all.filter((o) => o === d.item || o.on === d.item.id).map((o) => ({ id: o.id, ...poseOf(o) }))
-  emit('move-items', { roomId: d.roomId, updates })
+  const updates = []
+  for (const o of d.all) {
+    if (o === d.item || o.on === d.item.id) {
+      updates.push(poseWithId(o))
+    }
+  }
+  emit('move-items', { roomId: d.roomId, updates: updates })
 }
 
+// ============================================================
+// MOUSE EVENTS
+// ============================================================
+
+// Mouse moves over the 3D view.
+function onMove(e) {
+  if (hammer.value) {
+    hammerHover(e)
+    return
+  }
+  if (idrag) {
+    dragItem(e)
+    return
+  }
+  if (bd) {
+    const p = groundPoint(e)
+    if (!p) {
+      return
+    }
+    if (!bd.moved) {
+      bd.moved = Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4
+    }
+    if (!bd.moved) {
+      return
+    }
+    bd.exact = dragRect(bd, p)
+    const next = allowedRect(bd.exact)
+    if (rectOk(bd.exact, bd.type, bd.id)) {
+      highlight()
+    } else {
+      setTint(bd.id, 0xdc2626, 0.5)
+    }
+    if (!sameRect(next, bd.rect)) {
+      bd.rect = next
+      showRect(bd.id, next)
+    }
+    return
+  }
+
+  // Nothing is being dragged: just show the right cursor and highlight
+  const id = pickRoom(e)
+  const item = pickItem(e)
+  let grip = null
+  if (!item && !props.locked) {
+    grip = pickHandle(e)
+  }
+  hoverHandle = grip
+  let cursor = ''
+  if (item) {
+    cursor = 'grab'
+  } else if (grip) {
+    cursor = resizeCursor(grip)
+  } else if (id && id === props.selectedId && !props.locked) {
+    cursor = 'move'
+  }
+  renderer.domElement.style.cursor = cursor
+  if (id !== hoverId) {
+    hoverId = id
+    highlight()
+  }
+}
+
+// Mouse button pressed on the 3D view.
 function onDown(e) {
   downAt = [e.clientX, e.clientY]
-  if (e.button !== 0) return
-  if (hammer.value) return
+  if (e.button !== 0) {
+    return
+  }
+  if (hammer.value) {
+    return
+  }
   flushNudge()
   const el = renderer.domElement
 
+  // Pressed on an item: start dragging it
   const hit = pickItem(e)
   if (hit) {
-    const r = roomById(hit.roomId), all = itemsOf(r), item = all.find((i) => i.id === hit.id)
-    const entry = itemModels.get(hit.id), planeY = entry.model.position.y + item.spec.h / 2
+    const r = roomById(hit.roomId)
+    const all = itemsOfRoom(r)
+    const item = itemById(all, hit.id)
+    const entry = itemModels[hit.id]
+    const planeY = entry.model.position.y + item.spec.h / 2
     const start = groundPoint(e, planeY)
-    if (hit.roomId !== props.selectedId) emit('select-room', hit.roomId)
+    if (hit.roomId !== props.selectedId) {
+      emit('select-room', hit.roomId)
+    }
     emit('select-item', hit.id)
     entry.model.visible = true
-    if (!start || !item) return
-    idrag = { beyond: new Map(), roomId: hit.roomId, item, all, planeY, wall0: item.wall, dx: item.x - (start.x - r.origin.x), dz: item.z - (start.z - r.origin.z), moved: false, ...linkedDoorInfo(r, item) }
+    if (!start || !item) {
+      return
+    }
+    idrag = {
+      beyond: new Map(), // doorBlockedBeyond() in placement.js keeps its results in a Map
+      roomId: hit.roomId,
+      item: item,
+      all: all,
+      planeY: planeY,
+      wall0: item.wall,
+      dx: item.x - (start.x - r.origin.x),
+      dz: item.z - (start.z - r.origin.z),
+      moved: false,
+      shared: null,
+      partner: null,
+    }
+    const info = linkedDoorInfo(r, item)
+    idrag.shared = info.shared
+    idrag.partner = info.partner
     controls.enabled = false
-    el.setPointerCapture?.(e.pointerId)
+    el.setPointerCapture(e.pointerId)
     el.style.cursor = 'grabbing'
     return
   }
@@ -957,203 +2166,455 @@ function onDown(e) {
   if (props.locked) {
     return
   }
-  const h = pickHandle(e), start = groundPoint(e)
-  const id = h ? props.selectedId : pickRoom(e)
-  if (!id || (!h && id !== props.selectedId)) return
-  const r = roomById(id)
-  if (!start || !r) return
-  hoverHandle = h
-  const rect0 = { x: r.origin.x, z: r.origin.z, w: r.dimension.w, d: r.dimension.d }
-  bd = { kind: h ? 'handle' : 'move', id, type: r.type, sx: h?.sx ?? 0, sz: h?.sz ?? 0, start, moved: false, exact: rect0, rect: { ...rect0 }, rect0 }
-  controls.enabled = false
-  el.setPointerCapture?.(e.pointerId)
-}
 
-function onUp(e) {
-  if (hammer.value) {
-    if (e.button !== 0 || !downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4) return
-    const hit = pickWall(e)
-    if (hit && props.locked) return emit('locked', 'Room sizes are locked, so walls can\'t be knocked out. Turn off "Lock room sizes" in the toolbar to use the hammer.')
-    if (hit) emit('hammer-wall', { roomId: hit.roomId, otherId: hit.otherId, open: !hit.open })
+  // Pressed on a handle, or on the selected room's floor: start resizing / moving the room
+  const h = pickHandle(e)
+  const start = groundPoint(e)
+  let id
+  if (h) {
+    id = props.selectedId
+  } else {
+    id = pickRoom(e)
+  }
+  if (!id || (!h && id !== props.selectedId)) {
     return
   }
+  const r = roomById(id)
+  if (!start || !r) {
+    return
+  }
+  hoverHandle = h
+  const rect0 = { x: r.origin.x, z: r.origin.z, w: r.dimension.w, d: r.dimension.d }
+  let kind = 'move'
+  let sx = 0
+  let sz = 0
+  if (h) {
+    kind = 'handle'
+    sx = h.sx
+    sz = h.sz
+  }
+  bd = {
+    kind: kind,
+    id: id,
+    type: r.type,
+    sx: sx,
+    sz: sz,
+    start: start,
+    moved: false,
+    exact: rect0,
+    rect: { x: rect0.x, z: rect0.z, w: rect0.w, d: rect0.d },
+    rect0: rect0,
+  }
+  controls.enabled = false
+  el.setPointerCapture(e.pointerId)
+}
+
+// Mouse button released on the 3D view.
+function onUp(e) {
+  // Hammer mode: a click on a wall knocks it out (or builds it back)
+  if (hammer.value) {
+    if (e.button !== 0 || !downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4) {
+      return
+    }
+    const hit = pickWall(e)
+    if (hit && props.locked) {
+      emit('locked', 'Room sizes are locked, so walls can\'t be knocked out. Turn off "Lock room sizes" in the toolbar to use the hammer.')
+      return
+    }
+    if (hit) {
+      emit('hammer-wall', { roomId: hit.roomId, otherId: hit.otherId, open: !hit.open })
+    }
+    return
+  }
+
+  // An item drag ends: save the new position
   if (idrag) {
     const d = idrag
     idrag = null
     controls.enabled = true
     renderer.domElement.style.cursor = ''
-    if (d.moved) commitDrag(d)
+    if (d.moved) {
+      commitDrag(d)
+    }
     return
   }
+
+  // A room drag ends: save the new shape
   if (bd) {
     const d = bd
     bd = null
     hoverHandle = null
     controls.enabled = true
-    if (d.moved && !sameRect(d.rect, d.rect0)) { emit('edit-rect', { roomId: d.id, rect: d.rect }); return }
-    if (d.moved) { build(); return }
+    if (d.moved && !sameRect(d.rect, d.rect0)) {
+      emit('edit-rect', { roomId: d.id, rect: d.rect })
+      return
+    }
+    if (d.moved) {
+      build()
+      return
+    }
   }
-  if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4) return
+
+  // A plain click (the mouse hardly moved): select the room under the mouse
+  if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4) {
+    return
+  }
   const id = pickRoom(e)
   emit('select-item', null)
-  if (id) emit('select-room', id)
+  if (id) {
+    emit('select-room', id)
+  }
 }
 
-const ARROWS = { ArrowUp: [1, 0], ArrowDown: [-1, 0], ArrowRight: [0, 1], ArrowLeft: [0, -1] }
-const NUDGE = 0.1, NUDGE_BIG = 0.5, NUDGE_SAVE_MS = 350
-let nudge = null, nudgeTimer = 0
+// The mouse leaves the 3D view.
+function onPointerLeave() {
+  if (!bd) {
+    hoverHandle = null
+  }
+}
 
+// The browser cancels a mouse/touch drag: drop it and draw everything again.
+function onPointerCancel() {
+  bd = null
+  idrag = null
+  controls.enabled = true
+  emit('drag-preview', null)
+  build()
+}
+
+// ============================================================
+// MOVING THE SELECTED ITEM WITH THE ARROW KEYS
+// ============================================================
+
+// Which way is "up" and "right" on the screen, as a direction on the floor?
 function screenAxes() {
-  const fx = controls.target.x - camera.position.x, fz = controls.target.z - camera.position.z
-  const fwd = Math.abs(fx) > Math.abs(fz) ? [Math.sign(fx), 0] : [0, Math.sign(fz) || -1]
-  return { fwd, right: [-fwd[1], fwd[0]] }
+  const fx = controls.target.x - camera.position.x
+  const fz = controls.target.z - camera.position.z
+  let fwd
+  if (Math.abs(fx) > Math.abs(fz)) {
+    fwd = [Math.sign(fx), 0]
+  } else {
+    fwd = [0, Math.sign(fz) || -1]
+  }
+  return { fwd: fwd, right: [-fwd[1], fwd[0]] }
 }
 
+// Save the nudge that is waiting (if any) right now.
 function flushNudge() {
   clearTimeout(nudgeTimer)
   nudgeTimer = 0
   const d = nudge
   nudge = null
-  if (d) commitDrag(d)
+  if (d) {
+    commitDrag(d)
+  }
 }
 
+// Move the selected item one step with an arrow key.
 function nudgeSelected(e) {
-  if (idrag || bd) return
-  const entry = itemModels.get(props.selectedItemId), r = entry && roomById(entry.roomId)
-  if (!r) return
+  if (idrag || bd) {
+    return
+  }
+  const entry = itemModels[props.selectedItemId]
+  let r = null
+  if (entry) {
+    r = roomById(entry.roomId)
+  }
+  if (!r) {
+    return
+  }
   e.preventDefault()
+
+  // Start a new nudge when it is a different item than before
   if (!nudge || nudge.item.id !== props.selectedItemId) {
     flushNudge()
-    const all = itemsOf(r), item = all.find((i) => i.id === props.selectedItemId)
-    if (!item) return
-    nudge = { beyond: new Map(), roomId: entry.roomId, item, all, wall0: item.wall, ...linkedDoorInfo(r, item) }
+    const all = itemsOfRoom(r)
+    const item = itemById(all, props.selectedItemId)
+    if (!item) {
+      return
+    }
+    nudge = { beyond: new Map(), roomId: entry.roomId, item: item, all: all, wall0: item.wall, shared: null, partner: null }
+    const info = linkedDoorInfo(r, item)
+    nudge.shared = info.shared
+    nudge.partner = info.partner
   }
-  const d = nudge, step = e.shiftKey ? NUDGE_BIG : NUDGE, [kf, kr] = ARROWS[e.key]
-  const { fwd, right } = screenAxes()
-  const vx = fwd[0] * kf + right[0] * kr, vz = fwd[1] * kf + right[1] * kr
-  const room = r.dimension, others = d.all.filter((o) => o !== d.item)
+  const d = nudge
+  let step = NUDGE
+  if (e.shiftKey) {
+    step = NUDGE_BIG
+  }
+  const keys = ARROWS[e.key]
+  const kf = keys[0]
+  const kr = keys[1]
+  const axes = screenAxes()
+  const vx = axes.fwd[0] * kf + axes.right[0] * kr
+  const vz = axes.fwd[1] * kf + axes.right[1] * kr
+  const room = r.dimension
+  const others = othersOf(d.all, d.item)
   let pos
 
   if (d.item.spec.mode === 'opening') {
-    const wall = d.item.wall, [x0, z0] = wallPoint(room, wall, 0), [x1, z1] = wallPoint(room, wall, 1)
-    const along = (x1 - x0) * vx + (z1 - z0) * vz
-    if (Math.abs(along) < 0.5) return
+    // a door/window slides along its wall
+    const wall = d.item.wall
+    const wallStart = wallPoint(room, wall, 0)
+    const wallEnd = wallPoint(room, wall, 1)
+    const along = (wallEnd[0] - wallStart[0]) * vx + (wallEnd[1] - wallStart[1]) * vz
+    if (Math.abs(along) < 0.5) {
+      return
+    }
     const dir = Math.sign(along)
     const found = openingPos(r, d, wallPoint(room, wall, d.item.t + dir * step), others)
-    const moved = found.pos ? (found.pos.t - d.item.t) * dir : 0
-    if (!found.pos || (found.pos.wall ?? wall) !== wall || moved <= 1e-6 || moved > step + 0.05) {
-      emit('door-blocked', found.why ?? 'Something is in the way of that move.')
+    let moved = 0
+    if (found.pos) {
+      moved = (found.pos.t - d.item.t) * dir
+    }
+    let cannotMove = false
+    if (!found.pos) {
+      cannotMove = true
+    } else {
+      let posWall = found.pos.wall
+      if (isMissing(posWall)) {
+        posWall = wall
+      }
+      if (posWall !== wall || moved <= 1e-6 || moved > step + 0.05) {
+        cannotMove = true
+      }
+    }
+    if (cannotMove) {
+      let message = found.why
+      if (isMissing(message)) {
+        message = 'Something is in the way of that move.'
+      }
+      emit('door-blocked', message)
       return
     }
     pos = found.pos
   } else {
     pos = placeAt(room, d.item.spec, [d.item.x + vx * step, d.item.z + vz * step], d.item, others)
-    if (!pos || isBlocked({ spec: d.item.spec, ...pos }, others)) return emit('move-blocked')
-    if (!Object.keys(pos).some((k) => typeof pos[k] === 'number' && Math.abs(pos[k] - (d.item[k] ?? 0)) > 1e-6)) return
+    if (!pos || isBlocked(candidateOf(d.item.spec, pos), others)) {
+      emit('move-blocked')
+      return
+    }
+    // Did anything really change?
+    let changed = false
+    for (const key in pos) {
+      let before = d.item[key]
+      if (isMissing(before)) {
+        before = 0
+      }
+      if (typeof pos[key] === 'number' && Math.abs(pos[key] - before) > 1e-6) {
+        changed = true
+      }
+    }
+    if (!changed) {
+      return
+    }
   }
   applyDragPose(d, r.dimension, pos)
   wake()
+  // Save a moment after the last key press
   clearTimeout(nudgeTimer)
   nudgeTimer = setTimeout(flushNudge, NUDGE_SAVE_MS)
 }
 
-const hammer = computed(() => props.hammer)
-const MIN_OPEN_WALL = 0.6
-const HAMMER_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#19352a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m14 13-8.4 8.4a2 2 0 0 1-2.8-2.8L11 10.8"/><path d="m16 16 6-6"/><path d="m8 8 6-6"/><path d="m9 7 8 8"/><path d="m21 11-8-8"/></svg>')}") 4 28, pointer`
-const wallGlow = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0xdc2626, transparent: true, opacity: 0.5, depthTest: false }))
-wallGlow.visible = false
-wallGlow.renderOrder = 9
-const gaps = new THREE.Group()
+// ============================================================
+// THE HAMMER (knock out a wall between two rooms)
+// ============================================================
 
-function spanBox(mesh, r, wall, t0, t1, thick) {
-  const { w, d, h } = r.dimension, len = t1 - t0
-  const [px, pz] = wallPoint({ w, d }, wall, (t0 + t1) / 2), n = NORMAL[wall]
-  mesh.scale.set(wall % 2 ? thick : len, h, wall % 2 ? len : thick)
-  mesh.position.set(r.origin.x + px - (n[0] * WALL_THICKNESS) / 2, h / 2, r.origin.z + pz - (n[1] * WALL_THICKNESS) / 2)
-}
-
-function drawGaps() {
-  disposeGroup(gaps)
-  if (!hammer.value) return
-  for (const r of liveRooms()) for (const o of r.openWalls || []) {
-    const other = liveRooms().find((x) => x.name === o.to)
-    if (!other || r.name > other.name) continue
-    const m = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0x2fbf71, transparent: true, opacity: 0.22, depthWrite: false }))
-    spanBox(m, r, o.wall, o.t0, o.t1, WALL_THICKNESS * 1.4)
-    m.userData.gap = { roomId: String(r._id), otherId: String(other._id), wall: o.wall, t0: o.t0, t1: o.t1, open: true }
-    gaps.add(m)
+// Turn the hammer on or off by telling the parent (it owns the "hammer" prop).
+function setHammer(on) {
+  if (hammer.value !== on) {
+    emit('update:hammer', on)
   }
 }
 
+// Stretch a box (mesh) so that it covers a stretch of wall from t0 to t1.
+function spanBox(mesh, r, wall, t0, t1, thick) {
+  const w = r.dimension.w
+  const d = r.dimension.d
+  const h = r.dimension.h
+  const len = t1 - t0
+  const point = wallPoint({ w: w, d: d }, wall, (t0 + t1) / 2)
+  const n = NORMAL[wall]
+  if (wall % 2) {
+    mesh.scale.set(thick, h, len)
+  } else {
+    mesh.scale.set(len, h, thick)
+  }
+  mesh.position.set(r.origin.x + point[0] - (n[0] * WALL_THICKNESS) / 2, h / 2, r.origin.z + point[1] - (n[1] * WALL_THICKNESS) / 2)
+}
+
+// In hammer mode, draw a green box in every gap that was knocked out (click it to build the wall back).
+function drawGaps() {
+  disposeGroup(gaps)
+  if (!hammer.value) {
+    return
+  }
+  for (const r of liveRooms()) {
+    const openWalls = r.openWalls || []
+    for (const o of openWalls) {
+      const other = roomByName(liveRooms(), o.to)
+      // each gap is shared by two rooms: only draw it from one of them
+      if (!other || r.name > other.name) {
+        continue
+      }
+      const m = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0x2fbf71, transparent: true, opacity: 0.22, depthWrite: false }))
+      spanBox(m, r, o.wall, o.t0, o.t1, WALL_THICKNESS * 1.4)
+      m.userData.gap = { roomId: String(r._id), otherId: String(other._id), wall: o.wall, t0: o.t0, t1: o.t1, open: true }
+      gaps.add(m)
+    }
+  }
+}
+
+// The wall (or gap) under the mouse in hammer mode.
+// Gives { roomId, otherId, wall, t0, t1, open } or null.
 function pickWall(e) {
   aim(e)
-  for (const hit of ray.intersectObjects([...wallMeshes, ...gaps.children], false)) {
+  const targets = wallMeshes.concat(gaps.children)
+  const hits = ray.intersectObjects(targets, false)
+  for (const hit of hits) {
     const u = hit.object.userData
-    if (u.gap) return u.gap
-    if (hit.object.material[0]?.opacity < 0.5) continue
+    if (u.gap) {
+      return u.gap
+    }
+    // skip walls that are see-through right now
+    const firstMaterial = hit.object.material[0]
+    if (firstMaterial && firstMaterial.opacity < 0.5) {
+      continue
+    }
     const room = roomById(u.wall.roomId)
-    if (!room) return null
-    const lx = hit.point.x - room.origin.x, lz = hit.point.z - room.origin.z
-    const t = [lx, lz, room.dimension.w - lx, room.dimension.d - lz][u.wall.wall]
+    if (!room) {
+      return null
+    }
+    const lx = hit.point.x - room.origin.x
+    const lz = hit.point.z - room.origin.z
+    const distances = [lx, lz, room.dimension.w - lx, room.dimension.d - lz]
+    const t = distances[u.wall.wall]
     for (const o of liveRooms()) {
-      if (o === room) continue
+      if (o === room) {
+        continue
+      }
       const s = sharedWall(room, o)
-      if (!s || s.wall !== u.wall.wall || s.length < MIN_OPEN_WALL) continue
+      if (!s || s.wall !== u.wall.wall || s.length < MIN_OPEN_WALL) {
+        continue
+      }
       const rg = sharedRange(room, o, s.wall)
-      if (rg && t > rg.t0 - 0.1 && t < rg.t1 + 0.1) return { roomId: u.wall.roomId, otherId: String(o._id), wall: s.wall, ...rg, open: false }
+      if (rg && t > rg.t0 - 0.1 && t < rg.t1 + 0.1) {
+        const result = { roomId: u.wall.roomId, otherId: String(o._id), wall: s.wall }
+        copyInto(result, rg)
+        result.open = false
+        return result
+      }
     }
     return null
   }
   return null
 }
 
-let lastPointer = null
+// Redraw the gaps and hide the glow (the walls changed).
 function refreshHammer() {
   drawGaps()
   wallGlow.visible = false
-  if (hammer.value && lastPointer) hammerHover(lastPointer)
+  if (hammer.value && lastPointer) {
+    hammerHover(lastPointer)
+  }
 }
 
+// The mouse moves in hammer mode: glow the wall under it (red = knock out, green = build back).
 function hammerHover(e) {
   lastPointer = { clientX: e.clientX, clientY: e.clientY }
   const hit = pickWall(e)
   const was = wallGlow.visible
-  wallGlow.visible = !!hit
+  wallGlow.visible = Boolean(hit)
   if (hit) {
     spanBox(wallGlow, roomById(hit.roomId), hit.wall, hit.t0, hit.t1, WALL_THICKNESS * 1.8)
-    wallGlow.material.color.set(hit.open ? 0x2fbf71 : 0xdc2626)
+    if (hit.open) {
+      wallGlow.material.color.set(0x2fbf71)
+    } else {
+      wallGlow.material.color.set(0xdc2626)
+    }
   }
   renderer.domElement.style.cursor = HAMMER_CURSOR
-  if (was !== wallGlow.visible || hit) wake()
+  if (was !== wallGlow.visible || hit) {
+    wake()
+  }
 }
 
-const setHammer = (on) => { if (hammer.value !== on) emit('update:hammer', on) }
-watch(() => props.hammer, (on) => {
-  if (!scene) return
-  if (on) emit('select-item', null)
+// The hammer prop changed (turned on or off).
+function onHammerChange(on) {
+  if (!scene) {
+    return
+  }
+  if (on) {
+    emit('select-item', null)
+  }
   wallGlow.visible = false
   drawGaps()
-  renderer.domElement.style.cursor = on ? HAMMER_CURSOR : ''
+  if (on) {
+    renderer.domElement.style.cursor = HAMMER_CURSOR
+  } else {
+    renderer.domElement.style.cursor = ''
+  }
   wake()
-})
-
-function onKey(e) {
-  if (e.key === 'Escape' && hammer.value) return setHammer(false)
-  if (e.ctrlKey || e.metaKey || e.altKey || !props.selectedItemId || !controls) return
-  const t = e.target
-  if (t && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName))) return
-  if (ARROWS[e.key]) return nudgeSelected(e)
-  if (e.key.toLowerCase() !== 'r' || nudge) return
-  const entry = itemModels.get(props.selectedItemId), r = entry && roomById(entry.roomId)
-  if (!r) return
-  const all = itemsOf(r), item = all.find((i) => i.id === props.selectedItemId)
-  if (!item || item.spec.mode !== 'floor' || item.wall >= 0) return
-  const others = all.filter((o) => o !== item)
-  const pos = placeAt(r.dimension, item.spec, [item.x, item.z], { rotY: item.rotY + Math.PI / 2 }, others)
-  if (!pos || isBlocked({ spec: item.spec, ...pos }, others)) return emit('rotate-blocked')
-  emit('move-items', { roomId: entry.roomId, updates: [{ id: item.id, ...poseOf({ ...item, ...pos }) }] })
 }
 
+// ============================================================
+// KEYBOARD
+// ============================================================
+
+// A key is pressed anywhere on the page.
+function onKey(e) {
+  if (e.key === 'Escape' && hammer.value) {
+    setHammer(false)
+    return
+  }
+  if (e.ctrlKey || e.metaKey || e.altKey || !props.selectedItemId || !controls) {
+    return
+  }
+  // Ignore keys typed into a text box
+  const t = e.target
+  if (t && (t.isContentEditable || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) {
+    return
+  }
+  if (ARROWS[e.key]) {
+    nudgeSelected(e)
+    return
+  }
+  if (e.key.toLowerCase() !== 'r' || nudge) {
+    return
+  }
+
+  // The R key turns the selected floor item by 90 degrees
+  const entry = itemModels[props.selectedItemId]
+  let r = null
+  if (entry) {
+    r = roomById(entry.roomId)
+  }
+  if (!r) {
+    return
+  }
+  const all = itemsOfRoom(r)
+  const item = itemById(all, props.selectedItemId)
+  if (!item || item.spec.mode !== 'floor' || item.wall >= 0) {
+    return
+  }
+  const others = othersOf(all, item)
+  const pos = placeAt(r.dimension, item.spec, [item.x, item.z], { rotY: item.rotY + Math.PI / 2 }, others)
+  if (!pos || isBlocked(candidateOf(item.spec, pos), others)) {
+    emit('rotate-blocked')
+    return
+  }
+  const turned = {}
+  copyInto(turned, item)
+  copyInto(turned, pos)
+  emit('move-items', { roomId: entry.roomId, updates: [poseWithId(turned)] })
+}
+
+// ============================================================
+// STARTING AND STOPPING THE 3D VIEW
+// ============================================================
+
+// The browser took the graphics away: stop drawing and show a message.
 function onGlLost(ev) {
   ev.preventDefault()
   cancelAnimationFrame(rafId)
@@ -1161,8 +2622,23 @@ function onGlLost(ev) {
   glError.value = GL_LOST
   emit('ready')
 }
-const onGlRestored = () => reloadView()
 
+// The graphics came back: start the view again.
+function onGlRestored() {
+  reloadView()
+}
+
+// Anything happened with the mouse or wheel: keep the animation running for a while.
+function wakeFromEvent() {
+  wake()
+}
+
+// The orbit controls moved the camera.
+function onControlsChange() {
+  wake(250)
+}
+
+// Start the 3D view. When 3D graphics are not available, show the error message instead.
 function init() {
   try {
     start()
@@ -1174,33 +2650,57 @@ function init() {
   }
 }
 
+// Make the renderer, scene, lights, camera and controls, and hook up the mouse and keyboard.
 function start() {
-  const width = host.value.clientWidth || 800, height = host.value.clientHeight || 500
+  let width = host.value.clientWidth
+  if (!width) {
+    width = 800
+  }
+  let height = host.value.clientHeight
+  if (!height) {
+    height = 500
+  }
   renderer = new THREE.WebGLRenderer({ antialias: true })
   glError.value = ''
   scene = new THREE.Scene()
-  scene.background = props.plain ? new THREE.Color(0xfbfdfc) : skyTexture()
-  scene.fog = new THREE.Fog(props.plain ? 0xfbfdfc : 0xd5eee4, 55, 130)
+  if (props.plain) {
+    scene.background = new THREE.Color(0xfbfdfc)
+    scene.fog = new THREE.Fog(0xfbfdfc, 55, 130)
+  } else {
+    scene.background = skyTexture()
+    scene.fog = new THREE.Fog(0xd5eee4, 55, 130)
+  }
   camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 200)
 
   renderer.setSize(width, height)
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
   renderer.shadowMap.enabled = true
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
-  renderer.toneMapping = THREE.NeutralToneMapping ?? THREE.NoToneMapping
+  if (isMissing(THREE.NeutralToneMapping)) {
+    renderer.toneMapping = THREE.NoToneMapping
+  } else {
+    renderer.toneMapping = THREE.NeutralToneMapping
+  }
   renderer.toneMappingExposure = 1.0
   host.value.appendChild(renderer.domElement)
 
+  // Soft room-like lighting reflected in shiny materials
   const pmrem = new THREE.PMREMGenerator(renderer)
   envTexture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
   pmrem.dispose()
   scene.environment = envTexture
   scene.environmentIntensity = 0.35
 
+  // The sun (with shadows) and a weak fill light
   sun = new THREE.DirectionalLight(0xfff1dc, 2.1)
   sun.position.set(8, 16, 10)
   sun.castShadow = true
-  Object.assign(sun.shadow.camera, { left: -18, right: 18, top: 18, bottom: -18, near: 1, far: 70 })
+  sun.shadow.camera.left = -18
+  sun.shadow.camera.right = 18
+  sun.shadow.camera.top = 18
+  sun.shadow.camera.bottom = -18
+  sun.shadow.camera.near = 1
+  sun.shadow.camera.far = 70
   sun.shadow.mapSize.set(1024, 1024)
   sun.shadow.bias = -0.0005
   sun.shadow.normalBias = 0.04
@@ -1209,9 +2709,12 @@ function start() {
   fill.position.set(-10, 9, -8)
   scene.add(new THREE.HemisphereLight(0xffffff, 0xd5e6dc, 0.55), new THREE.AmbientLight(0xfff6e5, 0.9), sun, sun.target, fill, grid, base, world, handles, outline, wallGlow, gaps)
 
+  // Mouse: left = pan, wheel = zoom, right = orbit
   controls = new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = true
   controls.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE }
+  // Touch: one finger pans (like the left mouse button), two fingers pinch to zoom and turn to orbit
+  controls.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE }
   controls.maxPolarAngle = Math.PI / 2.05
   controls.minDistance = 3
   controls.maxDistance = 45
@@ -1219,118 +2722,261 @@ function start() {
   const el = renderer.domElement
   el.addEventListener('webglcontextlost', onGlLost)
   el.addEventListener('webglcontextrestored', onGlRestored)
-  controls.addEventListener('change', () => wake(250))
-  for (const type of ['pointermove', 'pointerdown', 'pointerup', 'wheel']) el.addEventListener(type, () => wake(), { passive: true })
+  controls.addEventListener('change', onControlsChange)
+  const wakeEvents = ['pointermove', 'pointerdown', 'pointerup', 'wheel']
+  for (const type of wakeEvents) {
+    el.addEventListener(type, wakeFromEvent)
+  }
   if (!props.readonly) {
     el.addEventListener('pointermove', onMove)
     el.addEventListener('pointerdown', onDown)
     el.addEventListener('pointerup', onUp)
     el.addEventListener('dblclick', onDblClick)
-    el.addEventListener('pointerleave', () => { if (!bd) hoverHandle = null })
-    el.addEventListener('pointercancel', () => { bd = null; idrag = null; controls.enabled = true; emit('drag-preview', null); build() })
+    el.addEventListener('pointerleave', onPointerLeave)
+    el.addEventListener('pointercancel', onPointerCancel)
     window.addEventListener('keydown', onKey)
   }
 
   build()
 
-  observer = new ResizeObserver(() => {
-    const w = host.value?.clientWidth, h = host.value?.clientHeight
-    if (!w || !h || !renderer) return
-    camera.aspect = w / h
-    camera.updateProjectionMatrix()
-    renderer.setSize(w, h)
-    wake(500)
-  })
-  observer.observe(host.value)
+  // Keep the canvas the same size as its box
+  lastWidth = 0
+  lastHeight = 0
+  checkSize()
+  window.addEventListener('resize', checkSize)
+  resizeTimer = setInterval(checkSize, 250)
 }
 
-const IDLE_MS = 3000
-let rafId = 0, awakeUntil = 0, lastTick = 0
+// If the box around the canvas changed size, make the canvas follow.
+function checkSize() {
+  if (!renderer || !host.value) {
+    return
+  }
+  const w = host.value.clientWidth
+  const h = host.value.clientHeight
+  if (!w || !h) {
+    return
+  }
+  if (w === lastWidth && h === lastHeight) {
+    return
+  }
+  lastWidth = w
+  lastHeight = h
+  camera.aspect = w / h
+  camera.updateProjectionMatrix()
+  renderer.setSize(w, h)
+  wake(500)
+}
 
-function wake(ms = IDLE_MS) {
+// ============================================================
+// THE ANIMATION LOOP
+// ============================================================
+
+// Keep drawing frames for the next "ms" milliseconds (starts the loop if it was asleep).
+function wake(ms) {
+  if (ms === undefined) {
+    ms = IDLE_MS
+  }
   awakeUntil = Math.max(awakeUntil, performance.now() + ms)
-  if (!rafId && renderer && !glError.value) rafId = requestAnimationFrame(tick)
+  if (!rafId && renderer && !glError.value) {
+    rafId = requestAnimationFrame(tick)
+  }
 }
 
+// Draw one frame. The loop goes back to sleep when nothing moves for a while.
 function tick(now) {
   rafId = 0
-  if (!renderer || glError.value) return
+  if (!renderer || glError.value) {
+    return
+  }
   const dt = Math.min(0.05, (now - lastTick) / 1000 || 0.016)
   lastTick = now
   stepTween()
   controls.update()
   fadeWalls()
   animateHandles()
+
+  // While an item is dragged: redraw the overlays and tell the parent where the items are now
   if (overlayDirtyRoom) {
     refreshOverlays(overlayDirtyRoom)
-    const active = idrag ?? nudge
-    if (active) emit('drag-preview', { roomId: active.roomId, poses: Object.fromEntries(active.all.map((o) => [o.id, poseOf(o)])) })
+    let active = idrag
+    if (isMissing(active)) {
+      active = nudge
+    }
+    if (active) {
+      const poses = {}
+      for (const o of active.all) {
+        poses[o.id] = poseOf(o)
+      }
+      emit('drag-preview', { roomId: active.roomId, poses: poses })
+    }
     overlayDirtyRoom = null
   }
+
+  // Spin the fans while the loop is awake
   const awake = now < awakeUntil
-  if (awake) for (const { model } of itemModels.values()) if (model.userData.rotor) model.userData.rotor.rotation.y += 2.4 * dt
-  const sel = props.selectedItemId && itemModels.get(props.selectedItemId)
-  outline.visible = !!sel
-  if (sel) outline.setFromObject(sel.model)
+  if (awake) {
+    for (const id in itemModels) {
+      const model = itemModels[id].model
+      if (model.userData.rotor) {
+        model.userData.rotor.rotation.y += 2.4 * dt
+      }
+    }
+  }
+
+  // The box around the selected item
+  let sel = null
+  if (props.selectedItemId) {
+    sel = itemModels[props.selectedItemId]
+  }
+  outline.visible = Boolean(sel)
+  if (sel) {
+    outline.setFromObject(sel.model)
+  }
+
   renderer.render(scene, camera)
-  if (!rafId && (awake || tween || idrag || bd)) rafId = requestAnimationFrame(tick)
+  if (!rafId && (awake || tween || idrag || bd)) {
+    rafId = requestAnimationFrame(tick)
+  }
 }
 
-watch(() => props.rooms, syncRooms, { deep: true })
-watch(() => props.footprint, syncRooms, { deep: true })
-watch(() => props.overlays, () => { props.rooms.forEach((r) => refreshOverlays(String(r._id))); wake() }, { deep: true })
-watch(() => props.selectedId, () => { highlight(); wake() })
-watch(() => props.selectedItemId, () => { flushNudge(); wake() })
-watch(() => props.locked, () => { if (scene) { drawHandles(); wake() } })
-watch(() => props.selectedId, () => { if (scene) drawHandles() })
+// ============================================================
+// WATCHERS (react to prop changes)
+// ============================================================
 
+// The rooms or the footprint changed
+watch(roomsList, syncRooms, { deep: true })
+watch(footprintValue, syncRooms, { deep: true })
+
+// The sun / heat / air switches changed
+watch(overlaysValue, function () {
+  for (const r of props.rooms) {
+    refreshOverlays(String(r._id))
+  }
+  wake()
+}, { deep: true })
+
+// Another room was selected
+watch(selectedIdValue, function () {
+  highlight()
+  wake()
+})
+
+// Another item was selected (save a waiting nudge first)
+watch(selectedItemIdValue, function () {
+  flushNudge()
+  wake()
+})
+
+// Room sizes were locked or unlocked (the handles come or go)
+watch(lockedValue, function () {
+  if (scene) {
+    drawHandles()
+    wake()
+  }
+})
+
+// Another room was selected: its handles must be drawn
+watch(selectedIdValue, function () {
+  if (scene) {
+    drawHandles()
+  }
+})
+
+// The hammer was turned on or off
+watch(hammer, onHammerChange)
+
+// ============================================================
+// CLEAN UP AND RELOAD
+// ============================================================
+
+// Stop everything and free all the memory used by the 3D view.
 function teardown() {
   cancelAnimationFrame(rafId)
   rafId = 0
   clearTimeout(nudgeTimer)
+  clearInterval(resizeTimer)
+  resizeTimer = 0
   window.removeEventListener('keydown', onKey)
-  observer?.disconnect()
-  controls?.dispose()
+  window.removeEventListener('resize', checkSize)
+  if (controls) {
+    controls.dispose()
+  }
   clearWorld()
   disposeGroup(handles)
   disposeGroup(base)
-  envTexture?.dispose()
-  floorTextures.forEach((t) => t.dispose())
-  floorTextures.clear()
-  scene?.background?.dispose?.()
-  grid.geometry.dispose(); grid.material.dispose()
-  outline.geometry.dispose(); outline.material.dispose()
-  wallGlow.geometry.dispose(); wallGlow.material.dispose()
+  if (envTexture) {
+    envTexture.dispose()
+  }
+  for (const type in floorTextures) {
+    floorTextures[type].dispose()
+  }
+  floorTextures = {}
+  if (scene && scene.background && scene.background.dispose) {
+    scene.background.dispose()
+  }
+  grid.geometry.dispose()
+  grid.material.dispose()
+  outline.geometry.dispose()
+  outline.material.dispose()
+  wallGlow.geometry.dispose()
+  wallGlow.material.dispose()
   disposeGroup(gaps)
   wallGlow.visible = false
-  wallMats.forEach((m) => m.dispose()); capMats.forEach((m) => m.dispose())
+  for (const m of wallMats) {
+    m.dispose()
+  }
+  for (const m of capMats) {
+    m.dispose()
+  }
   if (renderer) {
     renderer.domElement.removeEventListener('webglcontextlost', onGlLost)
     renderer.domElement.removeEventListener('webglcontextrestored', onGlRestored)
-    sun?.dispose?.()
+    if (sun && sun.dispose) {
+      sun.dispose()
+    }
     renderer.dispose()
     renderer.forceContextLoss()
     renderer.domElement.remove()
   }
-  scene = camera = renderer = controls = sun = observer = envTexture = null
-  live = idrag = bd = tween = hoverHandle = overlayDirtyRoom = nudge = null
+  scene = null
+  camera = null
+  renderer = null
+  controls = null
+  sun = null
+  envTexture = null
+  live = null
+  idrag = null
+  bd = null
+  tween = null
+  hoverHandle = null
+  overlayDirtyRoom = null
+  nudge = null
   hoverId = null
   nudgeTimer = 0
-  roomSigs.clear(); dirtyRooms.clear()
+  roomSigs = {}
+  dirtyRooms = {}
   focusedId.value = null
-  framed = false; framedFor = null
+  framed = false
+  framedFor = null
 }
 
-async function reloadView() {
+// The "Reload view" button (also used when the graphics come back): start the 3D view again.
+function reloadView() {
   flushNudge()
   teardown()
   glError.value = ''
-  await nextTick()
-  if (host.value) init()
+  if (host.value) {
+    init()
+  }
 }
 
+// ============================================================
+// LIFECYCLE
+// ============================================================
 onMounted(init)
-onBeforeUnmount(() => {
+
+onUnmounted(function () {
   flushNudge()
   teardown()
 })
@@ -1359,7 +3005,15 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 @media (max-width: 767px) {
-  .hint { top: auto; bottom: 10px; left: 10px; max-width: calc(100% - 20px); }
+  .hint { top: auto; bottom: 10px; left: 10px; max-width: calc(100% - 20px); font-size: 0.74rem; padding: 6px 11px; }
+  .view-controls { top: 8px; right: 8px; }
+  .vbtn { padding: 6px 13px; font-size: 0.78rem; }
+  .tool { width: 46px; padding: 6px 2px 4px; }
+  .tool-rail { left: 6px; }
+  .plan-cue { top: 8px; bottom: auto; left: 8px; right: auto; max-width: calc(100% - 170px); font-size: 0.72rem; padding: 5px 10px; }
+}
+@media (pointer: coarse) {
+  .vbtn { min-height: 34px; }
 }
 .plan-cue {
   position: absolute;

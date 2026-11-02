@@ -1,3 +1,27 @@
+<!--
+  ThreeDSpatial.vue
+  The 3D page of the app: the 3D picture of the flat in the middle, the room list and
+  energy figures on the right, and the appliance catalogue at the bottom.
+
+  What this page does:
+    - loads the household's rooms from the server (/api/spatial) and shows them in FloorPlan3D
+    - lets the user add, move and remove appliances, doors and windows
+    - lets the user resize rooms, knock out walls (hammer) and lock the room sizes
+    - works out the yearly energy (stores/energy.js) and shows tips
+    - Undo / Redo (Ctrl+Z, Ctrl+Shift+Z) for every change
+    - can edit the current home layout or a layout saved in an energy plan (?plan=... in the address)
+
+  Child components it uses:
+    FloorPlan3D       the 3D scene (it sends events when the user drags something)
+    AppliancesList    the catalogue (it sends "add-appliance")
+    AppDialog         pop-up messages and "Are you sure?" questions
+
+  Other files it uses:
+    stores/catalog.js, stores/placement.js, stores/energy.js, stores/applianceModels.js
+    utils/layoutHistory.js   keeps the Undo / Redo lists when the page is reloaded
+
+  Registered in router/index.js.
+-->
 <template>
   <div class="spatial-page" :style="{ '--nav-h': navH + 'px' }">
     <div class="spatial-sky" aria-hidden="true">
@@ -36,7 +60,7 @@
                 <svg v-if="layer.key === 'sun'" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
                 <svg v-else-if="layer.key === 'heat'" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/></svg>
                 <svg v-else viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2"/><path d="M9.6 4.6A2 2 0 1 1 11 8H2"/><path d="M12.6 19.4A2 2 0 1 0 14 16H2"/></svg>
-              </span>{{ layer.label }}
+              </span><span class="layer-full">{{ layer.label }}</span><span class="layer-short">{{ layer.short || layer.label }}</span>
             </label>
           </template>
         </div>
@@ -77,11 +101,29 @@
     <div class="spatial-body">
       <main class="canvas-card">
         <FloorPlan3D
-          :rooms="plan.rooms" :footprint="plan.footprint"
-          :selected-id="selectedRoomId" :selected-item-id="selectedItemId"
-          @select-room="selectedRoomId = $event" @select-item="selectedItemId = $event"
-          :overlays="overlays" plain :layout-key="scopeId" :plan-name="scopePlan?.name ?? ''"
-          @ready="sceneReady = true" v-model:hammer="hammer" :locked="layoutLocked" @locked="flash($event)" @hammer-wall="onHammerWall" @edit-rect="onEditRect" @move-items="onMoveItems" @move-opening="onMoveOpening" @drag-preview="preview = $event" @rotate-blocked="flash('No room to rotate it here.')" @move-blocked="flash('Something is in the way of that move.', 2000)" @door-blocked="flash($event)" />
+          :rooms="plan.rooms"
+          :footprint="plan.footprint"
+          :selected-id="selectedRoomId"
+          :selected-item-id="selectedItemId"
+          @select-room="selectedRoomId = $event"
+          @select-item="selectedItemId = $event"
+          :overlays="overlays"
+          plain
+          :layout-key="scopeId"
+          :plan-name="scopePlanName"
+          @ready="sceneReady = true"
+          v-model:hammer="hammer"
+          :locked="layoutLocked"
+          @locked="flash($event)"
+          @hammer-wall="onHammerWall"
+          @edit-rect="onEditRect"
+          @move-items="onMoveItems"
+          @move-opening="onMoveOpening"
+          @drag-preview="preview = $event"
+          @rotate-blocked="flash('No room to rotate it here.')"
+          @move-blocked="flash('Something is in the way of that move.', 2000)"
+          @door-blocked="flash($event)"
+        />
 
         <div class="canvas-messages">
           <div v-if="scopePlan" class="msg msg-info">
@@ -213,15 +255,15 @@
                 <div class="item-name" :title="item.name">{{ item.short }}</div>
                 <div v-if="item.brand" class="item-meta item-model" :title="`${item.brand} ${item.model}`">{{ item.brand }} {{ item.model }}<span v-if="item.ticks" class="tick-badge">{{ item.ticks }}&#10004;&#xFE0E;</span></div>
                 <div v-if="!item.build" class="item-meta">{{ rowOf(item.id) ? Math.round(rowOf(item.id).kwh) : item.kwh }} kWh/yr</div>
-                <div v-if="(rowOf(item.id)?.factors?.length) || (rowOf(item.id)?.causedByOthers?.length)" class="item-tags">
-                  <span v-for="f in rowOf(item.id)?.factors || []" :key="f.key" class="tag tag-warn">+{{ f.pct.toFixed(1) }}% {{ f.label.toLowerCase() }}</span>
-                  <span v-for="f in rowOf(item.id)?.causedByOthers || []" :key="f.key" class="tag tag-warn">+{{ f.pct.toFixed(1) }}% {{ f.label.toLowerCase() }} (move the fan)</span>
+                <div v-if="rowListOf(item.id, 'factors').length || rowListOf(item.id, 'causedByOthers').length" class="item-tags">
+                  <span v-for="f in rowListOf(item.id, 'factors')" :key="f.key" class="tag tag-warn">+{{ f.pct.toFixed(1) }}% {{ f.label.toLowerCase() }}</span>
+                  <span v-for="f in rowListOf(item.id, 'causedByOthers')" :key="f.key" class="tag tag-warn">+{{ f.pct.toFixed(1) }}% {{ f.label.toLowerCase() }} (move the fan)</span>
                 </div>
-                <div v-if="rowOf(item.id)?.knockOn?.length" class="item-tags">
-                  <span v-for="f in rowOf(item.id)?.knockOn || []" :key="f.label" class="tag tag-good">move it to save ~{{ Math.round(f.kwh) }} kWh/yr on the {{ f.label }}</span>
+                <div v-if="rowListOf(item.id, 'knockOn').length" class="item-tags">
+                  <span v-for="f in rowListOf(item.id, 'knockOn')" :key="f.label" class="tag tag-good">move it to save ~{{ Math.round(f.kwh) }} kWh/yr on the {{ f.label }}</span>
                 </div>
               </div>
-              <button class="btn-remove" aria-label="Remove item" title="Remove" @click.stop="removeItem(item.id)">✕</button>
+              <button class="btn-remove" aria-label="Remove item" title="Remove" @click="onRemoveClick($event, item.id)">✕</button>
             </li>
           </ul>
         </section>
@@ -393,7 +435,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
 import AppliancesList from '../components/AppliancesList.vue'
@@ -403,142 +445,336 @@ import { resolveSpec } from '../stores/applianceModels.js'
 import { OPENING_KEYS, isBuild, isOpening, isCountertop, newPlacementDoc, typeOf, productOf, kwhOfPlacement, loadCatalogue, shortNameOf } from '../stores/catalog.js'
 import { findSpot, onWall, isBlocked, doorBlockedBeyond, needsOutsideWall, roomBehindOpening, sharedWall, sharedRange } from '../stores/placement.js'
 import { analyse } from '../stores/energy.js'
+import { useLayoutHistory } from '../utils/layoutHistory.js'
 
-const API_URL = '/api/spatial'
-const unwrap = (response) => response.data
+// ============================================================
+// SMALL HELPERS
+// ============================================================
 
-const householdUrl = (id) => `${API_URL}/households/${id}`
-const layoutBase = (householdId, planId) => (planId ? `${API_URL}/plans/${planId}` : householdUrl(householdId))
-const roomBase = (roomId, planId) => (planId ? `${API_URL}/plans/${planId}/rooms/${roomId}` : `${API_URL}/rooms/${roomId}`)
+// True when a value is undefined or null.
+function isMissing(value) {
+  return value === undefined || value === null
+}
 
-const getCatalogue = () => axios.get(`${API_URL}/catalogue`).then(unwrap)
-const getCurrentHousehold = () => axios.get(`${API_URL}/current`).then(unwrap)
-const getFloorplan = (householdId) => axios.get(`${householdUrl(householdId)}/floorplan`).then(unwrap)
-const getHouseholdPlans = (householdId) => axios.get(`${householdUrl(householdId)}/plans`).then(unwrap)
-const getPlanFloorplan = (planId) => axios.get(`${API_URL}/plans/${planId}/floorplan`).then(unwrap)
-const restoreLayout = (householdId, rooms, planId) => axios.put(`${layoutBase(householdId, planId)}/layout`, { rooms }).then(unwrap)
-
-const setRoomRect = (householdId, roomId, rect, planId) =>
-  axios.put(`${layoutBase(householdId, planId)}/room-rect`, { roomId, rect }).then(unwrap)
-const addOpening = (householdId, roomId, applianceTypeKey, spots, planId) =>
-  axios.post(`${layoutBase(householdId, planId)}/openings`, { roomId, applianceTypeKey, spots }).then(unwrap)
-const moveOpening = (householdId, roomId, placementId, wall, t, planId) =>
-  axios.put(`${layoutBase(householdId, planId)}/openings/${placementId}`, { roomId, wall, t }).then(unwrap)
-const removeOpening = (householdId, roomId, placementId, planId) =>
-  axios.delete(`${layoutBase(householdId, planId)}/openings/${placementId}`, { params: { roomId } }).then(unwrap)
-
-
-const setWallOpen = (householdId, roomId, otherId, open, planId) =>
-  axios.put(`${layoutBase(householdId, planId)}/wall-opening`, { roomId, otherId, open }).then(unwrap)
-
-const addPlacement = (roomId, placement, planId) => axios.post(`${roomBase(roomId, planId)}/placements`, placement).then(unwrap)
-const removePlacement = (roomId, placementId, planId) => axios.delete(`${roomBase(roomId, planId)}/placements/${placementId}`)
-const saveRoomPlacements = (roomId, placements, planId) => axios.put(`${roomBase(roomId, planId)}/placements`, { placements }).then(unwrap)
-const moveManyPlacements = (roomId, moves, planId) => axios.post(`${roomBase(roomId, planId)}/placements/move`, { moves }).then(unwrap)
-const copyHomeToPlan = (planId) => axios.post(`${API_URL}/plans/${planId}/layout/from-home`).then(unwrap)
-
-const round3 = (v) => Math.round((Number(v) || 0) * 1000) / 1000
-const byId = (a, b) => (String(a._id) < String(b._id) ? -1 : String(a._id) > String(b._id) ? 1 : 0)
-
-const layoutSig = (rooms) => JSON.stringify([...rooms].sort(byId).map((r) => [
-  String(r._id), r.name, round3(r.origin.x), round3(r.origin.z), round3(r.dimension.w), round3(r.dimension.d), round3(r.dimension.h),
-  (r.openWalls || []).map((o) => [o.wall, round3(o.t0), round3(o.t1), o.to]),
-  [...r.placements].sort(byId).map((p) => [
-    String(p._id), p.applianceTypeKey, p.brand ?? '', p.model ?? '',
-    round3(p.x), round3(p.z), round3(p.rotY), p.wall, round3(p.t), round3(p.cu), String(p.onPlacementId ?? ''),
-  ]),
-]))
-
-function createLayoutHistory({
-  key = 'ecohome.3d.history',
-  maxChars = 1500000, 
-  saveMs = 400,
-  storage = () => globalThis.sessionStorage,
-} = {}) {
-  const histories = new Map()
-  const waiting = new Set()
-  let timer = 0
-
-  const readStored = () => {
-    try { return JSON.parse(storage().getItem(key) || '{}') || {} } catch { return {} }
+// Give null when a value is missing, otherwise the value itself.
+function valueOrNull(value) {
+  if (isMissing(value)) {
+    return null
   }
+  return value
+}
 
-  function writeWaiting() {
-    timer = 0
-    const ids = [...waiting]
-    waiting.clear()
-    try {
-      const all = readStored()
-      for (const id of ids) {
-        const entry = histories.get(id)
-        if (entry) all[id] = { ...entry, undo: [...entry.undo] }
-      }
-      let text = JSON.stringify(all)
-      for (const id of ids) {
-        const copy = all[id]
-        while (copy && text.length > maxChars && copy.undo.length > 1) { copy.undo.shift(); text = JSON.stringify(all) }
-      }
-      if (text.length <= maxChars) storage().setItem(key, text)
-    } catch { }
-  }
-
-  return {
-    save(id, rooms, undo, redo) {
-      histories.set(id, { sig: layoutSig(rooms), undo: [...undo], redo: [...redo] })
-      waiting.add(id)
-      clearTimeout(timer)
-      timer = setTimeout(writeWaiting, saveMs)
-    },
-
-    load(id, rooms) {
-      const sig = layoutSig(rooms)
-      let entry = histories.get(id)
-      if (entry?.sig !== sig) entry = readStored()[id]
-      const usable = entry?.sig === sig && Array.isArray(entry.undo) && Array.isArray(entry.redo)
-      return usable ? { undo: [...entry.undo], redo: [...entry.redo] } : { undo: [], redo: [] }
-    },
-
-    flush() {
-      if (!timer) return
-      clearTimeout(timer)
-      writeWaiting()
-    },
+// Add a value to a list only if it is not in the list yet.
+function addOnce(list, value) {
+  if (list.indexOf(value) === -1) {
+    list.push(value)
   }
 }
 
-const navH = ref(72)
-const dockOpen = ref(typeof window === 'undefined' || window.innerHeight >= 860)
-const showWarnings = ref(false)
-let navObserver
-const measureNav = () => { navH.value = document.querySelector('.eco-navbar')?.offsetHeight || 72 }
+// Copy every property of "from" onto "to".
+function copyKeys(from, to) {
+  for (const key of Object.keys(from)) {
+    to[key] = from[key]
+  }
+}
 
-const loadError = ref('')
-const needsHousehold = ref(false)
-const dataReady = ref(false)
-const sceneReady = ref(false)
-const loaderGone = ref(false)
-const loaderLeaving = ref(false)
-const loading = computed(() => !dataReady.value && !loadError.value)
-const loaderState = computed(() => (loadError.value ? 'error' : dataReady.value && sceneReady.value ? 'ready' : 'loading'))
-let sceneTimer
+// Find a room in a list of rooms by its id (undefined if there is none).
+function findRoom(rooms, roomId) {
+  return rooms.find(function (room) {
+    return String(room._id) === roomId
+  })
+}
+
+// Find a placement in a room by its id (undefined if there is none).
+function findPlacement(room, placementId) {
+  return room.placements.find(function (p) {
+    return String(p._id) === placementId
+  })
+}
+
+// Does this room contain a placement with this id?
+function roomHasItem(room, itemId) {
+  return findPlacement(room, itemId) !== undefined
+}
+
+// Does any room in the list contain a placement with this id?
+function anyRoomHasItem(rooms, itemId) {
+  for (const room of rooms) {
+    if (roomHasItem(room, itemId)) {
+      return true
+    }
+  }
+  return false
+}
+
+// Short text for an error, preferring the message the server sent.
+function reasonOf(error) {
+  if (error.response && error.response.data && error.response.data.error) {
+    return error.response.data.error
+  }
+  return error.message
+}
+
+// ============================================================
+// TALKING TO THE SERVER (axios)
+// ============================================================
+// planId is '' or undefined for the current home layout,
+// or the id of a saved plan when a plan is being edited.
+
+const API_URL = '/api/spatial'
+
+function householdUrl(householdId) {
+  return `${API_URL}/households/${householdId}`
+}
+
+// The address of the layout being edited: a saved plan or the household.
+function layoutBase(householdId, planId) {
+  if (planId) {
+    return `${API_URL}/plans/${planId}`
+  }
+  return householdUrl(householdId)
+}
+
+// The address of one room.
+function roomBase(roomId, planId) {
+  if (planId) {
+    return `${API_URL}/plans/${planId}/rooms/${roomId}`
+  }
+  return `${API_URL}/rooms/${roomId}`
+}
+
+async function getCurrentHousehold() {
+  const response = await axios.get(`${API_URL}/current`)
+  return response.data
+}
+
+async function getFloorplan(householdId) {
+  const response = await axios.get(`${householdUrl(householdId)}/floorplan`)
+  return response.data
+}
+
+async function getHouseholdPlans(householdId) {
+  const response = await axios.get(`${householdUrl(householdId)}/plans`)
+  return response.data
+}
+
+async function getPlanFloorplan(planId) {
+  const response = await axios.get(`${API_URL}/plans/${planId}/floorplan`)
+  return response.data
+}
+
+// Put a whole saved layout back (used by Undo and Redo).
+async function restoreLayout(householdId, rooms, planId) {
+  const response = await axios.put(`${layoutBase(householdId, planId)}/layout`, { rooms: rooms })
+  return response.data
+}
+
+// Change the size / position of one room.
+async function setRoomRect(householdId, roomId, rect, planId) {
+  const response = await axios.put(`${layoutBase(householdId, planId)}/room-rect`, { roomId: roomId, rect: rect })
+  return response.data
+}
+
+async function addOpening(householdId, roomId, applianceTypeKey, spots, planId) {
+  const body = { roomId: roomId, applianceTypeKey: applianceTypeKey, spots: spots }
+  const response = await axios.post(`${layoutBase(householdId, planId)}/openings`, body)
+  return response.data
+}
+
+async function moveOpening(householdId, roomId, placementId, wall, t, planId) {
+  const body = { roomId: roomId, wall: wall, t: t }
+  const response = await axios.put(`${layoutBase(householdId, planId)}/openings/${placementId}`, body)
+  return response.data
+}
+
+async function removeOpening(householdId, roomId, placementId, planId) {
+  const response = await axios.delete(`${layoutBase(householdId, planId)}/openings/${placementId}`, { params: { roomId: roomId } })
+  return response.data
+}
+
+// Knock out the wall between two rooms (open = true) or build it back (open = false).
+async function setWallOpen(householdId, roomId, otherId, open, planId) {
+  const body = { roomId: roomId, otherId: otherId, open: open }
+  const response = await axios.put(`${layoutBase(householdId, planId)}/wall-opening`, body)
+  return response.data
+}
+
+async function addPlacement(roomId, placement, planId) {
+  const response = await axios.post(`${roomBase(roomId, planId)}/placements`, placement)
+  return response.data
+}
+
+async function removePlacement(roomId, placementId, planId) {
+  await axios.delete(`${roomBase(roomId, planId)}/placements/${placementId}`)
+}
+
+async function saveRoomPlacements(roomId, placements, planId) {
+  const response = await axios.put(`${roomBase(roomId, planId)}/placements`, { placements: placements })
+  return response.data
+}
+
+async function moveManyPlacements(roomId, moves, planId) {
+  const response = await axios.post(`${roomBase(roomId, planId)}/placements/move`, { moves: moves })
+  return response.data
+}
+
+// Copy the current home layout into a saved plan.
+async function copyHomeToPlan(planId) {
+  const response = await axios.post(`${API_URL}/plans/${planId}/layout/from-home`)
+  return response.data
+}
+
+// ============================================================
+// STATE OF THE PAGE
+// ============================================================
+
+const route = useRoute()
+const router = useRouter()
+
+// The layout shown in 3D: { household, rooms, footprint }
+const plan = ref({ rooms: [], footprint: null })
+const warnings = ref([])
+const showWarnings = ref(false)
+
+// The small message that pops up over the 3D view: { text, kind }
+const notice = ref(null)
+let flashTimer = null
+
+// The pop-up dialog (AppDialog) has notify() and confirm()
+const dialog = ref(null)
+
+// What is selected
+const selectedRoomId = ref(null)
+const selectedItemId = ref(null)
+
+// While an item is being dragged, FloorPlan3D tells us where it is: { roomId, poses }
+const preview = ref(null)
+
+// Which pictures are drawn on the floors
+const overlays = ref({ sun: false, heat: true, air: true })
+const OVERLAY_LAYERS = [
+  { key: 'sun', label: 'Sunlight', color: '#f2a900', hint: 'Show where sunlight falls in each room' },
+  { key: 'heat', label: 'Heat', color: '#e8420f', hint: 'Show hot spots made by appliances and sunlight' },
+  { key: 'air', label: 'Airflow (aircon & fans)', short: 'Airflow', color: '#14a3b8', hint: 'Show where air from aircon and fans flows' },
+]
+
+// The catalogue at the bottom is open on tall screens and closed on small ones
+const dockOpen = ref(window.innerHeight >= 860)
+
+// Height of the navigation bar (the page sits below it)
+const navH = ref(72)
+
+// Changes are sent to the server one after another, never at the same time.
+// Every change is put in this queue with enqueue().
+let taskQueue = Promise.resolve()
+
+function enqueue(task) {
+  const result = taskQueue.then(task)
+  taskQueue = result.catch(function () {})
+  return result
+}
+
+// Show a small message for a few seconds. kind is 'warn' or 'ok'.
+function flash(message, ms = 4000, kind = 'warn') {
+  notice.value = { text: message, kind: kind }
+  clearTimeout(flashTimer)
+  flashTimer = setTimeout(function () {
+    notice.value = null
+  }, ms)
+}
+
+// Tell the user something went wrong. Uses the dialog, or a small message if there is no dialog.
+function problem(message, title = 'Something went wrong') {
+  notice.value = null
+  if (dialog.value) {
+    return dialog.value.notify({ title: title, message: message })
+  }
+  return flash(message)
+}
+
+// The id of the household that owns the layout
+function hid() {
+  return plan.value.household._id
+}
+
+// The room with this id (undefined if there is none)
+function roomOf(roomId) {
+  return findRoom(plan.value.rooms, roomId)
+}
+
+// Measure the navigation bar so the page fits below it.
+function measureNav() {
+  const nav = document.querySelector('.eco-navbar')
+  let height = 0
+  if (nav) {
+    height = nav.offsetHeight
+  }
+  navH.value = height || 72
+}
+
+// ============================================================
+// THE LOADING SCREEN
+// ============================================================
+// It shows until the data is loaded AND the 3D scene is drawn,
+// and stays for at least 3 seconds so the animation can be seen.
 
 const LOADER_MIN_MS = 3000
 const LOADER_FADE_MS = 500
-const loaderStart = performance.now()
-const reduceMotion = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-let loaderTimer, loaderFadeTimer
-watch(loaderState, (state) => {
-  clearTimeout(loaderTimer); clearTimeout(loaderFadeTimer)
+const loaderStart = Date.now()
+const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+const loadError = ref('')
+const needsHousehold = ref(false)
+const dataReady = ref(false)   // the data came from the server
+const sceneReady = ref(false)  // the 3D scene is drawn
+const loaderGone = ref(false)
+const loaderLeaving = ref(false)
+let sceneTimer = null
+let loaderTimer = null
+let loaderFadeTimer = null
+
+const loading = computed(function () {
+  return !dataReady.value && !loadError.value
+})
+
+// 'error', 'ready' or 'loading'
+const loaderState = computed(function () {
+  if (loadError.value) {
+    return 'error'
+  }
+  if (dataReady.value && sceneReady.value) {
+    return 'ready'
+  }
+  return 'loading'
+})
+
+// When everything is ready, wait out the minimum time, fade the loader out, then remove it.
+watch(loaderState, function (state) {
+  clearTimeout(loaderTimer)
+  clearTimeout(loaderFadeTimer)
   loaderLeaving.value = false
-  if (state !== 'ready') return
-  const wait = reduceMotion ? 0 : Math.max(0, LOADER_MIN_MS - (performance.now() - loaderStart))
-  loaderTimer = setTimeout(() => {
+  if (state !== 'ready') {
+    return
+  }
+
+  let wait = 0
+  if (!reduceMotion) {
+    wait = Math.max(0, LOADER_MIN_MS - (Date.now() - loaderStart))
+  }
+  let fadeWait = LOADER_FADE_MS
+  if (reduceMotion) {
+    fadeWait = 0
+  }
+
+  loaderTimer = setTimeout(function () {
     loaderLeaving.value = true
-    loaderFadeTimer = setTimeout(() => (loaderGone.value = true), reduceMotion ? 0 : LOADER_FADE_MS)
+    loaderFadeTimer = setTimeout(function () {
+      loaderGone.value = true
+    }, fadeWait)
   }, wait)
 })
-onBeforeUnmount(() => { clearTimeout(loaderTimer); clearTimeout(loaderFadeTimer) })
 
+// Load the catalogue, the household, the saved plans and then the right layout.
 async function loadAll() {
   loadError.value = ''
   needsHousehold.value = false
@@ -550,51 +786,127 @@ async function loadAll() {
     await restoreScope()
     scopeReady = true
     dataReady.value = true
+    measureNav()
+
+    // The scene tells us when it is drawn. If it never does, show the page after 5 seconds.
     clearTimeout(sceneTimer)
-    sceneTimer = setTimeout(() => { sceneReady.value = true }, plan.value.rooms.length ? 5000 : 0)
-  } catch (e) {
-    needsHousehold.value = e.response?.data?.code === 'NO_HOUSEHOLD'
-    loadError.value = needsHousehold.value
-      ? e.response.data.error
-      : e.response
-        ? e.response.data?.error || `The server answered with an error (${e.response.status}).`
-        : 'The server could not be reached. Check your connection, then try again.'
+    let sceneWait = 0
+    if (plan.value.rooms.length) {
+      sceneWait = 5000
+    }
+    sceneTimer = setTimeout(function () {
+      sceneReady.value = true
+    }, sceneWait)
+  } catch (error) {
+    const response = error.response
+    let code = ''
+    if (response && response.data && response.data.code) {
+      code = response.data.code
+    }
+    needsHousehold.value = code === 'NO_HOUSEHOLD'
+
+    if (needsHousehold.value) {
+      loadError.value = response.data.error
+    } else if (response) {
+      let serverText = ''
+      if (response.data && response.data.error) {
+        serverText = response.data.error
+      }
+      loadError.value = serverText || `The server answered with an error (${response.status}).`
+    } else {
+      loadError.value = 'The server could not be reached. Check your connection, then try again.'
+    }
   }
 }
-onMounted(loadAll)
 
-const plan = ref({ rooms: [], footprint: null })
-const warnings = ref([])
-const notice = ref(null)
-const dialog = ref(null)
-let flashTimer
-const flash = (msg, ms = 4000, kind = 'warn') => { notice.value = { text: msg, kind }; clearTimeout(flashTimer); flashTimer = setTimeout(() => (notice.value = null), ms) }
-const problem = (msg, title = 'Something went wrong') => { notice.value = null; return dialog.value?.notify({ title, message: msg }) ?? flash(msg) }
-const reasonOf = (e) => e.response?.data?.error || e.message
-const hid = () => plan.value.household._id
-
-function applyLoaded(loaded, { keepHistory = false } = {}) {
+// Use a layout that came from the server.
+// keepHistory = true keeps the Undo / Redo lists as they are.
+function applyLoaded(loaded, keepHistory = false) {
   plan.value = loaded
-  warnings.value = loaded.warnings ?? []
-  if (!keepHistory) loadHistory()
+  if (isMissing(loaded.warnings)) {
+    warnings.value = []
+  } else {
+    warnings.value = loaded.warnings
+  }
+  if (!keepHistory) {
+    loadHistory()
+  }
 }
 
-const scopeId = ref('')
-const energyPlans = ref([])
-const planScope = () => scopeId.value || undefined
-const scopePlan = computed(() => energyPlans.value.find((p) => p.id === scopeId.value) ?? null)
-// The plan being edited names the page. Without a plan (the current home layout) it falls back to the household's name.
-const pageTitle = computed(() => scopePlan.value?.name || plan.value.household?.name || 'Your flat')
-const loadScope = () => (scopeId.value ? getPlanFloorplan(scopeId.value) : getFloorplan(hid()))
-const reloadScope = async ({ keepHistory = false } = {}) => applyLoaded(await loadScope(), { keepHistory })
+// ============================================================
+// WHICH LAYOUT IS EDITED (the current home or a saved plan)
+// ============================================================
+
+const SCOPE_KEY = 'ecohome.3d.layout'
+const scopeId = ref('')       // '' = the current home layout, otherwise the id of a plan
+const energyPlans = ref([])   // the saved plans of the household
+let scopeReady = false        // false until the first load is finished
+
+// The id to send to the server (undefined for the current home layout)
+function planScope() {
+  if (scopeId.value) {
+    return scopeId.value
+  }
+  return undefined
+}
+
+// The plan being edited (null for the current home layout)
+const scopePlan = computed(function () {
+  const found = energyPlans.value.find(function (p) {
+    return p.id === scopeId.value
+  })
+  if (found === undefined) {
+    return null
+  }
+  return found
+})
+
+// The name shown on the 3D view
+const scopePlanName = computed(function () {
+  if (scopePlan.value === null || isMissing(scopePlan.value.name)) {
+    return ''
+  }
+  return scopePlan.value.name
+})
+
+// The plan being edited names the page. Without a plan (the current home layout)
+// it falls back to the household's name.
+const pageTitle = computed(function () {
+  if (scopePlan.value && scopePlan.value.name) {
+    return scopePlan.value.name
+  }
+  if (plan.value.household && plan.value.household.name) {
+    return plan.value.household.name
+  }
+  return 'Your flat'
+})
+
+// Get the layout of the plan being edited from the server.
+function loadScope() {
+  if (scopeId.value) {
+    return getPlanFloorplan(scopeId.value)
+  }
+  return getFloorplan(hid())
+}
+
+async function reloadScope(keepHistory = false) {
+  applyLoaded(await loadScope(), keepHistory)
+}
 
 async function loadPlanList() {
-  try { energyPlans.value = await getHouseholdPlans(hid()) } catch { energyPlans.value = [] }
+  try {
+    energyPlans.value = await getHouseholdPlans(hid())
+  } catch (error) {
+    energyPlans.value = []
+  }
 }
 
+// Switch to another layout. Gives true if it worked.
 async function changeScope(next) {
-  if (next === scopeId.value) return true
-  await chain
+  if (next === scopeId.value) {
+    return true
+  }
+  await taskQueue
   const previous = scopeId.value
   try {
     scopeId.value = next
@@ -605,37 +917,61 @@ async function changeScope(next) {
     applyLoaded(loaded)
     rememberScope()
     return true
-  } catch (e) {
+  } catch (error) {
     scopeId.value = previous
-    problem(reasonOf(e), 'Could not switch layouts')
+    problem(reasonOf(error), 'Could not switch layouts')
     return false
   }
 }
 
+// The user picked something in the "Editing" drop-down.
 async function switchScope(event) {
   const next = event.target.value
-  const target = energyPlans.value.find((p) => p.id === next)
+  const target = energyPlans.value.find(function (p) {
+    return p.id === next
+  })
   if (target && !target.hasLayout) {
     event.target.value = scopeId.value
     await useHomeLayout(target, false)
     return
   }
-  if (!(await changeScope(next))) event.target.value = scopeId.value
+  const switched = await changeScope(next)
+  if (!switched) {
+    event.target.value = scopeId.value
+  }
 }
 
+// Copy the current home layout into a plan.
+// reset = true replaces a layout the plan already has.
 async function useHomeLayout(target, reset) {
-  if (!target) return
-  const ask = reset
-    ? `Replace the layout saved in "${target.name}" with your current home layout? Changes you made to this plan's 3D layout will be lost.`
-    : `"${target.name}" has no saved 3D layout yet. Copy your current home layout into it?`
+  if (!target) {
+    return
+  }
+
+  let ask = ''
+  let title = ''
+  let okText = ''
+  if (reset) {
+    ask = `Replace the layout saved in "${target.name}" with your current home layout? Changes you made to this plan's 3D layout will be lost.`
+    title = 'Reset this plan\'s layout?'
+    okText = 'Replace layout'
+  } else {
+    ask = `"${target.name}" has no saved 3D layout yet. Copy your current home layout into it?`
+    title = 'Use your current home layout?'
+    okText = 'Copy layout'
+  }
+
   const yes = await dialog.value.confirm({
-    title: reset ? 'Reset this plan\'s layout?' : 'Use your current home layout?',
+    title: title,
     message: ask,
-    okText: reset ? 'Replace layout' : 'Copy layout',
+    okText: okText,
     danger: reset,
   })
-  if (!yes) return
-  await chain
+  if (!yes) {
+    return
+  }
+
+  await taskQueue
   try {
     await copyHomeToPlan(target.id)
     await loadPlanList()
@@ -647,467 +983,1261 @@ async function useHomeLayout(target, reset) {
     } else {
       await changeScope(target.id)
     }
-    flash(reset ? `"${target.name}" now matches your current home layout.` : `Copied your current home layout into "${target.name}".`, 4000, 'ok')
-  } catch (e) {
-    problem(reasonOf(e), 'Could not copy the layout')
+
+    if (reset) {
+      flash(`"${target.name}" now matches your current home layout.`, 4000, 'ok')
+    } else {
+      flash(`Copied your current home layout into "${target.name}".`, 4000, 'ok')
+    }
+  } catch (error) {
+    problem(reasonOf(error), 'Could not copy the layout')
   }
 }
 
-const route = useRoute()
-const router = useRouter()
-const SCOPE_KEY = 'ecohome.3d.layout'
-let scopeReady = false
-const queryPlan = () => { const q = route.query.plan; return String((Array.isArray(q) ? q[0] : q) || '') }
-const openablePlan = (id) => energyPlans.value.some((p) => p.id === id && p.hasLayout)
-
-function rememberScope() {
-  try { if (scopeId.value) localStorage.setItem(SCOPE_KEY, scopeId.value); else localStorage.removeItem(SCOPE_KEY) } catch { /* storage can be blocked; the address still carries it */ }
-  if (queryPlan() !== scopeId.value) router.replace({ query: { ...route.query, plan: scopeId.value || undefined } }).catch(() => {})
+// The plan id in the address bar (?plan=...), or '' if there is none
+function queryPlan() {
+  let q = route.query.plan
+  if (Array.isArray(q)) {
+    q = q[0]
+  }
+  return String(q || '')
 }
 
+// Can this plan be opened in 3D? (it must exist and have a saved layout)
+function openablePlan(id) {
+  for (const p of energyPlans.value) {
+    if (p.id === id && p.hasLayout) {
+      return true
+    }
+  }
+  return false
+}
+
+// Change the address bar without leaving the page.
+async function replaceAddress(query) {
+  try {
+    await router.replace({ query: query })
+  } catch (error) {
+    // going to the same address again is not an error worth showing
+  }
+}
+
+// Remember the chosen layout in localStorage and in the address bar.
+function rememberScope() {
+  try {
+    if (scopeId.value) {
+      localStorage.setItem(SCOPE_KEY, scopeId.value)
+    } else {
+      localStorage.removeItem(SCOPE_KEY)
+    }
+  } catch (error) {
+    // storage can be blocked; the address still carries it
+  }
+
+  if (queryPlan() !== scopeId.value) {
+    const query = {}
+    copyKeys(route.query, query)
+    query.plan = scopeId.value || undefined
+    replaceAddress(query)
+  }
+}
+
+// When the page opens, show the plan from the address bar, or the one used last time.
 async function restoreScope() {
   const asked = queryPlan()
   let remembered = ''
-  try { remembered = localStorage.getItem(SCOPE_KEY) || '' } catch { }
+  try {
+    remembered = localStorage.getItem(SCOPE_KEY) || ''
+  } catch (error) {
+    // storage can be blocked
+  }
+
   const want = asked || remembered
-  if (want && openablePlan(want)) { await changeScope(want); return }
-  if (asked) problem("It was not found, or it has no saved layout yet. Pick it in the layout selector to copy your current home layout into it.", "That plan can't be opened in 3D")
+  if (want && openablePlan(want)) {
+    await changeScope(want)
+    return
+  }
+  if (asked) {
+    problem('It was not found, or it has no saved layout yet. Pick it in the layout selector to copy your current home layout into it.', 'That plan can\'t be opened in 3D')
+  }
   rememberScope()
 }
 
-watch(() => route.query.plan, async () => {
+// If the plan in the address bar changes while the page is open, follow it.
+const planInAddress = computed(function () {
+  return route.query.plan
+})
+
+watch(planInAddress, async function () {
   const id = queryPlan()
-  if (!scopeReady || !id || id === scopeId.value) return
-  if (openablePlan(id)) await changeScope(id)
-  else problem('It was not found, or it has no saved layout yet.', "That plan can't be opened in 3D")
-})
-
-const selectedRoomId = ref(null)
-const selectedItemId = ref(null)
-const selectedRoom = computed(() => plan.value.rooms.find((r) => String(r._id) === selectedRoomId.value))
-
-watch(() => plan.value.rooms, (rooms) => {
-  if (selectedRoomId.value && !rooms.some((r) => String(r._id) === selectedRoomId.value)) selectedRoomId.value = null
-  if (selectedItemId.value && !rooms.some((r) => r.placements.some((p) => String(p._id) === selectedItemId.value))) selectedItemId.value = null
-})
-watch(selectedRoomId, (id) => {
-  const r = plan.value.rooms.find((x) => String(x._id) === id)
-  if (selectedItemId.value && !r?.placements.some((p) => String(p._id) === selectedItemId.value)) selectedItemId.value = null
-})
-
-const kwhOf = kwhOfPlacement
-const nameOf = (p) => typeOf(p.category, p.applianceTypeKey)?.name ?? p.applianceTypeKey
-
-const preview = ref(null)
-const placedOf = (r) => r.placements.map((p) => ({
-  id: String(p._id), name: nameOf(p), kwh: isBuild(p.category) ? 0 : kwhOf(p), ticks: productOf(p.category, p.applianceTypeKey, p.brand, p.model)?.ticks ?? null,
-  spec: resolveSpec(p.applianceTypeKey, p.category),
-  x: p.x, z: p.z, rotY: p.rotY, wall: p.wall, t: p.t, cu: p.cu ?? 0,
-  on: p.onPlacementId ? String(p.onPlacementId) : undefined,
-  ...(preview.value?.roomId === String(r._id) ? preview.value.poses[String(p._id)] : null),
-}))
-
-const roomItems = computed(() => {
-  const r = selectedRoom.value
-  if (!r) return []
-  return r.placements
-    .filter((p) => !isOpening(p))
-    .map((p) => {
-      const product = productOf(p.category, p.applianceTypeKey, p.brand, p.model)
-      return { id: String(p._id), name: nameOf(p), short: shortNameOf(typeOf(p.category, p.applianceTypeKey)) || nameOf(p), brand: product?.brand ?? null, model: product?.model ?? null, ticks: product?.ticks ?? null, kwh: kwhOf(p), build: isBuild(p.category) }
-    })
-})
-
-const missingItems = computed(() => plan.value.rooms.reduce((n, r) => n + r.placements.filter((p) => !typeOf(p.category, p.applianceTypeKey)).length, 0))
-
-function openLinkOf(r) {
-  const open = r.openWalls || []
-  if (!open.length) return null
-  const near = []
-  for (const name of new Set(open.map((o) => o.to))) {
-    const n = plan.value.rooms.find((x) => x.name === name)
-    if (n) near.push({ name: n.name, w: n.dimension.w, d: n.dimension.d, dx: n.origin.x - r.origin.x, dz: n.origin.z - r.origin.z, items: placedOf(n) })
+  if (!scopeReady || !id || id === scopeId.value) {
+    return
   }
-  return { open, near }
+  if (openablePlan(id)) {
+    await changeScope(id)
+  } else {
+    problem('It was not found, or it has no saved layout yet.', 'That plan can\'t be opened in 3D')
+  }
+})
+
+// ============================================================
+// SELECTION
+// ============================================================
+
+const allRooms = computed(function () {
+  return plan.value.rooms
+})
+
+const selectedRoom = computed(function () {
+  return roomOf(selectedRoomId.value)
+})
+
+// If the selected room or item disappears (for example after Undo), clear the selection.
+watch(allRooms, function (rooms) {
+  if (selectedRoomId.value && findRoom(rooms, selectedRoomId.value) === undefined) {
+    selectedRoomId.value = null
+  }
+  if (selectedItemId.value && !anyRoomHasItem(rooms, selectedItemId.value)) {
+    selectedItemId.value = null
+  }
+})
+
+// If another room is picked, an item of the old room cannot stay selected.
+watch(selectedRoomId, function (id) {
+  if (!selectedItemId.value) {
+    return
+  }
+  const room = roomOf(id)
+  if (room === undefined || !roomHasItem(room, selectedItemId.value)) {
+    selectedItemId.value = null
+  }
+})
+
+// ============================================================
+// THE ITEMS OF EACH ROOM
+// ============================================================
+
+// The name of a placed thing, e.g. "Fridge (2-door, 300L)"
+function nameOf(placement) {
+  const type = typeOf(placement.category, placement.applianceTypeKey)
+  if (isMissing(type) || isMissing(type.name)) {
+    return placement.applianceTypeKey
+  }
+  return type.name
 }
 
-const analyses = computed(() => plan.value.rooms.map((r) => ({
-  roomId: String(r._id),
-  ...analyse(r.dimension, placedOf(r), r.name, openLinkOf(r)),
-})))
-const rowOf = (id) => { for (const a of analyses.value) { const row = a.rows.find((x) => x.id === id); if (row) return row } return null }
-const sumOf = (key) => analyses.value.reduce((total, a) => total + a[key], 0)
+// The things in a room in the form that energy.js and FloorPlan3D need.
+// While an item is being dragged, its preview position is used instead.
+function placedOf(room) {
+  const list = []
 
-const ratedKwhYear = computed(() => Math.round(sumOf('base')))
-const totalKwhYear = computed(() => Math.round(sumOf('kwh')))
-const placementImpact = computed(() => (sumOf('base') ? (sumOf('avoidKwh') / sumOf('base')) * 100 : 0))
+  for (const p of room.placements) {
+    const product = productOf(p.category, p.applianceTypeKey, p.brand, p.model)
+    let ticks = null
+    if (product && !isMissing(product.ticks)) {
+      ticks = product.ticks
+    }
 
-const recs = computed(() => analyses.value.find((a) => a.roomId === selectedRoomId.value)?.recs ?? [])
-const tips = computed(() => analyses.value.find((a) => a.roomId === selectedRoomId.value)?.tips ?? [])
+    let kwh = 0
+    if (!isBuild(p.category)) {
+      kwh = kwhOfPlacement(p)
+    }
 
-const overlays = reactive({ sun: false, heat: true, air: true })
-const OVERLAY_LAYERS = [
-  { key: 'sun', label: 'Sunlight', color: '#f2a900', hint: 'Show where sunlight falls in each room' },
-  { key: 'heat', label: 'Heat', color: '#e8420f', hint: 'Show hot spots made by appliances and sunlight' },
-  { key: 'air', label: 'Airflow (aircon & fans)', color: '#14a3b8', hint: 'Show where air from aircon and fans flows' },
-]
+    let cu = 0
+    if (!isMissing(p.cu)) {
+      cu = p.cu
+    }
 
-function toggleHammer() {
-  if (layoutLocked.value) return
-  hammer.value = !hammer.value
+    let on = undefined
+    if (p.onPlacementId) {
+      on = String(p.onPlacementId)
+    }
+
+    const item = {
+      id: String(p._id),
+      name: nameOf(p),
+      kwh: kwh,
+      ticks: ticks,
+      spec: resolveSpec(p.applianceTypeKey, p.category),
+      x: p.x,
+      z: p.z,
+      rotY: p.rotY,
+      wall: p.wall,
+      t: p.t,
+      cu: cu,
+      on: on,
+    }
+
+    // being dragged right now? then use the position of the drag
+    if (preview.value && preview.value.roomId === String(room._id)) {
+      const pose = preview.value.poses[String(p._id)]
+      if (pose) {
+        copyKeys(pose, item)
+      }
+    }
+
+    list.push(item)
+  }
+
+  return list
 }
+
+// The list on the right: the appliances and furniture of the selected room
+// (doors and windows are not in the list).
+const roomItems = computed(function () {
+  const room = selectedRoom.value
+  if (!room) {
+    return []
+  }
+
+  const items = []
+  for (const p of room.placements) {
+    if (isOpening(p)) {
+      continue
+    }
+    const product = productOf(p.category, p.applianceTypeKey, p.brand, p.model)
+    let brand = null
+    let model = null
+    let ticks = null
+    if (product) {
+      brand = valueOrNull(product.brand)
+      model = valueOrNull(product.model)
+      ticks = valueOrNull(product.ticks)
+    }
+
+    items.push({
+      id: String(p._id),
+      name: nameOf(p),
+      short: shortNameOf(typeOf(p.category, p.applianceTypeKey)) || nameOf(p),
+      brand: brand,
+      model: model,
+      ticks: ticks,
+      kwh: kwhOfPlacement(p),
+      build: isBuild(p.category),
+    })
+  }
+  return items
+})
+
+// Is this id one of the items in the list on the right?
+function isListedItem(itemId) {
+  for (const item of roomItems.value) {
+    if (item.id === itemId) {
+      return true
+    }
+  }
+  return false
+}
+
+// How many placed things are not in the catalogue any more?
+const missingItems = computed(function () {
+  let count = 0
+  for (const room of plan.value.rooms) {
+    for (const p of room.placements) {
+      if (!typeOf(p.category, p.applianceTypeKey)) {
+        count = count + 1
+      }
+    }
+  }
+  return count
+})
+
+// ============================================================
+// ENERGY (the maths is in stores/energy.js)
+// ============================================================
+
+// When walls are knocked out, a room also needs to know the rooms next to it.
+function openLinkOf(room) {
+  const open = room.openWalls || []
+  if (!open.length) {
+    return null
+  }
+
+  const near = []
+  const doneNames = []
+  for (const o of open) {
+    if (doneNames.indexOf(o.to) !== -1) {
+      continue
+    }
+    doneNames.push(o.to)
+
+    const other = plan.value.rooms.find(function (x) {
+      return x.name === o.to
+    })
+    if (other) {
+      near.push({
+        name: other.name,
+        w: other.dimension.w,
+        d: other.dimension.d,
+        dx: other.origin.x - room.origin.x,
+        dz: other.origin.z - room.origin.z,
+        items: placedOf(other),
+      })
+    }
+  }
+  return { open: open, near: near }
+}
+
+// The energy result of every room
+const analyses = computed(function () {
+  const list = []
+  for (const room of plan.value.rooms) {
+    const result = analyse(room.dimension, placedOf(room), room.name, openLinkOf(room))
+    result.roomId = String(room._id)
+    list.push(result)
+  }
+  return list
+})
+
+// The result row of one item (null if there is none)
+function rowOf(itemId) {
+  for (const a of analyses.value) {
+    const row = a.rows.find(function (x) {
+      return x.id === itemId
+    })
+    if (row) {
+      return row
+    }
+  }
+  return null
+}
+
+// One list of an item's result row ('factors', 'causedByOthers' or 'knockOn'). Empty if there is none.
+function rowListOf(itemId, key) {
+  const row = rowOf(itemId)
+  if (row === null) {
+    return []
+  }
+  return row[key] || []
+}
+
+// Add up one number (e.g. 'kwh') over all the rooms.
+function sumOf(key) {
+  let total = 0
+  for (const a of analyses.value) {
+    total = total + a[key]
+  }
+  return total
+}
+
+const ratedKwhYear = computed(function () {
+  return Math.round(sumOf('base'))
+})
+
+const totalKwhYear = computed(function () {
+  return Math.round(sumOf('kwh'))
+})
+
+// How many percent more energy the placement of the items costs
+const placementImpact = computed(function () {
+  if (sumOf('base')) {
+    return (sumOf('avoidKwh') / sumOf('base')) * 100
+  }
+  return 0
+})
+
+// The result of the selected room (undefined if no room is selected)
+function selectedAnalysis() {
+  return analyses.value.find(function (a) {
+    return a.roomId === selectedRoomId.value
+  })
+}
+
+// Tips that move something to save energy
+const recs = computed(function () {
+  const a = selectedAnalysis()
+  if (a === undefined || isMissing(a.recs)) {
+    return []
+  }
+  return a.recs
+})
+
+// Other tips
+const tips = computed(function () {
+  const a = selectedAnalysis()
+  if (a === undefined || isMissing(a.tips)) {
+    return []
+  }
+  return a.tips
+})
+
+// ============================================================
+// THE ROOM BREAKDOWN (the list shown when no room is selected)
+// ============================================================
 
 const ROOM_COLORS = { living: '#f59e0b', kitchen: '#0ea5e9', bedroom: '#8b5cf6', bathroom: '#10b981' }
-const roomBreakdown = computed(() => {
-  const rows = plan.value.rooms.map((r, i) => {
-    const raw = analyses.value[i]?.kwh ?? 0
-    return {
-      id: String(r._id), name: r.name, color: ROOM_COLORS[r.type] ?? '#94a3b8', raw,
-      kwh: Math.round(raw), items: r.placements.filter((p) => !isOpening(p)).length,
+
+// One row per room with its energy and its share of the total.
+// The shares are whole percentages that add up to exactly 100%.
+const roomBreakdown = computed(function () {
+  const rows = []
+  for (let i = 0; i < plan.value.rooms.length; i++) {
+    const room = plan.value.rooms[i]
+
+    let raw = 0
+    const a = analyses.value[i]
+    if (a && !isMissing(a.kwh)) {
+      raw = a.kwh
     }
+
+    let color = ROOM_COLORS[room.type]
+    if (isMissing(color)) {
+      color = '#94a3b8'
+    }
+
+    let itemCount = 0
+    for (const p of room.placements) {
+      if (!isOpening(p)) {
+        itemCount = itemCount + 1
+      }
+    }
+
+    rows.push({ id: String(room._id), name: room.name, color: color, raw: raw, kwh: Math.round(raw), items: itemCount })
+  }
+
+  let total = 0
+  for (const row of rows) {
+    total = total + row.raw
+  }
+
+  // each room's exact share, and the same share rounded down
+  const shares = []
+  const whole = []
+  for (const row of rows) {
+    let share = 0
+    if (total > 0) {
+      share = (row.raw / total) * 100
+    }
+    shares.push(share)
+    whole.push(Math.floor(share))
+  }
+
+  // the percentages that are still missing to reach 100 go to the rooms with the biggest leftover
+  let left = 0
+  if (total > 0) {
+    let wholeSum = 0
+    for (const w of whole) {
+      wholeSum = wholeSum + w
+    }
+    left = 100 - wholeSum
+  }
+  const leftovers = []
+  for (let i = 0; i < shares.length; i++) {
+    leftovers.push({ amount: shares[i] - whole[i], index: i })
+  }
+  leftovers.sort(function (a, b) {
+    return b.amount - a.amount
   })
-  const total = rows.reduce((n, r) => n + r.raw, 0)
-  const shares = rows.map((r) => (total > 0 ? (r.raw / total) * 100 : 0))
-  const whole = shares.map(Math.floor)
-  let left = total > 0 ? 100 - whole.reduce((n, v) => n + v, 0) : 0
-  shares.map((v, i) => [v - whole[i], i]).sort((a, b) => b[0] - a[0]).forEach(([, i]) => { if (left > 0) { whole[i]++; left-- } })
+  for (const leftover of leftovers) {
+    if (left > 0) {
+      whole[leftover.index] = whole[leftover.index] + 1
+      left = left - 1
+    }
+  }
+
+  for (let i = 0; i < rows.length; i++) {
+    rows[i].pct = shares[i]
+    if (rows[i].raw > 0 && whole[i] === 0) {
+      rows[i].pctLabel = '<1%'
+    } else {
+      rows[i].pctLabel = `${whole[i]}%`
+    }
+  }
+
+  // the room that uses the most energy comes first
+  rows.sort(function (a, b) {
+    return b.raw - a.raw
+  })
   return rows
-    .map((r, i) => ({ ...r, pct: shares[i], pctLabel: r.raw > 0 && whole[i] === 0 ? '<1%' : `${whole[i]}%` }))
-    .sort((a, b) => b.raw - a.raw)
 })
 
-const targetRoomName = computed(() => selectedRoom.value?.name ?? (plan.value.rooms.find((r) => r.type === 'living') ?? plan.value.rooms[0])?.name ?? 'your home')
+// The living room, or the first room if there is no living room (undefined if there are no rooms)
+function defaultRoom() {
+  const living = plan.value.rooms.find(function (room) {
+    return room.type === 'living'
+  })
+  if (living) {
+    return living
+  }
+  return plan.value.rooms[0]
+}
+
+// The room that new appliances go into
+const targetRoomName = computed(function () {
+  if (selectedRoom.value && !isMissing(selectedRoom.value.name)) {
+    return selectedRoom.value.name
+  }
+  const room = defaultRoom()
+  if (room && !isMissing(room.name)) {
+    return room.name
+  }
+  return 'your home'
+})
+
+// ============================================================
+// UNDO AND REDO
+// ============================================================
+// Before every change we keep the rooms as text (a "snapshot").
+// Undo sends the last snapshot back to the server.
 
 const MAX_HISTORY = 50
 const undoStack = ref([])
 const redoStack = ref([])
-const canUndo = computed(() => undoStack.value.length > 0)
-const canRedo = computed(() => redoStack.value.length > 0)
-const snapshot = () => JSON.stringify(plan.value.rooms)
+const history = useLayoutHistory()
+
+const canUndo = computed(function () {
+  return undoStack.value.length > 0
+})
+
+const canRedo = computed(function () {
+  return redoStack.value.length > 0
+})
+
+function snapshot() {
+  return JSON.stringify(plan.value.rooms)
+}
+
+function saveHistory() {
+  history.save(scopeId.value, plan.value.rooms, undoStack.value, redoStack.value)
+}
+
+function flushHistory() {
+  history.flush()
+}
+
+// Get the Undo / Redo lists of the layout that is shown.
+function loadHistory() {
+  const saved = history.load(scopeId.value, plan.value.rooms)
+  undoStack.value = saved.undo
+  redoStack.value = saved.redo
+}
+
+// A change was saved: keep the snapshot from before it, so it can be undone.
 function remember(before) {
   undoStack.value.push(before)
-  if (undoStack.value.length > MAX_HISTORY) undoStack.value.shift()
+  if (undoStack.value.length > MAX_HISTORY) {
+    undoStack.value.shift()
+  }
   redoStack.value = []
   saveHistory()
 }
 
-const history = createLayoutHistory()
-const saveHistory = () => history.save(scopeId.value, plan.value.rooms, undoStack.value, redoStack.value)
-const flushHistory = () => history.flush()
-
-function loadHistory() {
-  const { undo, redo } = history.load(scopeId.value, plan.value.rooms)
-  undoStack.value = undo
-  redoStack.value = redo
+// Show the rooms and footprint that the server sent back.
+function applyGeometry(result) {
+  plan.value.rooms = result.rooms
+  plan.value.footprint = result.footprint
+  if (isMissing(result.warnings)) {
+    warnings.value = []
+  } else {
+    warnings.value = result.warnings
+  }
 }
 
-let chain = Promise.resolve()
-const enqueue = (fn) => { const p = chain.then(fn); chain = p.catch(() => {}); return p }
-
-const applyGeometry = (res) => {
-  plan.value = { ...plan.value, rooms: res.rooms, footprint: res.footprint }
-  warnings.value = res.warnings ?? []
+// Show the same rooms again as a new list, so the 3D view draws them again.
+// Used when a change was refused and the 3D view has to jump back.
+function redrawRooms() {
+  plan.value.rooms = plan.value.rooms.slice()
 }
 
-function commit(fn) {
-  return enqueue(async () => {
+// Save a change to the layout. "task" is a function that sends the change to the server
+// and gives back the new rooms. Gives the server's answer, or null if it failed.
+function commit(task) {
+  return enqueue(async function () {
     const before = snapshot()
     try {
-      const res = await fn()
-      applyGeometry(res)
+      const result = await task()
+      applyGeometry(result)
       remember(before)
-      return res
-    } catch (e) { problem(reasonOf(e), 'Could not save that change'); return null }
+      return result
+    } catch (error) {
+      problem(reasonOf(error), 'Could not save that change')
+      return null
+    }
   })
 }
-const run = async (fn) => !!(await commit(fn))
 
+// Same as commit(), but gives true or false.
+async function run(task) {
+  const result = await commit(task)
+  if (result) {
+    return true
+  }
+  return false
+}
+
+// Go one step back (from = undoStack, to = redoStack) or forward (from = redoStack, to = undoStack).
 function travel(from, to) {
-  return enqueue(async () => {
+  return enqueue(async function () {
     const target = from.value[from.value.length - 1]
-    if (!target) return
+    if (!target) {
+      return
+    }
     const current = snapshot()
     try {
       applyGeometry(await restoreLayout(hid(), JSON.parse(target), planScope()))
       from.value.pop()
       to.value.push(current)
       saveHistory()
-    } catch (e) { problem(reasonOf(e), 'Could not undo or redo') }
+    } catch (error) {
+      problem(reasonOf(error), 'Could not undo or redo')
+    }
   })
 }
-const undo = () => travel(undoStack, redoStack)
-const redo = () => travel(redoStack, undoStack)
 
-const isConnected = (a, b) =>
-  a.placements.some((p) => isOpening(p) && p.connectsTo === b.name) || (a.openWalls || []).some((o) => o.to === b.name)
-const DOOR_FIT = 1.1
-const unconnectedNeighbours = (room) => plan.value.rooms.filter((o) => {
-  if (o === room || isConnected(room, o)) return false
-  const s = sharedWall(room, o)
-  return s && s.length >= DOOR_FIT
-})
+function undo() {
+  return travel(undoStack, redoStack)
+}
+
+function redo() {
+  return travel(redoStack, undoStack)
+}
+
+// ============================================================
+// LOCKING THE ROOM SIZES AND THE HAMMER
+// ============================================================
 
 const LOCK_KEY = 'ecohome.3d.locked'
 const hammer = ref(false)
 const layoutLocked = ref(false)
-try { layoutLocked.value = localStorage.getItem(LOCK_KEY) === '1' } catch { /* storage can be blocked */ }
-watch(layoutLocked, (on) => {
-  try { on ? localStorage.setItem(LOCK_KEY, '1') : localStorage.removeItem(LOCK_KEY) } catch { /* ignore */ }
-  if (on) hammer.value = false
+
+try {
+  layoutLocked.value = localStorage.getItem(LOCK_KEY) === '1'
+} catch (error) {
+  // storage can be blocked
+}
+
+// Remember the lock. Turning it on also puts the hammer down.
+watch(layoutLocked, function (on) {
+  try {
+    if (on) {
+      localStorage.setItem(LOCK_KEY, '1')
+    } else {
+      localStorage.removeItem(LOCK_KEY)
+    }
+  } catch (error) {
+    // storage can be blocked
+  }
+  if (on) {
+    hammer.value = false
+  }
 })
 
-const onEditRect = async ({ roomId, rect }) => {
-  if (layoutLocked.value) return
-  const before = new Set((roomOf(roomId) ? unconnectedNeighbours(roomOf(roomId)) : []).map((o) => o.name))
-  const saved = await run(() => setRoomRect(hid(), roomId, rect, planScope()))
-  if (saved) {
-    const moved = roomOf(roomId)
-    const fresh = moved ? unconnectedNeighbours(moved).filter((o) => !before.has(o.name)) : []
-    if (fresh.length) {
-      flash(`The ${moved.name} now touches the ${fresh.map((o) => o.name).join(' and the ')}. To connect them, drag a door onto the wall they share, or add a door from the catalogue.`, 9000)
+function toggleHammer() {
+  if (layoutLocked.value) {
+    return
+  }
+  hammer.value = !hammer.value
+}
+
+// ============================================================
+// RESIZING AND MOVING ROOMS
+// ============================================================
+
+// Is room a connected to room b? (by a door, or by a knocked-out wall)
+function isConnected(a, b) {
+  for (const p of a.placements) {
+    if (isOpening(p) && p.connectsTo === b.name) {
+      return true
     }
   }
-  if (!saved) plan.value = { ...plan.value, rooms: [...plan.value.rooms] }
-}
-
-const selectedOpening = computed(() => {
-  for (const r of plan.value.rooms) {
-    const p = r.placements.find((x) => String(x._id) === selectedItemId.value)
-    if (p && isOpening(p)) return { roomId: String(r._id), id: String(p._id), name: nameOf(p) }
+  const open = a.openWalls || []
+  for (const o of open) {
+    if (o.to === b.name) {
+      return true
+    }
   }
-  return null
-})
-const removeSelectedOpening = () => {
-  const o = selectedOpening.value
-  if (o) run(() => removeOpening(hid(), o.roomId, o.id, planScope()))
+  return false
 }
 
-const HANGING = new Set(['ac', 'tv', 'heater']) 
-function hangingOnSharedWall(a, b) {
+// A shared wall must be at least this long (metres) to fit a door.
+const DOOR_FIT = 1.1
+
+// The rooms that touch this room along a wall long enough for a door, but are not connected to it.
+function unconnectedNeighbours(room) {
   const found = []
-  for (const [room, other] of [[a, b], [b, a]]) {
-    const s = sharedWall(room, other)
-    const range = s && sharedRange(room, other, s.wall)
-    if (!range) continue
-    for (const p of room.placements) {
-      if (p.wall !== s.wall || isOpening(p) || p.onPlacementId) continue
-      const spec = resolveSpec(p.applianceTypeKey, p.category)
-      if (spec.mode === 'wall' && HANGING.has(spec.kind) && p.t + spec.w / 2 > range.t0 && p.t - spec.w / 2 < range.t1) found.push(nameOf(p))
+  for (const other of plan.value.rooms) {
+    if (other === room || isConnected(room, other)) {
+      continue
+    }
+    const shared = sharedWall(room, other)
+    if (shared && shared.length >= DOOR_FIT) {
+      found.push(other)
     }
   }
   return found
 }
 
-async function onHammerWall({ roomId, otherId, open }) {
-  const r = plan.value.rooms.find((x) => String(x._id) === roomId)
-  const other = plan.value.rooms.find((x) => String(x._id) === otherId)
-  if (!r || !other) return
-  if (open) {
-    const hanging = hangingOnSharedWall(r, other)
-    if (hanging.length) return flash(`Move the ${[...new Set(hanging)].join(' and the ')} off that wall first. It would be left hanging in the gap.`, 6000)
+// The user finished dragging a room's edge. payload = { roomId, rect }
+async function onEditRect(payload) {
+  if (layoutLocked.value) {
+    return
   }
-  const saved = await run(() => setWallOpen(hid(), roomId, otherId, open, planScope()))
-  if (saved) flash(open ? `The wall between the ${r.name} and the ${other.name} is gone.` : `The wall between the ${r.name} and the ${other.name} is back, with a door in it.`, 3500, 'ok')
-}
+  const roomId = payload.roomId
+  const rect = payload.rect
 
-async function onMoveOpening({ roomId, id, wall, t }) {
-  const saved = await run(() => moveOpening(hid(), roomId, id, wall, t, planScope()))
-  preview.value = null
-  if (!saved) plan.value = { ...plan.value, rooms: [...plan.value.rooms] }
-}
-
-const roomOf = (roomId) => plan.value.rooms.find((x) => String(x._id) === roomId)
-
-function openingSpots(r, appliance) {
-  const spec = resolveSpec(appliance.applianceTypeKey, appliance.category)
-  const dim = r.dimension, others = placedOf(r)
-  const lenOf = (w) => (w % 2 ? dim.d : dim.w)
-  const margin = Math.max(0.6, spec.w / 2 + 0.15)
-  const walls = [0, 1, 2, 3].map((w) => ({ w, centre: lenOf(w) / 2, preferred: false }))
-  if (spec.kind === 'door' && !needsOutsideWall(spec)) {
-    for (const o of plan.value.rooms) {
-      if (o === r || isConnected(r, o)) continue
-      const s = sharedWall(r, o)
-      if (s && s.length >= DOOR_FIT && !walls[s.wall].preferred) Object.assign(walls[s.wall], { preferred: true, centre: s.t })
+  // which rooms touched this room without a door before the change?
+  const namesBefore = []
+  const roomBefore = roomOf(roomId)
+  if (roomBefore) {
+    for (const o of unconnectedNeighbours(roomBefore)) {
+      namesBefore.push(o.name)
     }
   }
-  walls.sort((a, b) => (b.preferred - a.preferred) || (lenOf(b.w) - lenOf(a.w)))
+
+  const saved = await run(function () {
+    return setRoomRect(hid(), roomId, rect, planScope())
+  })
+
+  if (saved) {
+    // new neighbours? then remind the user that they can add a door
+    const moved = roomOf(roomId)
+    const newNames = []
+    if (moved) {
+      for (const o of unconnectedNeighbours(moved)) {
+        if (namesBefore.indexOf(o.name) === -1) {
+          newNames.push(o.name)
+        }
+      }
+    }
+    if (newNames.length) {
+      flash(`The ${moved.name} now touches the ${newNames.join(' and the ')}. To connect them, drag a door onto the wall they share, or add a door from the catalogue.`, 9000)
+    }
+  } else {
+    redrawRooms()
+  }
+}
+
+// ============================================================
+// DOORS AND WINDOWS
+// ============================================================
+
+// The door or window that is selected (null if something else, or nothing, is selected)
+const selectedOpening = computed(function () {
+  for (const room of plan.value.rooms) {
+    const p = findPlacement(room, selectedItemId.value)
+    if (p && isOpening(p)) {
+      return { roomId: String(room._id), id: String(p._id), name: nameOf(p) }
+    }
+  }
+  return null
+})
+
+function removeSelectedOpening() {
+  const opening = selectedOpening.value
+  if (opening) {
+    run(function () {
+      return removeOpening(hid(), opening.roomId, opening.id, planScope())
+    })
+  }
+}
+
+// The user dragged a door or window to another spot. payload = { roomId, id, wall, t }
+async function onMoveOpening(payload) {
+  const saved = await run(function () {
+    return moveOpening(hid(), payload.roomId, payload.id, payload.wall, payload.t, planScope())
+  })
+  preview.value = null
+  if (!saved) {
+    redrawRooms()
+  }
+}
+
+// Things that hang on a wall. They cannot hang in the gap of a knocked-out wall.
+const HANGING_KINDS = ['ac', 'tv', 'heater']
+
+// Add the names of the things hanging on the wall that "room" shares with "other".
+function addHangingNames(room, other, names) {
+  const shared = sharedWall(room, other)
+  let range = null
+  if (shared) {
+    range = sharedRange(room, other, shared.wall)
+  }
+  if (!range) {
+    return
+  }
+
+  for (const p of room.placements) {
+    if (p.wall !== shared.wall || isOpening(p) || p.onPlacementId) {
+      continue
+    }
+    const spec = resolveSpec(p.applianceTypeKey, p.category)
+    const isHanging = spec.mode === 'wall' && HANGING_KINDS.indexOf(spec.kind) !== -1
+    if (isHanging && p.t + spec.w / 2 > range.t0 && p.t - spec.w / 2 < range.t1) {
+      names.push(nameOf(p))
+    }
+  }
+}
+
+// The names of the things hanging on the wall between two rooms (looking from both sides).
+function hangingOnSharedWall(a, b) {
+  const names = []
+  addHangingNames(a, b, names)
+  addHangingNames(b, a, names)
+  return names
+}
+
+// The user clicked a wall with the hammer. payload = { roomId, otherId, open }
+async function onHammerWall(payload) {
+  const roomId = payload.roomId
+  const otherId = payload.otherId
+  const open = payload.open
+
+  const room = roomOf(roomId)
+  const other = roomOf(otherId)
+  if (!room || !other) {
+    return
+  }
+
+  // before knocking the wall out, nothing may hang on it
+  if (open) {
+    const hanging = hangingOnSharedWall(room, other)
+    if (hanging.length) {
+      const names = []
+      for (const name of hanging) {
+        addOnce(names, name)
+      }
+      flash(`Move the ${names.join(' and the ')} off that wall first. It would be left hanging in the gap.`, 6000)
+      return
+    }
+  }
+
+  const saved = await run(function () {
+    return setWallOpen(hid(), roomId, otherId, open, planScope())
+  })
+  if (saved) {
+    if (open) {
+      flash(`The wall between the ${room.name} and the ${other.name} is gone.`, 3500, 'ok')
+    } else {
+      flash(`The wall between the ${room.name} and the ${other.name} is back, with a door in it.`, 3500, 'ok')
+    }
+  }
+}
+
+// How long is a wall? Walls 0 and 2 run along the width, walls 1 and 3 along the depth.
+function lengthOfWall(dim, wall) {
+  if (wall % 2) {
+    return dim.d
+  }
+  return dim.w
+}
+
+// A copy of the spot, with the spec added, so that isBlocked() can check it.
+function candidateAt(spec, pos) {
+  const candidate = { spec: spec }
+  copyKeys(pos, candidate)
+  return candidate
+}
+
+// Find every spot on the walls of a room where a door or window fits.
+// Gives { spots, skipped }:
+//   spots    a list of [wall, t]
+//   skipped  names of rooms where a door would not fit because something blocks the other side
+function openingSpots(room, appliance) {
+  const spec = resolveSpec(appliance.applianceTypeKey, appliance.category)
+  const dim = room.dimension
+  const others = placedOf(room)
+  const margin = Math.max(0.6, spec.w / 2 + 0.15)
+
+  // The 4 walls. "centre" is where we start looking, "preferred" walls come first.
+  const walls = []
+  for (let w = 0; w < 4; w++) {
+    walls.push({ w: w, centre: lengthOfWall(dim, w) / 2, preferred: false })
+  }
+
+  // A door prefers a wall it shares with a room it is not connected to yet.
+  if (spec.kind === 'door' && !needsOutsideWall(spec)) {
+    for (const other of plan.value.rooms) {
+      if (other === room || isConnected(room, other)) {
+        continue
+      }
+      const shared = sharedWall(room, other)
+      if (shared && shared.length >= DOOR_FIT && !walls[shared.wall].preferred) {
+        walls[shared.wall].preferred = true
+        walls[shared.wall].centre = shared.t
+      }
+    }
+  }
+
+  // preferred walls first, then the longer walls
+  walls.sort(function (a, b) {
+    const byPreferred = Number(b.preferred) - Number(a.preferred)
+    if (byPreferred !== 0) {
+      return byPreferred
+    }
+    return lengthOfWall(dim, b.w) - lengthOfWall(dim, a.w)
+  })
+
   const spots = []
-  const skipped = new Set()
-  const beyond = new Map()
-  for (const { w, centre, preferred } of walls) {
+  const skipped = []
+  const beyond = new Map() // doorBlockedBeyond() (placement.js) uses a Map to remember what it already checked
+
+  for (const wallInfo of walls) {
+    const w = wallInfo.w
+    const centre = wallInfo.centre
     let found = 0
-    const refused = new Set()
+    const refused = []
+
+    // try a spot every 10 cm along the wall, starting at the centre
     const ts = []
-    for (let t = margin; t <= lenOf(w) - margin + 1e-9; t += 0.1) ts.push(Math.round(t * 10) / 10)
-    ts.sort((a, b) => Math.abs(a - centre) - Math.abs(b - centre))
+    for (let t = margin; t <= lengthOfWall(dim, w) - margin + 1e-9; t += 0.1) {
+      ts.push(Math.round(t * 10) / 10)
+    }
+    ts.sort(function (a, b) {
+      return Math.abs(a - centre) - Math.abs(b - centre)
+    })
+
     for (const t of ts) {
       const pos = onWall(dim, spec, w, t)
-      if (!pos || isBlocked({ spec, ...pos }, others)) continue
-      if (needsOutsideWall(spec) && roomBehindOpening(plan.value.rooms, r, spec, pos)) continue
-      const behind = doorBlockedBeyond(plan.value.rooms, r, spec, pos, { cache: beyond })
-      if (behind) { if (!behind.straddle) refused.add(behind.name); continue }
-      spots.push([w, pos.t]); found++
+      if (!pos || isBlocked(candidateAt(spec, pos), others)) {
+        continue
+      }
+      if (needsOutsideWall(spec) && roomBehindOpening(plan.value.rooms, room, spec, pos)) {
+        continue
+      }
+      const behind = doorBlockedBeyond(plan.value.rooms, room, spec, pos, { cache: beyond })
+      if (behind) {
+        if (!behind.straddle) {
+          addOnce(refused, behind.name)
+        }
+        continue
+      }
+      spots.push([w, pos.t])
+      found = found + 1
     }
-    if (preferred && !found) refused.forEach((n) => skipped.add(n))
+
+    // a preferred wall with no spot: tell the user which rooms were in the way
+    if (wallInfo.preferred && !found) {
+      for (const name of refused) {
+        addOnce(skipped, name)
+      }
+    }
   }
-  const out = spots.slice(0, 300)
-  out.skipped = [...skipped]
-  return out
+
+  return { spots: spots.slice(0, 300), skipped: skipped }
 }
 
-const handleAddAppliance = async (appliance) => {
+// ============================================================
+// ADDING, MOVING AND REMOVING ITEMS
+// ============================================================
+
+// The user pressed "+ Add" in the catalogue.
+async function handleAddAppliance(appliance) {
+  // no room selected: use the living room (or the first room)
   if (!selectedRoom.value) {
-    const first = plan.value.rooms.find((r) => r.type === 'living') ?? plan.value.rooms[0]
-    if (!first) return
+    const first = defaultRoom()
+    if (!first) {
+      return
+    }
     selectedRoomId.value = String(first._id)
   }
-  const r = selectedRoom.value
+  const room = selectedRoom.value
+  const roomId = String(room._id)
 
+  // doors and windows go onto a wall
   if (isBuild(appliance.category) && OPENING_KEYS.has(appliance.applianceTypeKey)) {
-    const roomId = String(r._id)
-    const spots = openingSpots(r, appliance)
-    if (!spots.length) return flash(`There is no clear space on the ${r.name} walls for that. Move an appliance away from the wall, or make the room bigger.`)
-    const added = await run(() => addOpening(hid(), roomId, appliance.applianceTypeKey, spots, planScope()))
-    if (added && spots.skipped?.length)
-      flash(`A countertop or appliance in the ${spots.skipped.join(' / ')} is in the way of a door there, so this door went on another wall. Move it first if you want the rooms joined.`, 9000)
+    const found = openingSpots(room, appliance)
+    if (!found.spots.length) {
+      flash(`There is no clear space on the ${room.name} walls for that. Move an appliance away from the wall, or make the room bigger.`)
+      return
+    }
+    const added = await run(function () {
+      return addOpening(hid(), roomId, appliance.applianceTypeKey, found.spots, planScope())
+    })
+    if (added && found.skipped.length) {
+      flash(`A countertop or appliance in the ${found.skipped.join(' / ')} is in the way of a door there, so this door went on another wall. Move it first if you want the rooms joined.`, 9000)
+    }
     return added
   }
+
+  // everything else: find a free spot in the room
   const spec = resolveSpec(appliance.applianceTypeKey, appliance.category)
-  const others = placedOf(r)
-  const spot = findSpot({ ...r.dimension }, spec, others)
+  const others = placedOf(room)
+  const roomSize = {}
+  copyKeys(room.dimension, roomSize)
+  const spot = findSpot(roomSize, spec, others)
+
   if (!spot) {
     if (spec.mode === 'top') {
-      const hasCounter = others.some((o) => o.spec.kind === 'counter')
-      return flash(hasCounter
-        ? 'No free space on the countertop (the sink can\'t be used). Clear some space or add another countertop.'
-        : 'Add a countertop first, then place this on it.')
+      let hasCounter = false
+      for (const o of others) {
+        if (o.spec.kind === 'counter') {
+          hasCounter = true
+        }
+      }
+      if (hasCounter) {
+        flash('No free space on the countertop (the sink can\'t be used). Clear some space or add another countertop.')
+      } else {
+        flash('Add a countertop first, then place this on it.')
+      }
+      return
     }
-    return flash(`No free space in the ${r.name}. Move something, or make the room bigger.`)
+    flash(`No free space in the ${room.name}. Move something, or make the room bigger.`)
+    return
   }
-  const roomId = String(r._id)
-  await enqueue(async () => {
+
+  await enqueue(async function () {
     const before = snapshot()
     try {
       const saved = await addPlacement(roomId, newPlacementDoc(appliance, spot), planScope())
-      roomOf(roomId)?.placements.push(saved)
+      const target = roomOf(roomId)
+      if (target) {
+        target.placements.push(saved)
+      }
       remember(before)
       selectedItemId.value = String(saved._id)
-    } catch (e) {
-      problem(reasonOf(e), 'Could not add it')
+    } catch (error) {
+      problem(reasonOf(error), 'Could not add it')
     }
   })
 }
 
-function onMoveItems({ roomId, updates }) {
-  return enqueue(async () => {
+// Items were moved or turned in the 3D view. payload = { roomId, updates }
+// Each update is { id, x, z, rotY, wall, t, cu }.
+function onMoveItems(payload) {
+  const roomId = payload.roomId
+  const updates = payload.updates
+
+  return enqueue(async function () {
     const before = snapshot()
-    const r = roomOf(roomId)
-    if (!r) return
+    const room = roomOf(roomId)
+    if (!room) {
+      return
+    }
     try {
+      // show the new positions at once, then save them
       const moves = []
-      for (const u of updates) {
-        const { id, ...pos } = u
-        const p = r.placements.find((x) => String(x._id) === id)
-        if (!p) continue
-        Object.assign(p, pos)
-        moves.push(u)
+      for (const update of updates) {
+        const placement = findPlacement(room, update.id)
+        if (!placement) {
+          continue
+        }
+        const newPosition = {}
+        copyKeys(update, newPosition)
+        delete newPosition.id
+        copyKeys(newPosition, placement)
+        moves.push(update)
       }
-      if (!moves.length) return
+      if (!moves.length) {
+        return
+      }
       await moveManyPlacements(roomId, moves, planScope())
       remember(before)
-    } catch (e) {
-      problem(reasonOf(e), 'Could not save the move')
-      try { await reloadScope({ keepHistory: true }) } catch { }
+    } catch (error) {
+      problem(reasonOf(error), 'Could not save the move')
+      try {
+        await reloadScope(true)
+      } catch (reloadError) {
+        // the problem was already shown
+      }
     } finally {
       preview.value = null
     }
   })
 }
-const applyRec = (rec) => {
-  const r = selectedRoom.value
-  if (!r) return
-  const { x, z, rotY, wall, t, cu } = rec.to
-  onMoveItems({ roomId: String(r._id), updates: [{ id: rec.id, x, z, rotY, wall, t, cu: cu ?? 0 }] })
+
+// The user pressed "Apply" on a recommendation: move the item where the recommendation says.
+function applyRec(rec) {
+  const room = selectedRoom.value
+  if (!room) {
+    return
+  }
+  const to = rec.to
+  let cu = 0
+  if (!isMissing(to.cu)) {
+    cu = to.cu
+  }
+  onMoveItems({
+    roomId: String(room._id),
+    updates: [{ id: rec.id, x: to.x, z: to.z, rotY: to.rotY, wall: to.wall, t: to.t, cu: cu }],
+  })
   selectedItemId.value = rec.id
 }
 
+// What is the id of the item that this placement sits on? ('' if none)
+function onIdOf(placement) {
+  if (isMissing(placement.onPlacementId)) {
+    return ''
+  }
+  return String(placement.onPlacementId)
+}
+
+// Remove one item. Things that sit on it (like a sink on a countertop) go too.
 function removeItem(id) {
-  const r = selectedRoom.value
-  if (!r) return
-  const roomId = String(r._id)
-  return enqueue(async () => {
+  const room = selectedRoom.value
+  if (!room) {
+    return
+  }
+  const roomId = String(room._id)
+
+  return enqueue(async function () {
     const before = snapshot()
     try {
       await removePlacement(roomId, id, planScope())
-      const room = roomOf(roomId)
-      if (room) room.placements = room.placements.filter((p) => String(p._id) !== id && String(p.onPlacementId ?? '') !== id)
+      const target = roomOf(roomId)
+      if (target) {
+        const kept = []
+        for (const p of target.placements) {
+          if (String(p._id) !== id && onIdOf(p) !== id) {
+            kept.push(p)
+          }
+        }
+        target.placements = kept
+      }
       remember(before)
-    } catch (e) { problem(reasonOf(e), 'Could not remove it') }
+    } catch (error) {
+      problem(reasonOf(error), 'Could not remove it')
+    }
   })
 }
 
+// Remove every appliance and piece of furniture from the selected room.
+// Countertops, doors and windows stay.
 async function clearRoomItems() {
-  const r = selectedRoom.value
-  if (!r) return
-  const roomId = String(r._id), listed = new Set(roomItems.value.map((i) => i.id))
+  const room = selectedRoom.value
+  if (!room) {
+    return
+  }
+  const roomId = String(room._id)
+
+  const listedIds = []
+  for (const item of roomItems.value) {
+    listedIds.push(item.id)
+  }
+
   const yes = await dialog.value.confirm({
-    title: `Clear the ${r.name}?`,
+    title: `Clear the ${room.name}?`,
     message: 'This removes every appliance and piece of furniture in this room. Countertops, doors and windows stay. You can undo it afterwards.',
     okText: 'Clear room',
     danger: true,
   })
-  if (!yes) return
-  return enqueue(async () => {
+  if (!yes) {
+    return
+  }
+
+  return enqueue(async function () {
     const before = snapshot()
     try {
-      const kept = roomOf(roomId).placements.filter((p) => !listed.has(String(p._id)) || isCountertop(p))
-      const keptIds = new Set(kept.map((p) => String(p._id)))
-      const final = kept.filter((p) => !p.onPlacementId || keptIds.has(String(p.onPlacementId)))
-      const res = await saveRoomPlacements(roomId, final, planScope())
-      roomOf(roomId).placements = res.placements
+      // keep what is not in the list, and the countertops
+      const kept = []
+      for (const p of roomOf(roomId).placements) {
+        if (listedIds.indexOf(String(p._id)) === -1 || isCountertop(p)) {
+          kept.push(p)
+        }
+      }
+      const keptIds = []
+      for (const p of kept) {
+        keptIds.push(String(p._id))
+      }
+
+      // something that sat on a removed item goes too
+      const final = []
+      for (const p of kept) {
+        if (!p.onPlacementId || keptIds.indexOf(String(p.onPlacementId)) !== -1) {
+          final.push(p)
+        }
+      }
+
+      const result = await saveRoomPlacements(roomId, final, planScope())
+      roomOf(roomId).placements = result.placements
       remember(before)
-    } catch (e) { problem(reasonOf(e), 'Could not clear the room') }
+    } catch (error) {
+      problem(reasonOf(error), 'Could not clear the room')
+    }
   })
 }
 
-const typing = (e) => { const t = e.target; return !!t && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName)) }
-function onKey(e) {
-  if (typing(e) || e.altKey) return
-  const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase()
-  if (mod && k === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo() }
-  else if (mod && k === 'y') { e.preventDefault(); redo() }
-  else if (!mod && (e.key === 'Delete' || e.key === 'Backspace') && selectedItemId.value && roomItems.value.some((i) => i.id === selectedItemId.value)) {
-    e.preventDefault()
+// The remove button (✕) on a row: remove the item, but do not select the row.
+function onRemoveClick(event, id) {
+  event.stopPropagation()
+  removeItem(id)
+}
+
+// ============================================================
+// KEYBOARD SHORTCUTS
+// ============================================================
+
+// Is the user typing in a text field? Then the shortcuts must not react.
+function isTyping(event) {
+  const target = event.target
+  if (!target) {
+    return false
+  }
+  if (target.isContentEditable) {
+    return true
+  }
+  return target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT'
+}
+
+// Ctrl+Z = undo, Ctrl+Shift+Z or Ctrl+Y = redo, Delete = remove the selected item.
+function onKey(event) {
+  if (isTyping(event) || event.altKey) {
+    return
+  }
+  const withCtrl = event.ctrlKey || event.metaKey
+  const key = event.key.toLowerCase()
+  const isDelete = event.key === 'Delete' || event.key === 'Backspace'
+
+  if (withCtrl && key === 'z') {
+    event.preventDefault()
+    if (event.shiftKey) {
+      redo()
+    } else {
+      undo()
+    }
+  } else if (withCtrl && key === 'y') {
+    event.preventDefault()
+    redo()
+  } else if (!withCtrl && isDelete && selectedItemId.value && isListedItem(selectedItemId.value)) {
+    event.preventDefault()
     removeItem(selectedItemId.value)
-  } else if (!mod && (e.key === 'Delete' || e.key === 'Backspace') && selectedOpening.value) {
-    e.preventDefault()
+  } else if (!withCtrl && isDelete && selectedOpening.value) {
+    event.preventDefault()
     removeSelectedOpening()
   }
 }
-onMounted(() => {
+
+// ============================================================
+// WHEN THE PAGE OPENS AND CLOSES
+// ============================================================
+
+onMounted(loadAll)
+
+onMounted(function () {
   window.addEventListener('keydown', onKey)
   window.addEventListener('pagehide', flushHistory)
+
+  // the navigation bar changes height when the window is resized or its menu opens or closes
+  window.addEventListener('resize', measureNav)
+  document.addEventListener('shown.bs.collapse', measureNav)
+  document.addEventListener('hidden.bs.collapse', measureNav)
   measureNav()
-  const nav = document.querySelector('.eco-navbar')
-  if (nav && 'ResizeObserver' in window) { navObserver = new ResizeObserver(measureNav); navObserver.observe(nav) }
+
   document.documentElement.classList.add('no-page-scroll')
 })
-onBeforeUnmount(() => {
+
+onUnmounted(function () {
+  clearTimeout(loaderTimer)
+  clearTimeout(loaderFadeTimer)
   clearTimeout(sceneTimer)
   flushHistory()
   window.removeEventListener('pagehide', flushHistory)
   window.removeEventListener('keydown', onKey)
-  navObserver?.disconnect()
+  window.removeEventListener('resize', measureNav)
+  document.removeEventListener('shown.bs.collapse', measureNav)
+  document.removeEventListener('hidden.bs.collapse', measureNav)
   document.documentElement.classList.remove('no-page-scroll')
 })
 </script>
 
 <style>
-html.no-page-scroll,
-html.no-page-scroll body {
-  overflow: hidden;
-  overscroll-behavior: none;
+/* Big screens: the page fits the window and never scrolls. Phones and tablets
+   (narrower than 992px, or shorter than 521px) scroll like a normal page instead. */
+@media (min-width: 992px) and (min-height: 521px) {
+  html.no-page-scroll,
+  html.no-page-scroll body {
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
 }
 </style>
 
@@ -1660,20 +2790,87 @@ html.no-page-scroll body {
 .dock-caret { display: inline-flex; align-items: center; gap: 4px; color: var(--eco-dark); font-size: 0.82rem; font-weight: 700; }
 .dock-body { height: 214px; border-top: 1px solid var(--line); }
 
-/* Narrower screens: sidebar shrinks, then drops under the canvas */
+/* Laptops and small desktops: the sidebar gets a little narrower */
 @media (max-width: 1199px) {
   .side-column { flex-basis: 288px; width: 288px; }
 }
-@media (max-width: 767px) {
-  .spatial-page { padding: 8px 10px 10px; gap: 8px; }
-  .spatial-body { flex-direction: column; gap: 10px; }
-  .side-column { flex: 0 0 38%; width: auto; }
-  .stat-value { font-size: 1.6rem; }
-  .layer-pill { padding: 4px 9px; font-size: 0.75rem; }
-  .canvas-messages { bottom: 72px; }
-  .dock-body { height: 196px; }
-  .canvas-card { border-radius: 18px; }
+
+.layer-short { display: none; }
+
+/* Tablets, phones and short (landscape) screens: the page scrolls.
+   The 3D view keeps a fixed height, then the energy card, recommendations, room
+   breakdown and catalogue stack underneath it. Keep this query the exact opposite
+   of the one in the unscoped <style> above (min-width: 992px and min-height: 521px). */
+@media (max-width: 991px), (max-height: 520px) {
+  .spatial-page {
+    height: auto;
+    min-height: calc(100dvh - var(--nav-h, 72px));
+    overflow: visible;
+    padding: 10px 14px 18px;
+    gap: 12px;
+  }
+  /* The sky is fixed to the page, so it still fills the window while scrolling */
+  .spatial-sky { position: fixed; top: var(--nav-h, 72px); }
+
+  .spatial-body { flex: 0 0 auto; flex-direction: column; gap: 12px; }
+  .canvas-card { flex: 0 0 auto; height: clamp(320px, 56dvh, 640px); border-radius: 18px; }
+  .canvas-messages { bottom: 64px; }
+
+  .side-column { flex: 0 0 auto; width: auto; min-height: auto; }
+  .stat-value { font-size: 2rem; }
+  .recs-card { max-height: none; }
+  .recs-scroll { max-height: 260px; }
+  .items-card { flex: 0 0 auto; }
+  .item-list, .breakdown-list { flex: 0 0 auto; overflow: visible; }
+
+  .dock-body { height: 300px; }
+
+  /* Finger-sized tap targets */
+  .hist-btn { width: 40px; height: 38px; }
+  .tools-btn { height: 38px; }
+  .layer-pill { padding-top: 8px; padding-bottom: 8px; }
+  .lock-switch { padding-top: 7px; padding-bottom: 7px; }
+  .btn-remove { width: 34px; height: 34px; opacity: 1; }
+  .breakdown-row { padding-top: 10px; padding-bottom: 10px; }
+  .item-row { padding: 11px; }
 }
+
+/* Tablets: energy card on top, recommendations and rooms side by side */
+@media (min-width: 640px) and (max-width: 991px) and (min-height: 521px) {
+  .side-column { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+  .side-column > .stat-card,
+  .side-column > .items-card,
+  .side-column > .panel-card:not(.recs-card) { grid-column: 1 / -1; }
+  /* when there are recommendations, they sit beside the room list */
+  .side-column > .recs-card + .items-card { grid-column: auto; }
+  .canvas-card { height: clamp(380px, 52dvh, 640px); }
+}
+
+/* Phones */
+@media (max-width: 639px) {
+  .spatial-page { padding: 8px 10px 16px; gap: 10px; }
+  .spatial-toolbar { gap: 8px; }
+  .spatial-toolbar > :last-child { flex: 1 1 100%; justify-content: stretch; gap: 8px; }
+  .page-title { font-size: 1.1rem; }
+  .scope-picker { flex: 1 1 100%; }
+  .scope-select { flex: 1 1 auto; max-width: none; }
+  .layer-group { flex: 1 1 100%; justify-content: space-between; }
+  .layer-pill { flex: 1 1 0; justify-content: center; padding-left: 6px; padding-right: 8px; font-size: 0.78rem; }
+  .layer-full { display: none; }
+  .layer-short { display: inline; }
+  .lock-switch { flex: 1 1 auto; justify-content: space-between; }
+  .history-group { flex: 1 1 auto; justify-content: space-between; }
+  .canvas-card { height: clamp(300px, 54dvh, 520px); }
+  .dock-body { height: 280px; }
+  .panel-card { padding: 12px; }
+}
+
+/* Phone held sideways: the canvas takes (nearly) the whole screen height */
+@media (max-height: 520px) {
+  .canvas-card { height: max(260px, calc(100dvh - var(--nav-h, 72px) - 24px)); }
+  .canvas-messages { bottom: 12px; }
+}
+
 .toast-enter-active, .toast-leave-active { transition: opacity 0.25s ease, transform 0.25s ease; }
 .toast-enter-from, .toast-leave-to { opacity: 0; transform: translateY(8px); }
 

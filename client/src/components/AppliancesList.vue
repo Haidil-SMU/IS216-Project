@@ -1,5 +1,18 @@
+<!--
+  AppliancesList.vue
+  The catalogue at the bottom of the 3D page: category tabs and a scrolling row of cards.
+  Hover over (or tap) a card to choose a brand and press "+ Add".
+
+  Events it sends to its parent:
+    tab-changed    { tabId, applianceName }    the user picked another category tab
+    add-appliance  { applianceTypeKey, category, name, brand, model, kwhYear }
+                   the user pressed "+ Add"
+
+  The list of things to show comes from stores/catalog.js
+-->
 <template>
   <div class="catalogue d-flex flex-column h-100 w-100">
+    <!-- CATEGORY TABS -->
     <div class="d-flex align-items-center justify-content-between gap-2 px-2 px-sm-3 pt-2 pb-1 flex-shrink-0">
       <ul class="cat-tabs nav gap-2 flex-nowrap overflow-x-auto mb-0 flex-grow-1" aria-label="Appliance categories">
         <li v-for="tab in tabs" :key="tab.id" class="nav-item">
@@ -22,13 +35,16 @@
     </div>
 
     <div class="row-wrap flex-grow-1 min-h-0 px-2 px-sm-3 pb-2">
+      <!-- SCROLL ARROWS (only shown when there is more to scroll to) -->
       <button v-show="canScrollLeft" type="button" class="scroll-btn scroll-left" aria-label="Scroll left" @click="scrollRow(-1)">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
       </button>
       <button v-show="canScrollRight" type="button" class="scroll-btn scroll-right" aria-label="Scroll right" @click="scrollRow(1)">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
       </button>
-      <div ref="row" class="card-row d-flex gap-3 overflow-x-auto overflow-y-hidden align-items-stretch h-100" @scroll.passive="measureRow">
+
+      <!-- THE ROW OF CARDS -->
+      <div ref="row" class="card-row d-flex gap-3 overflow-x-auto overflow-y-hidden align-items-stretch h-100" @scroll="measureRow">
         <template v-for="group in visibleGroups" :key="group.name">
           <div v-if="visibleGroups.length > 1" class="group-label flex-shrink-0 d-none d-sm-block" :title="group.name">{{ group.name }}</div>
 
@@ -40,20 +56,22 @@
             tabindex="0"
             @click="toggleOpen(item.typeKey)"
           >
-
+            <!-- front of the card: picture and name -->
             <div class="face">
               <Appliance3D :type="item.typeKey" :category="item.categoryKey" />
               <div class="face-name name-clamp">{{ item.typeData.name }}</div>
             </div>
 
-            <span v-if="ticksOf(item)" class="ticks" :title="`${ticksOf(item)} energy-label ${ticksOf(item) === 1 ? 'tick' : 'ticks'}`">
+            <!-- energy label ticks -->
+            <span v-if="ticksOf(item)" class="ticks" :title="ticksText(item)">
               <svg v-for="n in ticksOf(item)" :key="n" viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
                 <path d="M3 8.5l3.2 3.2L13 4.8" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
               <span class="visually-hidden">{{ ticksOf(item) }} ticks</span>
             </span>
 
-            <div class="details" @click.stop>
+            <!-- back of the card: brand, energy use, price and the Add button -->
+            <div class="details" @click="stopClick($event)">
               <div class="details-name name-clamp" :title="item.typeData.name">{{ shortName(item.typeData) }}</div>
 
               <template v-if="item.categoryKey !== 'build'">
@@ -61,7 +79,7 @@
                   class="form-select form-select-sm brand-select"
                   :value="productOf(item).brand"
                   :title="brandLabel(productOf(item))"
-                  :aria-label="`Brand for ${item.typeData.name}`"
+                  :aria-label="'Brand for ' + item.typeData.name"
                   @change="setBrand(item.typeKey, $event.target.value)"
                 >
                   <option v-for="p in item.typeData.products" :key="p.brand" :value="p.brand">{{ brandLabel(p) }}</option>
@@ -69,7 +87,7 @@
                 <div class="details-figures">
                   <div class="kwh">{{ getKwhYear(item) }}<small> kWh/yr</small></div>
                   <div class="cost">
-                    <template v-if="productOf(item).priceSgd != null"><span class="price">S${{ productOf(item).priceSgd.toLocaleString() }}</span></template>
+                    <span v-if="productOf(item).priceSgd != null" class="price">S${{ productOf(item).priceSgd.toLocaleString() }}</span>
                   </div>
                 </div>
               </template>
@@ -84,101 +102,250 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onUpdated, onUnmounted } from 'vue'
 import Appliance3D from './Appliance3D.vue'
 import { isBuild, catalogue, shortNameOf } from '../stores/catalog.js'
 
 const emit = defineEmits(['tab-changed', 'add-appliance'])
 
-const tabs = computed(() => Object.entries(catalogue.categories).map(([id, c]) => ({ id, label: c.name })))
+// ------------------------------------------------------------
+// DATA
+// ------------------------------------------------------------
+const activeTab = ref('kitchen')    // the category tab that is open
+const selectedBrands = ref({})      // the brand picked for each type, e.g. { fridge: 'Samsung' }
+const openKey = ref(null)           // the card that is flipped open (touch screens only)
 
-const activeTab = ref('kitchen')
-const selectedBrands = ref({})
-
-const visibleGroups = computed(() => {
-  const groups = new Map()
-  const category = catalogue.categories[activeTab.value]
-  for (const [typeKey, typeData] of Object.entries(category?.types ?? {})) {
-    const name = typeData.group || category.name
-    if (!groups.has(name)) groups.set(name, { name, items: [] })
-    groups.get(name).items.push({ categoryKey: activeTab.value, typeKey, typeData })
-  }
-  return [...groups.values()]
-})
-
-const productOf = (item) => {
-  const list = item.typeData.products
-  return list?.find((p) => p.brand === selectedBrands.value[item.typeKey]) ?? list?.[0]
-}
-
-const HOVER_NAME_MAX = 22
-const shortName = (type) => shortNameOf(type, HOVER_NAME_MAX)
-
-const brandLabel = (p) => (p?.ticks ? `${p.brand} (${p.ticks} ${p.ticks === 1 ? 'tick' : 'ticks'})` : p?.brand ?? '')
-
-const ticksOf = (item) => Math.max(0, Math.min(5, Number(productOf(item)?.ticks) || 0))
-
-const row = ref(null)
+const row = ref(null)               // the scrolling row of cards (an HTML element)
 const canScrollLeft = ref(false)
 const canScrollRight = ref(false)
-const measureRow = () => {
-  const el = row.value
-  if (!el) return
-  canScrollLeft.value = el.scrollLeft > 4
-  canScrollRight.value = el.scrollLeft + el.clientWidth < el.scrollWidth - 4
-}
-const scrollRow = (dir) => {
-  const el = row.value
-  if (!el) return
-  const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-  el.scrollBy({ left: dir * Math.max(160, el.clientWidth * 0.7), behavior: reduce ? 'auto' : 'smooth' })
-}
-let rowObserver
-onMounted(() => {
-  measureRow()
-  if ('ResizeObserver' in window && row.value) { rowObserver = new ResizeObserver(measureRow); rowObserver.observe(row.value) }
+
+const HOVER_NAME_MAX = 22           // longest name shown on the back of a card
+
+// ------------------------------------------------------------
+// TABS AND CARDS
+// ------------------------------------------------------------
+
+// One tab for every category in the catalogue
+const tabs = computed(() => {
+  const list = []
+  for (const id in catalogue.categories) {
+    list.push({ id: id, label: catalogue.categories[id].name })
+  }
+  return list
 })
-onBeforeUnmount(() => rowObserver?.disconnect())
 
-watch(() => activeTab.value, async () => { await nextTick(); if (row.value) row.value.scrollLeft = 0; measureRow() })
+// The cards of the open tab, split into groups.
+// Looks like: [ { name: 'Kitchen', items: [ { categoryKey, typeKey, typeData }, ... ] } ]
+const visibleGroups = computed(() => {
+  const groups = []
+  const category = catalogue.categories[activeTab.value]
+  if (!category) {
+    return groups
+  }
 
-watch(visibleGroups, async () => { await nextTick(); measureRow() })
+  for (const typeKey in category.types) {
+    const typeData = category.types[typeKey]
+    const groupName = typeData.group || category.name
 
-const openKey = ref(null)
-const canHover = () => typeof window !== 'undefined' && window.matchMedia?.('(hover: hover)').matches
-const toggleOpen = (key) => {
-  if (canHover()) return
-  openKey.value = openKey.value === key ? null : key
+    // find the group with this name, or make a new one
+    let group = null
+    for (const g of groups) {
+      if (g.name === groupName) {
+        group = g
+      }
+    }
+    if (!group) {
+      group = { name: groupName, items: [] }
+      groups.push(group)
+    }
+
+    group.items.push({ categoryKey: activeTab.value, typeKey: typeKey, typeData: typeData })
+  }
+
+  return groups
+})
+
+function selectTab(tabId) {
+  activeTab.value = tabId
+  if (row.value) {
+    row.value.scrollLeft = 0   // go back to the start of the row
+  }
+
+  const category = catalogue.categories[tabId]
+  let categoryName = undefined
+  if (category) {
+    categoryName = category.name
+  }
+  emit('tab-changed', { tabId: tabId, applianceName: categoryName })
 }
 
-const setBrand = (typeKey, brand) => {
+// ------------------------------------------------------------
+// PRODUCT, BRAND, ENERGY
+// ------------------------------------------------------------
+
+// The product (brand + model) chosen for a card. The first product is the default.
+function productOf(item) {
+  const list = item.typeData.products
+  if (!list || list.length === 0) {
+    return undefined
+  }
+
+  const chosenBrand = selectedBrands.value[item.typeKey]
+  for (const product of list) {
+    if (product.brand === chosenBrand) {
+      return product
+    }
+  }
+  return list[0]
+}
+
+function setBrand(typeKey, brand) {
   selectedBrands.value[typeKey] = brand
 }
 
-const getKwhYear = (item) => (productOf(item) ? productOf(item).kwhYear : item.typeData.kwhYear || 0)
-
-const selectTab = (tabId) => {
-  activeTab.value = tabId
-  const currentCategory = catalogue.categories[tabId]
-  emit('tab-changed', {
-    tabId,
-    applianceName: currentCategory?.name
-  })
+function shortName(type) {
+  return shortNameOf(type, HOVER_NAME_MAX)
 }
 
-const handleAddAppliance = (item) => {
-  const build = isBuild(item.categoryKey)
-  const product = build ? null : productOf(item)
-  const kwhYear = build ? 0 : getKwhYear(item)
+// e.g. "Samsung (3 ticks)"
+function brandLabel(product) {
+  if (!product) {
+    return ''
+  }
+  if (product.ticks) {
+    let word = 'ticks'
+    if (product.ticks === 1) {
+      word = 'tick'
+    }
+    return product.brand + ' (' + product.ticks + ' ' + word + ')'
+  }
+  return product.brand || ''
+}
 
-  emit('add-appliance', {
+// Number of energy-label ticks, from 0 to 5
+function ticksOf(item) {
+  const product = productOf(item)
+  if (!product) {
+    return 0
+  }
+  const ticks = Number(product.ticks) || 0
+  return Math.max(0, Math.min(5, ticks))
+}
+
+// e.g. "3 energy-label ticks"
+function ticksText(item) {
+  const count = ticksOf(item)
+  let word = 'ticks'
+  if (count === 1) {
+    word = 'tick'
+  }
+  return count + ' energy-label ' + word
+}
+
+// Energy use of the chosen product in kWh per year
+function getKwhYear(item) {
+  const product = productOf(item)
+  if (product) {
+    return product.kwhYear
+  }
+  return item.typeData.kwhYear || 0
+}
+
+// ------------------------------------------------------------
+// ADD BUTTON
+// ------------------------------------------------------------
+function handleAddAppliance(item) {
+  const build = isBuild(item.categoryKey)
+
+  const data = {
     applianceTypeKey: item.typeKey,
     category: item.categoryKey,
     name: item.typeData.name,
-    ...(product ? { brand: product.brand, model: product.model } : {}),
-    kwhYear,
-  })
+    kwhYear: 0,
+  }
+
+  // doors, windows and counters have no brand and no energy use
+  if (!build) {
+    const product = productOf(item)
+    if (product) {
+      data.brand = product.brand
+      data.model = product.model
+    }
+    data.kwhYear = getKwhYear(item)
+  }
+
+  emit('add-appliance', data)
 }
+
+// ------------------------------------------------------------
+// CARDS ON TOUCH SCREENS
+// ------------------------------------------------------------
+
+// On a touch screen there is no hover, so a tap flips the card open or closed.
+// (With a mouse, the CSS :hover rule flips it.)
+function toggleOpen(key) {
+  const hasHover = window.matchMedia('(hover: hover)').matches
+  if (hasHover) {
+    return
+  }
+
+  if (openKey.value === key) {
+    openKey.value = null
+  } else {
+    openKey.value = key
+  }
+}
+
+// Clicks on the back of a card should not flip the card, so stop them from reaching it.
+function stopClick(event) {
+  event.stopPropagation()
+}
+
+// ------------------------------------------------------------
+// SCROLL ARROWS
+// ------------------------------------------------------------
+
+// Work out if there is more to scroll to on the left or on the right
+function measureRow() {
+  const el = row.value
+  if (!el) {
+    return
+  }
+  canScrollLeft.value = el.scrollLeft > 4
+  canScrollRight.value = el.scrollLeft + el.clientWidth < el.scrollWidth - 4
+}
+
+// Scroll the row left (-1) or right (1) by most of its width
+function scrollRow(direction) {
+  const el = row.value
+  if (!el) {
+    return
+  }
+
+  // people who prefer less motion get an instant jump instead of a smooth scroll
+  let behavior = 'smooth'
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    behavior = 'auto'
+  }
+  el.scrollBy({ left: direction * Math.max(160, el.clientWidth * 0.7), behavior: behavior })
+}
+
+// ------------------------------------------------------------
+// LIFECYCLE
+// ------------------------------------------------------------
+onMounted(() => {
+  measureRow()
+  window.addEventListener('resize', measureRow)
+})
+
+// After the cards change (a new tab, or the catalogue finished loading), measure again
+onUpdated(() => {
+  measureRow()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', measureRow)
+})
 </script>
 
 <style scoped>

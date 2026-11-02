@@ -1,154 +1,109 @@
+<!--
+  Appliance3D.vue
+  A small 3D picture of one appliance.
+  It shows a still picture, and spins the appliance while the mouse is over it.
+
+  Props:
+    type      - the appliance type key, e.g. 'fridge'
+    category  - the category key, e.g. 'kitchen'
+
+  The drawing work is done by the helper functions in utils/thumbnails.js
+-->
 <template>
-  <div ref="container" class="it" @pointerenter="startSpin" @pointerleave="stopSpin" @pointercancel="stopSpin">
+  <div class="it" @pointerenter="startSpin" @pointerleave="stopSpin" @pointercancel="stopSpin">
+    <!-- the still picture: hidden while the appliance is spinning -->
     <img v-if="still" v-show="!spinning" :src="still" alt="" class="still" draggable="false" />
+
+    <!-- the spinning picture: only visible while the mouse is over the card -->
     <canvas ref="live" v-show="spinning" class="live" :width="THUMB_W" :height="THUMB_H"></canvas>
   </div>
 </template>
 
-<script>
-import * as THREE from 'three'
-import { createAppliance3DModel } from '../stores/applianceModels.js'
-
-const THUMB_W = 280
-const THUMB_H = 200
-
-let renderer = null, scene = null, camera = null
-const stills = new Map()
-
-function ensure() {
-  if (renderer) return true
-  try {
-    const canvas = document.createElement('canvas')
-    renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'low-power' })
-  } catch {
-    renderer = null
-    return false
-  }
-  renderer.setPixelRatio(1)
-  renderer.setSize(THUMB_W, THUMB_H, false)
-  renderer.domElement.addEventListener('webglcontextlost', (e) => { e.preventDefault(); release() })
-  scene = new THREE.Scene()
-  camera = new THREE.PerspectiveCamera(45, THUMB_W / THUMB_H, 0.1, 100)
-  camera.position.set(1.4, 0.9, 1.8)
-  camera.lookAt(0, 0, 0)
-  scene.add(new THREE.AmbientLight(0xffffff, 1.8))
-  const sun = new THREE.DirectionalLight(0xffffff, 2.5)
-  sun.position.set(5, 8, 5)
-  scene.add(sun)
-  return true
-}
-
-function release() {
-  renderer?.dispose()
-  renderer = scene = camera = null
-}
-
-function disposeModel(model) {
-  model.traverse((o) => {
-    o.geometry?.dispose?.()
-    for (const m of Array.isArray(o.material) ? o.material : o.material ? [o.material] : []) m.dispose()
-  })
-}
-
-function makeSubject(type, category) {
-  const model = createAppliance3DModel(type, category)
-  const box = new THREE.Box3().setFromObject(model)
-  const centre = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3())
-  model.scale.setScalar(1.3 / Math.max(size.x, size.y, size.z))
-  model.position.copy(centre).multiplyScalar(-model.scale.x)
-  const pivot = new THREE.Group()
-  pivot.add(model)
-  return pivot
-}
-
-function stillOf(type, category) {
-  const key = `${category}:${type}`
-  if (stills.has(key)) return stills.get(key)
-  if (!ensure()) return null
-  const subject = makeSubject(type, category)
-  scene.add(subject)
-  renderer.render(scene, camera)
-  const url = renderer.domElement.toDataURL('image/png')
-  scene.remove(subject)
-  disposeModel(subject)
-  stills.set(key, url)
-  return url
-}
-
-function spinner(type, category) {
-  if (!ensure()) return null
-  const subject = makeSubject(type, category)
-  scene.add(subject)
-  return {
-    draw(angle, ctx2d) {
-      if (!renderer) return
-      subject.rotation.y = angle
-      renderer.render(scene, camera)
-      ctx2d.clearRect(0, 0, THUMB_W, THUMB_H)
-      ctx2d.drawImage(renderer.domElement, 0, 0)
-    },
-    dispose() {
-      scene?.remove(subject)
-      disposeModel(subject)
-    },
-  }
-}
-</script>
-
 <script setup>
-import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { THUMB_W, THUMB_H, getStillPicture, createSpinner } from '../utils/thumbnails.js'
 
 const props = defineProps({
   type: { type: String, default: '' },
   category: { type: String, default: '' },
 })
 
-const container = ref(null)
-const live = ref(null)
-const still = ref('')
-const spinning = ref(false)
-let observer = null, frameId = 0, active = null, started = 0
+// ------------------------------------------------------------
+// DATA
+// ------------------------------------------------------------
+const live = ref(null)       // the <canvas> element used while spinning
+const still = ref('')        // the still picture (an image data URL)
+const spinning = ref(false)  // true while the mouse is over the card
 
-function loadStill() { still.value = stillOf(props.type, props.category) || '' }
+// These are not shown on screen, so they do not need to be ref()
+let spinner = null           // the spinner object from createSpinner()
+let frameId = 0              // id of the next animation frame (needed to cancel it)
+let startTime = 0            // when the spin started
 
+// Changes whenever the card should show a different appliance
+const pictureKey = computed(() => props.category + ':' + props.type)
+
+// ------------------------------------------------------------
+// STILL PICTURE
+// ------------------------------------------------------------
+function loadStill() {
+  still.value = getStillPicture(props.type, props.category) || ''
+}
+
+// ------------------------------------------------------------
+// SPIN
+// ------------------------------------------------------------
 function startSpin() {
-  if (spinning.value || !live.value) return
-  active = spinner(props.type, props.category)
-  if (!active) return
-  spinning.value = true
-  started = performance.now()
-  const ctx = live.value.getContext('2d')
-  const loop = (now) => {
-    active.draw(((now - started) / 1000) * 1.2, ctx)
-    frameId = requestAnimationFrame(loop)
+  if (spinning.value || !live.value) {
+    return
   }
-  frameId = requestAnimationFrame(loop)
+
+  spinner = createSpinner(props.type, props.category)
+  if (!spinner) {
+    return
+  }
+
+  spinning.value = true
+  startTime = performance.now()
+  const ctx = live.value.getContext('2d')
+
+  // Called by the browser before every screen refresh (about 60 times a second)
+  function animate(now) {
+    const seconds = (now - startTime) / 1000
+    spinner.draw(seconds * 1.2, ctx)
+    frameId = requestAnimationFrame(animate)
+  }
+  frameId = requestAnimationFrame(animate)
 }
 
 function stopSpin() {
   cancelAnimationFrame(frameId)
   frameId = 0
-  active?.dispose()
-  active = null
+
+  if (spinner) {
+    spinner.dispose()
+    spinner = null
+  }
+
   spinning.value = false
 }
 
+// ------------------------------------------------------------
+// LIFECYCLE
+// ------------------------------------------------------------
 onMounted(() => {
-  if ('IntersectionObserver' in window) {
-    observer = new IntersectionObserver((entries) => {
-      if (entries.some((e) => e.isIntersecting)) { loadStill(); observer?.disconnect(); observer = null }
-    }, { rootMargin: '200px' })
-    observer.observe(container.value)
-  } else {
-    loadStill()
-  }
+  loadStill()
 })
 
-watch([() => props.type, () => props.category], () => { stopSpin(); if (!observer) loadStill() })
-
-onBeforeUnmount(() => {
+// If the card is reused for a different appliance, draw the new picture
+watch(pictureKey, () => {
   stopSpin()
-  observer?.disconnect()
+  loadStill()
+})
+
+// Clean up when the card is removed from the page
+onUnmounted(() => {
+  stopSpin()
 })
 </script>
 
