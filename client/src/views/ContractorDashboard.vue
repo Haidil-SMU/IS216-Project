@@ -128,7 +128,7 @@ const myRequests = computed(() =>
 )
 
 function isSent(request) {
-  return ['quoted', 'accepted'].includes(request.status)
+  return ['quoted', 'accepted', 'declined'].includes(request.status)
 }
 
 const pendingCount = computed(() =>
@@ -704,7 +704,9 @@ function statusClass(status) {
     pending: 'bg-warning-subtle text-warning-emphasis',
     quoted: 'bg-success-subtle text-success-emphasis',
     rejected: 'bg-danger-subtle text-danger-emphasis',
-    accepted: 'bg-info-subtle text-info-emphasis'
+    accepted: 'bg-info-subtle text-info-emphasis',
+    declined: 'bg-secondary-subtle text-secondary-emphasis',
+    cancelled: 'bg-secondary-subtle text-secondary-emphasis'
   }[status] || 'bg-secondary-subtle'
 }
 
@@ -713,7 +715,9 @@ function statusLabel(status) {
     pending: 'Pending Response',
     quoted: 'Quotation Sent',
     rejected: 'Rejected',
-    accepted: 'Accepted'
+    accepted: 'Accepted by Homeowner',
+    declined: 'Declined by Homeowner',
+    cancelled: 'Cancelled by Homeowner'
   }[status] || status
 }
 
@@ -1138,6 +1142,21 @@ function removeQuotationItem(request, index) {
   request.aiDraft.items.splice(index, 1)
 }
 
+async function syncConflictedRequest(request, error) {
+  if (error.response?.status !== 409) return
+  try {
+    const { data } = await axios.get(`${API}/quotation-requests`)
+    const latest = (Array.isArray(data) ? data : data.requests || [])
+      .find(item => getId(item) === getId(request))
+    if (latest) {
+      Object.assign(request, latest)
+      if (request.status !== 'pending') request.aiDraft = null
+    }
+  } catch {
+    notify('The request changed. Refresh the dashboard to see its latest status.')
+  }
+}
+
 // SEND OR REJECT
 
 async function submitQuotation(request) {
@@ -1220,6 +1239,7 @@ async function submitQuotation(request) {
     console.error(error)
     request.actionError =
       error.response?.data?.error || 'Unable to submit quotation.'
+    await syncConflictedRequest(request, error)
   } finally {
     savingId.value = ''
   }
@@ -1250,6 +1270,7 @@ async function rejectRequest(request) {
     console.error(error)
     request.actionError =
       error.response?.data?.error || 'Unable to reject request.'
+    await syncConflictedRequest(request, error)
   } finally {
     savingId.value = ''
   }
@@ -1992,6 +2013,15 @@ onUnmounted(() => {
               </p>
             </div>
 
+            <div v-if="request.status === 'accepted'" class="alert alert-success mt-3 mb-0">
+              The homeowner accepted this quotation. Contact them to arrange the next steps.
+            </div>
+            <div v-if="request.status === 'declined'" class="alert alert-secondary mt-3 mb-0">
+              The homeowner declined this quotation. It is kept here for your records.
+            </div>
+            <div v-if="request.status === 'cancelled'" class="alert alert-secondary mt-3 mb-0">
+              The homeowner cancelled this request. You can no longer respond to it.
+            </div>
             <div v-if="request.status === 'rejected'" class="alert alert-danger mt-3 mb-0">
               This quotation request has been rejected.
             </div>

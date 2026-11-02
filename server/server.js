@@ -53,6 +53,24 @@ function loadGameData() {
 
 const app = express();
 const dbReady = connectDb().then(async (db) => {
+  // Prevent simultaneous active requests between the same
+  // homeowner and contractor.
+  await db.collection('quotationRequests').createIndex(
+    {
+      userId: 1,
+      contractorId: 1
+    },
+    {
+      name: 'one_active_quotation_per_homeowner_contractor',
+      unique: true,
+      partialFilterExpression: {
+        status: {
+          $in: ['pending', 'quoted', 'accepted']
+        }
+      }
+    }
+  );
+
   await loadLayouts(db);
   return db;
 });
@@ -236,108 +254,7 @@ async function resolveAttachedPlanId(db, userId, householdId, planId) {
   return plan.id;
 }
 
-// ============================================================
-// POST - SUBMIT QUOTATION REQUEST
-// ============================================================
 
-app.post('/api/quotation-requests', auth.requireClient, async (req, res) => {
-  try {
-    const {
-      contractorId,
-      householdId,
-      planId,
-      household,
-      services,
-      description,
-      budget,
-      preferredStartDate
-    } = req.body;
-
-    // Validate required fields
-    if (
-      !contractorId ||
-      !household ||
-      !household.name ||
-      !household.flatType ||
-      !Array.isArray(services) ||
-      services.length === 0 ||
-      !description ||
-      !Number.isFinite(budget) ||
-      budget <= 0
-    ) {
-      return res.status(400).json({
-        error: 'Missing or invalid quotation request information'
-      });
-    }
-
-    const db = getDb();
-
-    // Check that the contractor exists
-
-    if (!ObjectId.isValid(contractorId)) {
-      return res.status(400).json({
-        error: 'Invalid contractor ID'
-      });
-    }
-
-    const contractor = await db.collection('contractors').findOne({
-      _id: new ObjectId(contractorId)
-    });
-
-    if (!contractor) {
-      return res.status(404).json({
-        error: 'Contractor not found'
-      });
-    }
-
-    // Prepare quotation request document
-    const quotationRequest = {
-      contractorId: new ObjectId(contractorId),
-
-      userId: new ObjectId(req.session.userId),
-
-      householdId: householdId || null,
-      planId: await resolveAttachedPlanId(db, req.session.userId, householdId, planId),
-
-      household: {
-        name: household.name,
-        flatType: household.flatType,
-        occupants: Number(household.occupants),
-        bedrooms: Number(household.bedrooms)
-      },
-
-      services,
-      description,
-      budget,
-
-      preferredStartDate: preferredStartDate || null,
-
-      status: 'pending',
-
-      quotation: null,
-
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
-
-    // Save to MongoDB
-    const result = await db
-      .collection('quotationRequests')
-      .insertOne(quotationRequest);
-
-    res.status(201).json({
-      message: 'Quotation request submitted successfully',
-      requestId: result.insertedId
-    });
-
-  } catch (error) {
-    console.error('Error submitting quotation request:', error);
-
-    res.status(500).json({
-      error: 'Unable to submit quotation request'
-    });
-  }
-});
 
 // ============================================================
 // GET - RETRIEVE QUOTATION REQUESTS
@@ -414,214 +331,463 @@ app.get('/api/quotation-requests/:requestId/floorplan', auth.requireContractor, 
   }
 });
 
+
+
 // ============================================================
-// PUT - UPDATE PENDING QUOTATION REQUEST
+// POST — SUBMIT A QUOTATION REQUEST
 // ============================================================
 
-app.put('/api/quotation-requests/:requestId', auth.requireClient, async (req, res) => {
-  try {
-    const { requestId } = req.params
+app.post(
+  '/api/quotation-requests',
+  auth.requireClient,
+  async (req, res) => {
+    try {
+      const {
+        contractorId,
+        householdId,
+        planId,
+        household,
+        services,
+        description,
+        budget,
+        preferredStartDate
+      } = req.body;
 
-    if (!ObjectId.isValid(requestId)) {
-      return res.status(400).json({
-        error: 'Invalid quotation request ID'
-      })
-    }
+      if (
+        !contractorId ||
+        !household ||
+        !String(household.name || '').trim() ||
+        !household.flatType ||
+        !Number.isInteger(Number(household.occupants)) ||
+        Number(household.occupants) < 1 ||
+        !Number.isInteger(Number(household.bedrooms)) ||
+        Number(household.bedrooms) < 0 ||
+        !Array.isArray(services) ||
+        services.length === 0 ||
+        !String(description || '').trim() ||
+        !Number.isFinite(budget) ||
+        budget <= 0
+      ) {
+        return res.status(400).json({
+          error: 'Missing or invalid quotation request information'
+        });
+      }
 
-    const {
-      contractorId,
-      householdId,
-      planId,
-      household,
-      services,
-      description,
-      budget,
-      preferredStartDate
-    } = req.body
+      if (!ObjectId.isValid(contractorId)) {
+        return res.status(400).json({
+          error: 'Invalid contractor ID'
+        });
+      }
 
-    if (
-      !ObjectId.isValid(contractorId) ||
-      !household ||
-      !String(household.name || '').trim() ||
-      !household.flatType ||
-      !Number.isInteger(Number(household.occupants)) ||
-      Number(household.occupants) < 1 ||
-      !Number.isInteger(Number(household.bedrooms)) ||
-      Number(household.bedrooms) < 0 ||
-      !Array.isArray(services) ||
-      services.length === 0 ||
-      !String(description || '').trim() ||
-      !Number.isFinite(budget) ||
-      budget <= 0
-    ) {
-      return res.status(400).json({
-        error: 'Missing or invalid quotation information'
-      })
-    }
+      const db = getDb();
 
-    const db = getDb()
+      const contractorProfile = await db
+        .collection('contractors')
+        .findOne({
+          _id: new ObjectId(contractorId)
+        });
 
-    const result = await db
-      .collection('quotationRequests')
-      .updateOne(
-        {
-          _id: new ObjectId(requestId),
-          contractorId: new ObjectId(contractorId),
+      if (!contractorProfile) {
+        return res.status(404).json({
+          error: 'Contractor not found'
+        });
+      }
+
+      const existing = await db
+        .collection('quotationRequests')
+        .findOne({
           userId: new ObjectId(req.session.userId),
-          status: 'pending'
-        },
-        {
-          $set: {
-            householdId: householdId || null,
-            planId: await resolveAttachedPlanId(db, req.session.userId, householdId, planId),
-
-            household: {
-              name: String(household.name).trim(),
-              flatType: household.flatType,
-              occupants: Number(household.occupants),
-              bedrooms: Number(household.bedrooms)
-            },
-
-            services,
-            description: description.trim(),
-            budget,
-            preferredStartDate: preferredStartDate || null,
-            updatedAt: new Date()
+          contractorId: new ObjectId(contractorId),
+          status: {
+            $in: ['pending', 'quoted', 'accepted']
           }
-        }
-      )
+        });
 
-    if (result.matchedCount === 0) {
-      return res.status(404).json({
-        error: 'Pending quotation request not found'
-      })
+      if (existing) {
+        return res.status(409).json({
+          error:
+            'You already have an active request with this contractor. ' +
+            'Review it in My Quotations.'
+        });
+      }
+
+      const attachedPlanId = await resolveAttachedPlanId(
+        db,
+        req.session.userId,
+        householdId,
+        planId
+      );
+
+      const quotationRequest = {
+        contractorId: new ObjectId(contractorId),
+        userId: new ObjectId(req.session.userId),
+
+        householdId: householdId || null,
+        planId: attachedPlanId,
+
+        household: {
+          name: String(household.name).trim(),
+          flatType: household.flatType,
+          occupants: Number(household.occupants),
+          bedrooms: Number(household.bedrooms)
+        },
+
+        services,
+        description: String(description).trim(),
+        budget,
+        preferredStartDate: preferredStartDate || null,
+
+        status: 'pending',
+        quotation: null,
+
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+
+      const result = await db
+        .collection('quotationRequests')
+        .insertOne(quotationRequest);
+
+      return res.status(201).json({
+        message: 'Quotation request submitted successfully',
+        requestId: result.insertedId
+      });
+    } catch (error) {
+      // Handles simultaneous submissions caught by the unique index.
+      if (error.code === 11000) {
+        return res.status(409).json({
+          error:
+            'You already have an active request with this contractor. ' +
+            'Review it in My Quotations.'
+        });
+      }
+
+      console.error('Error submitting quotation request:', error);
+
+      return res.status(500).json({
+        error: 'Unable to submit quotation request'
+      });
     }
-
-    res.status(200).json({
-      message: 'Quotation request updated successfully'
-    })
-
-  } catch (error) {
-    console.error('Error updating quotation request:', error)
-
-    res.status(500).json({
-      error: 'Unable to update quotation request'
-    })
   }
-})
-// Homeowners can remove only their own pending requests.
+);
+
+// ============================================================
+// PUT — UPDATE A PENDING REQUEST
+// ============================================================
+
+app.put(
+  '/api/quotation-requests/:requestId',
+  auth.requireClient,
+  async (req, res) => {
+    try {
+      const { requestId } = req.params;
+
+      if (!ObjectId.isValid(requestId)) {
+        return res.status(400).json({
+          error: 'Invalid quotation request ID'
+        });
+      }
+
+      const {
+        contractorId,
+        householdId,
+        planId,
+        household,
+        services,
+        description,
+        budget,
+        preferredStartDate
+      } = req.body;
+
+      if (
+        !ObjectId.isValid(contractorId) ||
+        !household ||
+        !String(household.name || '').trim() ||
+        !household.flatType ||
+        !Number.isInteger(Number(household.occupants)) ||
+        Number(household.occupants) < 1 ||
+        !Number.isInteger(Number(household.bedrooms)) ||
+        Number(household.bedrooms) < 0 ||
+        !Array.isArray(services) ||
+        services.length === 0 ||
+        !String(description || '').trim() ||
+        !Number.isFinite(budget) ||
+        budget <= 0
+      ) {
+        return res.status(400).json({
+          error: 'Missing or invalid quotation information'
+        });
+      }
+
+      const db = getDb();
+
+      const attachedPlanId = await resolveAttachedPlanId(
+        db,
+        req.session.userId,
+        householdId,
+        planId
+      );
+
+      // Checking status in the update prevents editing a request
+      // that the contractor has already responded to.
+      const result = await db
+        .collection('quotationRequests')
+        .updateOne(
+          {
+            _id: new ObjectId(requestId),
+            contractorId: new ObjectId(contractorId),
+            userId: new ObjectId(req.session.userId),
+            status: 'pending'
+          },
+          {
+            $set: {
+              householdId: householdId || null,
+              planId: attachedPlanId,
+
+              household: {
+                name: String(household.name).trim(),
+                flatType: household.flatType,
+                occupants: Number(household.occupants),
+                bedrooms: Number(household.bedrooms)
+              },
+
+              services,
+              description: String(description).trim(),
+              budget,
+              preferredStartDate: preferredStartDate || null,
+              updatedAt: new Date()
+            }
+          }
+        );
+
+      if (result.matchedCount === 0) {
+        return res.status(409).json({
+          error:
+            'This request is no longer pending or is unavailable. ' +
+            'Refresh My Quotations before editing.'
+        });
+      }
+
+      return res.json({
+        message: 'Quotation request updated successfully'
+      });
+    } catch (error) {
+      console.error('Error updating quotation request:', error);
+
+      return res.status(500).json({
+        error: 'Unable to update quotation request'
+      });
+    }
+  }
+);
+
+// ============================================================
+// DELETE — CANCEL A PENDING REQUEST AND RETAIN ITS HISTORY
+// ============================================================
+
 app.delete(
   '/api/quotation-requests/:requestId',
   auth.requireClient,
   async (req, res) => {
     try {
-      const { requestId } = req.params
+      const { requestId } = req.params;
 
       if (!ObjectId.isValid(requestId)) {
         return res.status(400).json({
           error: 'Invalid quotation request ID'
-        })
+        });
       }
 
       const result = await getDb()
         .collection('quotationRequests')
-        .deleteOne({
-          _id: new ObjectId(requestId),
-          userId: new ObjectId(req.session.userId),
-          status: 'pending'
-        })
+        .updateOne(
+          {
+            _id: new ObjectId(requestId),
+            userId: new ObjectId(req.session.userId),
+            status: 'pending'
+          },
+          {
+            $set: {
+              status: 'cancelled',
+              cancelledAt: new Date(),
+              updatedAt: new Date()
+            }
+          }
+        );
 
-      if (result.deletedCount === 0) {
-        return res.status(404).json({
-          error: 'Pending quotation request not found'
-        })
+      if (result.matchedCount === 0) {
+        return res.status(409).json({
+          error:
+            'This request is no longer pending or is unavailable. ' +
+            'Refresh My Quotations before cancelling.'
+        });
       }
 
-      return res.status(200).json({
-        message: 'Quotation request removed successfully'
-      })
+      return res.json({
+        message: 'Request cancelled successfully'
+      });
     } catch (error) {
-      console.error('Error removing quotation request:', error)
+      console.error('Error cancelling quotation request:', error);
 
       return res.status(500).json({
-        error: 'Unable to remove quotation request'
-      })
+        error: 'Unable to cancel quotation request'
+      });
     }
   }
-)
-// Contractor responds to a quotation request
-app.patch('/api/quotation-requests/:requestId/respond', auth.requireContractor, ownContractorProfile, async (req, res) => {
-  try {
-    const { requestId } = req.params
-    const { contractorId, status, quotation } = req.body
+);
 
-    if (
-      !ObjectId.isValid(requestId) ||
-      !ObjectId.isValid(contractorId) ||
-      !['quoted', 'rejected'].includes(status)
-    ) {
-      return res.status(400).json({
-        error: 'Invalid request information'
-      })
-    }
+// ============================================================
+// PATCH — CONTRACTOR SENDS A QUOTATION OR REJECTS A REQUEST
+// ============================================================
 
-    if (
-      status === 'quoted' &&
-      (!quotation ||
-        !Number.isFinite(quotation.total) ||
-        quotation.total <= 0)
-    ) {
-      return res.status(400).json({
-        error: 'Please enter a valid quotation amount'
-      })
-    }
+app.patch(
+  '/api/quotation-requests/:requestId/respond',
+  auth.requireContractor,
+  ownContractorProfile,
+  async (req, res) => {
+    try {
+      const { requestId } = req.params;
+      const { contractorId, status, quotation } = req.body;
 
-    const db = getDb()
-
-    const result = await db.collection('quotationRequests').updateOne(
-      {
-        _id: new ObjectId(requestId),
-        contractorId: new ObjectId(contractorId),
-        status: 'pending'
-      },
-      {
-        $set: {
-          status,
-          quotation: status === 'quoted'
-  ? {
-      total: quotation.total,
-      notes: String(quotation.notes || ''),
-      items: Array.isArray(quotation.items)
-        ? quotation.items
-        : [],
-      warnings: Array.isArray(quotation.warnings)
-        ? quotation.warnings
-        : []
-    }
-  : null,
-          updatedAt: new Date()
-        }
+      if (
+        !ObjectId.isValid(requestId) ||
+        !ObjectId.isValid(contractorId) ||
+        !['quoted', 'rejected'].includes(status)
+      ) {
+        return res.status(400).json({
+          error: 'Invalid request information'
+        });
       }
-    )
 
-    if (result.matchedCount === 0) {
-      return res.status(404).json({
-        error: 'Pending quotation request not found'
-      })
+      if (
+        status === 'quoted' &&
+        (
+          !quotation ||
+          !Number.isFinite(quotation.total) ||
+          quotation.total <= 0
+        )
+      ) {
+        return res.status(400).json({
+          error: 'Please enter a valid quotation amount'
+        });
+      }
+
+      const savedQuotation = status === 'quoted'
+        ? {
+            total: quotation.total,
+            notes: String(quotation.notes || ''),
+            items: Array.isArray(quotation.items)
+              ? quotation.items
+              : [],
+            warnings: Array.isArray(quotation.warnings)
+              ? quotation.warnings
+              : []
+          }
+        : null;
+
+      // If cancellation happened first, status is no longer pending,
+      // so this update cannot send a quotation to a cancelled request.
+      const result = await getDb()
+        .collection('quotationRequests')
+        .updateOne(
+          {
+            _id: new ObjectId(requestId),
+            contractorId: new ObjectId(contractorId),
+            status: 'pending'
+          },
+          {
+            $set: {
+              status,
+              quotation: savedQuotation,
+              updatedAt: new Date()
+            }
+          }
+        );
+
+      if (result.matchedCount === 0) {
+        return res.status(409).json({
+          error:
+            'This request is no longer pending or is unavailable. ' +
+            'Refresh the dashboard before responding.'
+        });
+      }
+
+      return res.json({
+        message: 'Quotation response saved successfully'
+      });
+    } catch (error) {
+      console.error('Error responding to quotation:', error);
+
+      return res.status(500).json({
+        error: 'Unable to respond to quotation'
+      });
     }
-
-    res.json({
-      message: 'Quotation response saved successfully'
-    })
-
-  } catch (error) {
-    console.error('Error responding to quotation:', error)
-
-    res.status(500).json({
-      error: 'Unable to respond to quotation'
-    })
   }
-})
+);
+
+// ============================================================
+// PATCH — HOMEOWNER ACCEPTS OR DECLINES A RECEIVED QUOTATION
+// ============================================================
+
+app.patch(
+  '/api/quotation-requests/:requestId/decision',
+  auth.requireClient,
+  async (req, res) => {
+    try {
+      const { requestId } = req.params;
+      const { status } = req.body;
+
+      if (
+        !ObjectId.isValid(requestId) ||
+        !['accepted', 'declined'].includes(status)
+      ) {
+        return res.status(400).json({
+          error: 'Invalid quotation decision'
+        });
+      }
+
+      // Only the owner can decide, and only while the quotation
+      // is awaiting a homeowner decision.
+      const result = await getDb()
+        .collection('quotationRequests')
+        .updateOne(
+          {
+            _id: new ObjectId(requestId),
+            userId: new ObjectId(req.session.userId),
+            status: 'quoted',
+            quotation: {
+              $type: 'object'
+            }
+          },
+          {
+            $set: {
+              status,
+              decidedAt: new Date(),
+              updatedAt: new Date()
+            }
+          }
+        );
+
+      if (result.matchedCount === 0) {
+        return res.status(409).json({
+          error:
+            'This quotation has already changed or is unavailable. ' +
+            'Refresh My Quotations before deciding.'
+        });
+      }
+
+      return res.json({
+        message: 'Quotation decision saved successfully'
+      });
+    } catch (error) {
+      console.error('Error saving quotation decision:', error);
+
+      return res.status(500).json({
+        error: 'Unable to save quotation decision'
+      });
+    }
+  }
+);
 
 
 // ============================================================

@@ -106,10 +106,10 @@ function getId(value) {
   return String(value.$oid || value)
 }
 
-function hasPendingRequest(contractorId) {
+function hasActiveRequest(contractorId) {
   return quotationRequests.value.some(request =>
     getId(request.contractorId) === getId(contractorId) &&
-    request.status === 'pending'
+    ['pending', 'quoted', 'accepted'].includes(request.status)
   )
 }
 
@@ -264,7 +264,7 @@ async function requestQuotation(contractor) {
     return
   }
 
-  if (hasPendingRequest(contractor._id)) {
+  if (hasActiveRequest(contractor._id)) {
     return
   }
 
@@ -517,21 +517,21 @@ async function requestQuotation(contractor) {
               <button
                 class="btn w-100 fw-semibold mb-2"
                 :class="
-                  hasPendingRequest(contractor._id)
+                  hasActiveRequest(contractor._id)
                     ? 'btn-secondary'
                     : 'btn-success'
                 "
                 :disabled="
                   !quotationsLoaded ||
-                  hasPendingRequest(contractor._id)
+                  hasActiveRequest(contractor._id)
                 "
                 @click="requestQuotation(contractor)"
               >
                 {{
                   !quotationsLoaded
                     ? 'Quotation Unavailable'
-                    : hasPendingRequest(contractor._id)
-                      ? 'Quotation Pending'
+                    : hasActiveRequest(contractor._id)
+                      ? 'Active Request Exists'
                       : 'Request Quotation →'
                 }}
               </button>

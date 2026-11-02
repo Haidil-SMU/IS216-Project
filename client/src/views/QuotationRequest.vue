@@ -25,6 +25,7 @@ const flatTypes = ref([])
 
 const loading = ref(true)
 const submitting = ref(false)
+const blockedMessage = ref('')
 
 const errorMessage = ref('')
 const successMessage = ref('')
@@ -186,6 +187,7 @@ const today = [
 async function getData() {
   loading.value = true
   errorMessage.value = ''
+  blockedMessage.value = ''
 
   try {
     const [contractorResponse, plannerResponse] = await Promise.all([
@@ -222,6 +224,7 @@ async function getData() {
     if (isEditMode) {
       await loadExistingRequest()
     } else {
+      await checkActiveRequest()
       form.value.services = services
         .filter(service =>
           selectedServiceCodes.includes(service.code) &&
@@ -371,8 +374,21 @@ function changePropertyMode() {
 // SUBMIT OR UPDATE
 // ============================================================
 
+async function checkActiveRequest() {
+  const { data } = await axios.get(QUOTATION_API)
+  const requests = Array.isArray(data) ? data : data.requests || []
+  const active = requests.find(request =>
+    getId(request.contractorId) === contractorId &&
+    ['pending', 'quoted', 'accepted'].includes(request.status)
+  )
+  blockedMessage.value = active
+    ? 'You already have an active request with this contractor. Review it in My Quotations.'
+    : ''
+  return Boolean(active)
+}
+
 async function submitRequest() {
-  if (submitting.value) return
+  if (submitting.value || successMessage.value || blockedMessage.value) return
 
   errorMessage.value = ''
   successMessage.value = ''
@@ -454,6 +470,8 @@ async function submitRequest() {
   submitting.value = true
 
   try {
+    if (!isEditMode && await checkActiveRequest()) return
+
     if (isEditMode) {
       await axios.put(
         `${QUOTATION_API}/${encodeURIComponent(requestId)}`,
@@ -474,6 +492,10 @@ async function submitRequest() {
     errorMessage.value =
       error.response?.data?.error ||
       'Unable to save quotation request.'
+
+    if (error.response?.status === 409) {
+      blockedMessage.value = errorMessage.value
+    }
   } finally {
     submitting.value = false
   }
@@ -539,6 +561,11 @@ onMounted(getData)
           View My Quotations →
         </button>
       </div>
+    </div>
+
+    <div v-else-if="blockedMessage" class="alert alert-info" role="status">
+      <p>{{ blockedMessage }}</p>
+      <RouterLink to="/MyQuotations" class="btn btn-success">View My Quotations →</RouterLink>
     </div>
 
     <!-- FORM -->
