@@ -13,6 +13,8 @@ const loading = ref(true)
 const busy = ref(false)
 const error = ref('')
 const notice = ref('')
+// Set only when saving changed the flat type and the server rebuilt the 3D rooms.
+const floorChange = ref(null)
 const householdSection = ref(null)
 const profile = ref(newProfile())
 const auth = useAuthStore()
@@ -165,15 +167,9 @@ function checkInputs(section) {
 const flatName = (id) => flatTypes.value.find((flat) => flat.id === id)?.name ?? id
 const roomsOf = (id) => flatTypes.value.find((flat) => flat.id === id)?.rooms ?? []
 
-// What the server did to the 3D floor plan, e.g. " 3D floor plan updated: deleted Bedroom 3."
-function roomNotice(changes) {
-  if (!changes?.updated) return ''
-  const parts = []
-  if (changes.added.length) parts.push('added ' + changes.added.join(', '))
-  if (changes.removed.length) parts.push('deleted ' + changes.removed.join(', '))
-  return parts.length
-    ? ' 3D floor plan updated: ' + parts.join('; ') + '.'
-    : ' 3D floor plan reset to the standard layout.'
+function floorSummary(changes) {
+  if (!changes?.updated) return null
+  return { added: changes.added || [], removed: changes.removed || [] }
 }
 
 // Changing the flat type of a saved household rebuilds its 3D rooms, so ask first.
@@ -214,6 +210,7 @@ async function persistProfile() {
   busy.value = true
   error.value = ''
   notice.value = ''
+  floorChange.value = null
   try {
     let response
     if (userId.value === '') {
@@ -222,11 +219,11 @@ async function persistProfile() {
       response = await axios.put(API_URL + '/users/' + userId.value, profile.value)
     }
     userId.value = response.data.id
-    // The rest of the site opens up once a household is saved (see the router).
     if (auth.user) auth.user.hasHousehold = true
     await getData()
     myinfoBanner.value = false
-    notice.value = 'Household saved.' + roomNotice(response.data.roomChanges)
+    notice.value = 'Household saved.'
+    floorChange.value = floorSummary(response.data.roomChanges)
   } catch (err) {
     console.log(err.message)
     error.value = err.response?.data?.error || 'Unable to save the household.'
@@ -403,13 +400,34 @@ function changeFlat() {
               Occupants and usage patterns describe your household. Set appliance hours in the
               Energy Planner to reflect their actual use.
             </p>
-            <div v-if="notice" class="text-center mb-2">
-              <div class="saved-banner" role="status">
-                <span aria-hidden="true">✓</span> {{ notice }}
-                <RouterLink :to="{ path: '/EnergyPlanner/', query: { household: userId } }">
-                  Plan your energy use →
-                </RouterLink>
+            <div v-if="notice" class="floor-card mb-3" role="status">
+              <div class="floor-card-head">
+                <span class="floor-card-tick" aria-hidden="true">✓</span>
+                <div>
+                  <p class="floor-card-title">{{ notice }}</p>
+                  <p v-if="floorChange" class="floor-card-sub">
+                    Your 3D floor plan was rebuilt for the new flat type.
+                  </p>
+                </div>
               </div>
+              <div v-if="floorChange" class="floor-card-rows">
+                <div v-if="floorChange.removed.length" class="floor-row">
+                  <span class="floor-row-label">Removed</span>
+                  <span class="floor-chips">
+                    <span v-for="room in floorChange.removed" :key="room" class="floor-chip floor-chip-removed">{{ room }}</span>
+                  </span>
+                </div>
+                <div v-if="floorChange.added.length" class="floor-row">
+                  <span class="floor-row-label">Added</span>
+                  <span class="floor-chips">
+                    <span v-for="room in floorChange.added" :key="room" class="floor-chip floor-chip-added">{{ room }}</span>
+                  </span>
+                </div>
+                <p v-if="!floorChange.removed.length && !floorChange.added.length" class="floor-row-note">
+                  Reset to the standard layout for this flat type.
+                </p>
+              </div>
+              <RouterLink to="/3d" class="floor-card-btn">Visualize 3D floorplan →</RouterLink>
             </div>
             <button class="btn btn-outline-success w-100" @click="saveProfile">
               Save household
@@ -433,7 +451,7 @@ function changeFlat() {
         <div class="popup-card">
           <h2 id="setup-title" class="h5 fw-bold text-success">🏠 Set up your household first</h2>
           <p id="setup-desc" class="text-secondary mb-3">
-            Save your household details to start using the Energy Planner, My HDB, Find Contractors
+            Save your household details to start using the Energy Planner, Simulator, Find Contractors
             and 3D Spatial.
           </p>
           <button
