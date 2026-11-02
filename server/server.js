@@ -1332,61 +1332,75 @@ function validPlan(body) {
 }
 
 // GET - Retrieve simulator data for the logged-in user's household
+
 app.get('/api/simulator', auth.requireClient, async (req, res) => {
     try {
         const db = getDb()
 
         const userId = new ObjectId(req.session.userId)
 
-        // Find only households belonging to the logged-in user
-        const households = await db.collection('households')
-            .find({ userId: userId })
-            .sort({ _id: -1 })
-            .toArray()
+        // Find the logged-in user's household
+        const household = await db.collection('households')
+            .findOne({ userId: userId })
 
-        // Prioritize the household selected in 3D Spatial
-        const selectedHouseholdId = String(req.session.householdId || '')
-
-        households.sort((a, b) => {
-            if (String(a._id) === selectedHouseholdId) return -1
-            if (String(b._id) === selectedHouseholdId) return 1
-            return 0
-        })
-
-        // Find a household with rooms
-        for (const household of households) {
-            const rooms = await db.collection('rooms')
-                .find({ householdId: household._id })
-                .sort({ order: 1 })
-                .toArray()
-
-            if (rooms.length === 0) continue
-
-            // Retrieve electrical catalogue items and their products
-            const items = await db.collection('catalogue_items')
-                .find({
-                    category: {
-                        $in: [
-                            'kitchen',
-                            'cooling',
-                            'entertainment',
-                            'laundry',
-                            'lighting',
-                            'bathroom'
-                        ]
-                    }
-                })
-                .toArray()
-
-            return res.status(200).json({
-                householdId: String(household._id),
-                rooms: rooms,
-                items: items
+        if (!household) {
+            return res.status(404).json({
+                error: 'No household found.'
             })
         }
 
-        res.status(404).json({
-            error: 'No household with rooms found.'
+        // Retrieve rooms belonging to this household
+        const rooms = await db.collection('rooms')
+            .find({ householdId: household._id })
+            .sort({ order: 1 }) //to ensure consistency in the simulator room tabs
+            .toArray()
+
+        if (rooms.length === 0) {
+            return res.status(404).json({
+                error: 'No rooms found in this household.'
+            })
+        }
+
+        // Retrieve electrical catalogue items and their products
+        const items = await db.collection('catalogue_items')
+            .find({
+                category: {
+                    $in: [
+                        'kitchen',
+                        'cooling',
+                        'entertainment',
+                        'laundry',
+                        'lighting',
+                        'bathroom'
+                    ]
+                }
+            })
+            .toArray()
+
+            // Retrieve the user's most recently created energy plan
+        const plan = await db.collection('plans')
+            .findOne(
+                {
+                    userId: userId,
+                    householdId: household.id
+                },
+                {
+                    sort: { _id: -1 }
+                }
+            )
+
+        // Use the saved electricity rate, or a default rate
+        const electricityRate =
+            Number.isFinite(plan?.tariff) && plan.tariff > 0
+                ? plan.tariff
+                : 0.32
+
+
+        return res.status(200).json({
+            householdId: String(household._id),
+            rooms: rooms,
+            items: items,
+            electricityRate: electricityRate
         })
 
     } catch (error) {
@@ -1397,6 +1411,7 @@ app.get('/api/simulator', auth.requireClient, async (req, res) => {
         })
     }
 })
+
 
 // Compare names within the same account and household, including older saved plans.
 async function duplicatePlanName(req, exceptId = '') {
