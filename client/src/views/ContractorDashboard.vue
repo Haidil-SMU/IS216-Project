@@ -49,7 +49,7 @@ const uploading = ref(false)
 const fileInputKey = ref(0)
 const showPriceList = ref(false)
 const showUpload = ref(false)
-const priceListSearch = ref('')
+
 const uploadHighlighted = ref(false)
 
 const portfolio = ref([])
@@ -196,81 +196,9 @@ const savedPriceListText = computed(() =>
     : ''
 )
 
-const structuredData = computed(() =>
-  latestPriceList.value?.structuredData || null
-)
-
-const hasStructuredData = computed(() =>
-  latestPriceList.value?.structuringStatus === 'completed' &&
-  Array.isArray(structuredData.value?.prices)
-)
-
-const priceGroups = computed(() => {
-  const groups = new Map()
-  const query = priceListSearch.value.trim().toLowerCase()
-
-  for (const entry of structuredData.value?.prices || []) {
-    const category = entry.category || 'Other Services'
-    const searchable = [
-      category,
-      entry.service,
-      entry.flatType,
-      entry.unit,
-      entry.price,
-      entry.maxPrice,
-      entry.priceBasis,
-      ...(entry.conditions || [])
-    ].join(' ').toLowerCase()
-
-    if (query && !searchable.includes(query)) continue
-
-    if (!groups.has(category)) groups.set(category, [])
-    groups.get(category).push(entry)
-  }
-
-  return Array.from(groups, ([category, entries]) => ({
-    category,
-    entries
-  }))
-})
-
-const informationSections = computed(() => {
-  const data = structuredData.value
-  if (!data) return []
-
-  return [
-    { title: 'Payment Terms', items: data.paymentTerms || [] },
-    { title: 'General Conditions', items: data.generalConditions || [] },
-    { title: 'Additional Notes', items: data.additionalNotes || [] }
-  ].filter(section => section.items.length)
-})
-
-function formatPriceEntry(entry) {
-  if (entry.price == null || !Number.isFinite(Number(entry.price))) {
-    return 'Not specified'
-  }
-
-  if (entry.priceBasis === 'range' && entry.maxPrice != null) {
-    return `${formatMoney(entry.price)} – ${formatMoney(entry.maxPrice)}`
-  }
-
-  if (entry.priceBasis === 'from') {
-    return `From ${formatMoney(entry.price)}`
-  }
-
-  return formatMoney(entry.price)
-}
 
 function flatTypeLabel(value) {
-  if (!value) return 'Not specified'
-
-  return {
-    '2-room': '2-room HDB',
-    '3-room': '3-room HDB',
-    '4-room': '4-room HDB',
-    '5-room': '5-room HDB',
-    executive: 'Executive HDB'
-  }[value] || value
+  return { '2-room': '2-room HDB', '3-room': '3-room HDB', '4-room': '4-room HDB', '5-room': '5-room HDB', executive: 'Executive HDB' }[value] || value || 'Not specified'
 }
 
 // BUSINESS PROFILE
@@ -856,7 +784,7 @@ async function loadData() {
   showPriceList.value = false
   showUpload.value = false
   clearUploadHighlight()
-  priceListSearch.value = ''
+
   fileInputKey.value += 1
 
   try {
@@ -1020,7 +948,7 @@ async function extractPDF() {
 
     pdfFile.value = null
     fileInputKey.value += 1
-    priceListSearch.value = ''
+  
     showUpload.value = false
     showPriceList.value = true
 
@@ -1083,8 +1011,6 @@ async function generateAIQuotation(request) {
       request.aiDraft &&
       !confirm('Generating again will replace this unsent draft. Continue?')
     ) return
-
-    request.aiDraft = null
 
     const { data } = await axios.post(`${API}/generate-quotation`, {
       requestId: getId(request),
@@ -1794,7 +1720,23 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <p class="fw-semibold mb-2">Services Required</p>
+            <section class="border rounded-3 p-3 mb-3">
+                <h6 class="fw-bold">Items requested for quotation</h6>
+                <ul v-if="request.selectedLayoutItems?.length" class="small mb-0">
+                  <li v-for="item in request.selectedLayoutItems" :key="item.id">{{ item.room }} — {{ String(item.item).replace(/[_-]/g, ' ') }} × {{ item.quantity }}</li>
+                </ul>
+                <p v-else-if="request.scopeVersion === 1" class="small text-muted mb-0">No layout items selected. See additional work below.</p>
+                <p v-else class="small text-muted mb-0">This older request has no explicit item selection. The homeowner must update it before a new AI draft can be generated.</p>
+              </section>
+              <div v-if="request.workDetails?.length" class="bg-light rounded-3 p-3 mb-3">
+              <h4 class="h6 fw-bold">Additional renovation work</h4>
+              <div v-for="work in request.workDetails" :key="work.service" class="small mb-2">
+                <strong>{{ work.service }}</strong> — {{ work.scope === 'whole' ? 'Whole flat' : work.scope === 'rooms' ? work.rooms.join(', ') : 'Contractor to assess' }}
+                <span v-if="work.quantity"> · {{ work.quantity }} {{ work.unit }}</span>
+                <p v-if="work.notes" class="mb-0 text-muted">{{ work.notes }}</p>
+              </div>
+            </div>
+            <p class="fw-semibold mb-2">Requested Service Categories</p>
             <div class="d-flex flex-wrap gap-2 mb-3">
               <span
                 v-for="service in request.services || []"
@@ -1869,7 +1811,7 @@ onUnmounted(() => {
                   <div class="row g-3">
                     <div class="col-md-6">
                       <label class="form-label small d-block">
-                        Service
+                        Item / Work
                         <input v-model="item.service" type="text" class="form-control mt-1" />
                       </label>
                     </div>
@@ -2092,135 +2034,15 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <!-- ORGANISED PRICE LIST -->
-            <div
-              v-if="priceListLoaded && latestPriceList && showPriceList"
-              id="saved-price-list-viewer"
-              class="mt-4"
-            >
-              <template v-if="hasStructuredData">
-                <div class="alert alert-warning small">
-                  AI-organised information needs checking against the original PDF.
-                  This display does not mark it as approved.
-                </div>
-
-                <label for="price-list-search" class="form-label small fw-semibold">
-                  Search prices
-                </label>
-                <input
-                  id="price-list-search"
-                  v-model="priceListSearch"
-                  type="search"
-                  class="form-control mb-4"
-                  placeholder="Search category, service, flat type or condition"
-                />
-
-                <section
-                  v-for="group in priceGroups"
-                  :key="group.category"
-                  class="category-card mb-3"
-                >
-                  <div class="category-heading p-3">
-                    <h3 class="h6 fw-bold mb-0">{{ group.category }}</h3>
-                  </div>
-
-                  <div class="table-responsive">
-                    <table class="table price-table align-middle mb-0">
-                      <caption class="visually-hidden">
-                        Prices and conditions for {{ group.category }}
-                      </caption>
-                      <thead>
-                        <tr>
-                          <th scope="col">Service</th>
-                          <th scope="col">Property Type</th>
-                          <th scope="col">Price</th>
-                          <th scope="col">Unit</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <template v-for="(entry, index) in group.entries" :key="index">
-                          <tr>
-                            <td class="fw-semibold">{{ entry.service }}</td>
-                            <td>{{ flatTypeLabel(entry.flatType) }}</td>
-                            <td class="fw-semibold text-success">
-                              {{ formatPriceEntry(entry) }}
-                              <span
-                                v-if="entry.price != null && entry.priceBasis === 'unspecified'"
-                                class="d-block small text-muted fw-normal"
-                              >Price basis not specified</span>
-                            </td>
-                            <td>{{ entry.unit || 'Not specified' }}</td>
-                          </tr>
-                          <tr class="conditions-row">
-                            <td colspan="4">
-                              <div v-if="entry.conditions?.length" class="mb-2">
-                                <strong class="small">Conditions & Inclusions</strong>
-                                <ul class="small mb-0 mt-1">
-                                  <li v-for="(condition, i) in entry.conditions" :key="i">
-                                    {{ condition }}
-                                  </li>
-                                </ul>
-                              </div>
-                              <details v-if="entry.source" class="small">
-                                <summary class="text-success">View Source Evidence</summary>
-                                <p class="preserve-lines text-muted mt-2 mb-0">
-                                  {{ entry.source }}
-                                </p>
-                              </details>
-                            </td>
-                          </tr>
-                        </template>
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
-
-                <p v-if="!priceGroups.length" class="text-muted">
-                  {{
-                    priceListSearch.trim()
-                      ? 'No matching price entries. Try another search.'
-                      : 'No individual price entries were identified.'
-                  }}
-                </p>
-
-                <div class="row g-3 mt-1">
-                  <div
-                    v-for="section in informationSections"
-                    :key="section.title"
-                    class="col-md-6"
-                  >
-                    <div class="terms-card p-3 h-100">
-                      <h3 class="h6 fw-bold">{{ section.title }}</h3>
-                      <ul class="small mb-0 ps-3">
-                        <li v-for="(item, index) in section.items" :key="index">
-                          {{ item }}
-                        </li>
-                      </ul>
-                    </div>
-                  </div>
-                </div>
+            <div v-if="priceListLoaded && latestPriceList && showPriceList" id="saved-price-list-viewer" class="mt-4">
+              <template v-if="latestPriceList.hasPdf">
+                <a :href="`${API}/contractor/price-list/${getId(latestPriceList)}/pdf`" target="_blank" rel="noopener" class="btn btn-outline-success mb-3">Open PDF in new tab ↗</a>
+                <iframe :key="getId(latestPriceList)" :src="`${API}/contractor/price-list/${getId(latestPriceList)}/pdf`" title="Saved contractor price-list PDF" style="width:100%;height:650px;border:1px solid #dce8e0;border-radius:12px"></iframe>
               </template>
-
-              <div v-else class="alert alert-warning small">
-                {{
-                  latestPriceList.structuringWarning ||
-                  'This version has no organised price data. You can read its original extracted text below. Upload again to try automatic organisation.'
-                }}
-              </div>
-
-              <details class="original-text mt-4 p-3" :open="!hasStructuredData">
-                <summary class="fw-semibold text-success">
-                  View Original Extracted Text
-                </summary>
-                <pre
-                  v-if="savedPriceListText"
-                  class="pdf-preview mt-3 mb-0"
-                  tabindex="0"
-                  aria-label="Original extracted price-list text"
-                >{{ savedPriceListText }}</pre>
-                <p v-else class="small text-muted mt-3 mb-0">
-                  No extracted text is available.
-                </p>
+              <div v-else class="alert alert-info">This older upload only contains text. Upload the PDF again to save the original file.</div>
+              <details class="original-text mt-3 p-3">
+                <summary class="fw-semibold text-success">Extracted text used for quotation drafts</summary>
+                <pre class="pdf-preview mt-3 mb-0">{{ savedPriceListText || 'No extracted text available.' }}</pre>
               </details>
             </div>
 
@@ -2248,7 +2070,7 @@ onUnmounted(() => {
               </h3>
               <p class="small text-muted">
                 Upload a complete, text-based PDF up to 5 MB.
-                Prices and conditions will be extracted and organised automatically.
+                The original PDF is saved and its text is extracted for quotation drafts. No AI is used during upload.
               </p>
 
               <label for="contractor-price-list" class="form-label small fw-semibold">
@@ -2276,7 +2098,7 @@ onUnmounted(() => {
                   :disabled="!pdfFile || dashboardBusy"
                   @click="extractPDF"
                 >
-                  {{ uploading ? 'Extracting & Organising...' : 'Extract PDF Text & Save' }}
+                  {{ uploading ? 'Saving PDF...' : 'Upload & Save PDF' }}
                 </button>
                 <button
                   v-if="latestPriceList || pdfFile"

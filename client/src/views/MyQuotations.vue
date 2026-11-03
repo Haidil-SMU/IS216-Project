@@ -771,6 +771,22 @@ onMounted(() => {
 
               </div>
 
+              <section class="border rounded-3 p-3 mb-3">
+                <h6 class="fw-bold">Items requested for quotation</h6>
+                <ul v-if="request.selectedLayoutItems?.length" class="small mb-0">
+                  <li v-for="item in request.selectedLayoutItems" :key="item.id">{{ item.room }} — {{ String(item.item).replace(/[_-]/g, ' ') }} × {{ item.quantity }}</li>
+                </ul>
+                <p v-else-if="request.scopeVersion === 1" class="small text-muted mb-0">No layout items selected. See additional work below.</p>
+                <p v-else class="small text-muted mb-0">This older request has no explicit item selection. The homeowner must update it before a new AI draft can be generated.</p>
+              </section>
+              <div v-if="request.workDetails?.length" class="bg-light rounded-3 p-3 mb-3">
+                <h6 class="fw-bold small">Additional renovation work</h6>
+                <p v-for="work in request.workDetails" :key="work.service" class="small mb-2">
+                  <strong>{{ work.service }}</strong> — {{ work.scope === 'whole' ? 'Whole flat' : work.scope === 'rooms' ? work.rooms.join(', ') : 'Contractor to assess' }}
+                  <span v-if="work.quantity"> · {{ work.quantity }} {{ work.unit }}</span>
+                  <span v-if="work.notes" class="d-block text-muted">{{ work.notes }}</span>
+                </p>
+              </div>
               <!-- DESCRIPTION -->
               <template v-if="request.description">
 
