@@ -5,7 +5,7 @@ import SimulatorCost from './SimulatorCost.vue'
 import { effectivePower } from '@/tests/effectivePower'
 import axios from 'axios'
 
-// The Express API retrieves the logged-in user's household from MongoDB.
+
 const householdId = ref('')
 const rooms = ref([])
 const catalogue = ref([])
@@ -37,44 +37,44 @@ const allowedCategories = ['kitchen', 'cooling', 'entertainment', 'laundry', 'li
 // Older 3D placements sometimes use typeKeys from the earlier catalogue.
 // Match those keys to the corresponding updated catalogue type where possible.
 const oldTypeKeys = {
-  single_split: 'aircon_split',
-  system_2: 'aircon_split',
-  system_3: 'aircon_split',
-  system_4: 'aircon_split',
+  single_split: 'aircon_single_split',
+  system_2: 'aircon_single_split',
+  system_3: 'aircon_single_split',
+  system_4: 'aircon_single_split',
   window: 'aircon_window',
-  casement: 'aircon_window',
+  casement: 'aircon_casement',
   portable: 'aircon_portable',
-  vrf: 'aircon_vrf_three_phase',
+  vrf: 'aircon_single_split',
+  '43_inch': 'tv_43_inch_wall_mounted',
   '55_inch': 'tv_55_inch_wall_mounted',
   '65_inch': 'tv_65_inch_wall_mounted',
-  vented: 'dryer_standard',
-  condenser: 'dryer_standard',
+  vented: 'dryer_vented',
+  condenser: 'dryer_condenser',
+  condensor: 'dryer_condenser',
   heat_pump: 'dryer_heat_pump',
-  led_10w: 'light_led_bulb',
-  led_15w: 'light_led_bulb',
+  led_10w: 'light_led_10w',
+  led_15w: 'light_led_15w',
   cfl: 'light_cfl',
-  linear_led: 'light_tube',
-  fluorescent_tube: 'light_tube'
+  linear_led: 'light_linear_led',
+  fluorescent_tube: 'light_fluorescent_tube'
 }
 
 
 function getCatalogueItem(key) {
   let lookupKey = oldTypeKeys[key] || key
 
-  // Match single-split and multi-split air conditioners
   if (
-    key.startsWith('aircon_multi_split_') ||
-    key.startsWith('aircon_single_split_')
+    key.includes('aircon_multi_split_') ||
+    key.includes('aircon_single_split_')
   ) {
-    lookupKey = 'aircon_split'
+    lookupKey = 'aircon_single_split'
   }
 
-  // Match condenser clothes dryers
   if (
     (key.includes('condenser') || key.includes('condensor')) &&
     key.includes('dryer')
   ) {
-    lookupKey = 'dryer_standard'
+    lookupKey = 'dryer_condenser'
   }
 
   return catalogue.value.find(item => item.typeKey === lookupKey)
@@ -168,7 +168,13 @@ function typicalHoursPerYear(typeKey) {
 }
 
 function prettyName(key) {
-  return String(key || '').replaceAll('_', ' ').replace(/\b\w/g, letter => letter.toUpperCase())
+  let words = key.split('_')
+
+  for (let i = 0; i < words.length; i++) {
+    words[i] = words[i][0].toUpperCase() + words[i].slice(1)
+  }
+
+  return words.join(' ')
 }
 function iconFor(key) {
   const text = String(key).toLowerCase()
@@ -185,28 +191,44 @@ function iconFor(key) {
 // Settings are GENERAL GAME CONTROLS for a catalogue appliance type.
 // The products[] data does not prove a particular brand/model supports every control.
 function controlTypeFor(name, category, typeKey) {
-  const key = String(typeKey || '')
-  if (key === 'air_purifier') return 'purifier'
-  if (key === 'dehumidifier') return 'dehumidifier'
-  if (key === 'dishwasher') return 'dishwasher'
-  if (key === 'desktop_computer') return 'computer'
-  if (key === 'exhaust_fan') return 'exhaust'
-  if (key === 'rice_cooker') return 'ricecooker'
-  if (key === 'induction_cooker') return 'induction'
-  if (key === 'electric_kettle' || key === 'toaster') return '' // No adjustable control specified in the catalogue
 
-  const text = String(name).toLowerCase()
-  if (/air.?con|air condition|split unit|system[_ -]?[234]|vrf/.test(text)) return 'aircon'
-  if (/fan|circulator/.test(text) && !/extractor|hood/.test(text)) return 'fan'
-  if (category === 'lighting' || /lamp|light bulb|ceiling light|led light/.test(text)) return 'light'
-  if (/television|\btv\b/.test(text)) return 'tv'
-  if (/washing machine|washer/.test(text)) return 'washer'
-  if (/tumble dryer|clothes dryer|drying machine/.test(text)) return 'dryer'
-  if (/water heater|instant heater|storage heater/.test(text)) return 'heater'
-  if (/refrigerator|fridge|freezer/.test(text)) return 'fridge'
-  if (/microwave/.test(text)) return 'microwave'
-  if (/air fryer/.test(text)) return 'airfryer'
-  if (/\boven\b/.test(text)) return 'oven'
+  if (!typeKey) return ''
+
+  if (typeKey.includes('aircon') || typeKey === 'single_split' ||
+      typeKey.includes('system_') || typeKey === 'window' ||
+      typeKey === 'casement' || typeKey === 'portable' ||
+      typeKey === 'vrf') return 'aircon'
+
+  if (typeKey === 'exhaust_fan') return 'exhaust'
+
+  if (typeKey.includes('fan')) return 'fan'
+
+  if (category === 'lighting' || typeKey.includes('light') ||
+      typeKey.includes('lamp') || typeKey.includes('led') ||
+      typeKey === 'cfl') return 'light'
+
+  if (typeKey.includes('tv') || typeKey.includes('inch')) return 'tv'
+
+  if (typeKey.includes('washer')) return 'washer'
+
+  if (typeKey.includes('dryer') || typeKey === 'vented' ||
+      typeKey === 'condenser' || typeKey === 'heat_pump') return 'dryer'
+
+  if (typeKey.includes('water_heater')) return 'heater'
+
+  if (typeKey.includes('refrigerator') || typeKey.includes('fridge')) return 'fridge'
+
+  if (typeKey.includes('microwave')) return 'microwave'
+  if (typeKey.includes('air_fryer')) return 'airfryer'
+  if (typeKey.includes('oven')) return 'oven'
+
+  if (typeKey === 'air_purifier') return 'purifier'
+  if (typeKey === 'dehumidifier') return 'dehumidifier'
+  if (typeKey === 'dishwasher') return 'dishwasher'
+  if (typeKey === 'desktop_computer') return 'computer'
+  if (typeKey === 'rice_cooker') return 'ricecooker'
+  if (typeKey === 'induction_cooker') return 'induction'
+
   return ''
 }
 function defaultSetting(type) {
@@ -322,8 +344,7 @@ function showToast(message) {
   toastTimer = setTimeout(() => { toast.value = '' }, 2500)
 }
 
-// Week 5: async/await + Axios GET.
-// Read the appliances the player placed in the 3D home.
+
 async function loadRooms() {
   pauseGame()
   loading.value = true
