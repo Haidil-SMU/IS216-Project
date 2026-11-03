@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
 
@@ -20,13 +20,20 @@ const selectedServiceCodes = String(route.query.services || '')
 
 const contractor = ref(null)
 const households = ref([])
+const plans = ref([])
 const flatTypes = ref([])
 
 const loading = ref(true)
 const submitting = ref(false)
+const blockedMessage = ref('')
 
 const errorMessage = ref('')
 const successMessage = ref('')
+const workDetails = ref([])
+const layoutRooms = ref([])
+const roomLoading = ref(false)
+const roomNotice = ref('')
+let layoutLoadVersion = 0
 
 const services = [
   { code: 'CR06', name: 'Interior Design & Renovation' },
@@ -49,8 +56,24 @@ const fallbackFlatTypes = [
   { id: 'executive', name: 'Executive HDB' }
 ]
 
-const propertyMode = ref('saved')
+const layoutPreview = ref([])
+const selectedItemIds = ref([])
+let selectionLayoutKey = ''
+const selectedItems = computed(() => layoutPreview.value.flatMap(room => room.items || []).filter(item => item.eligible && selectedItemIds.value.includes(item.id)))
+const eligibleRooms = computed(() => layoutPreview.value.map(room => ({ ...room, items: (room.items || []).filter(item => item.eligible) })).filter(room => room.items.length))
+const referenceRooms = computed(() => layoutPreview.value.map(room => ({ ...room, items: (room.items || []).filter(item => !item.eligible) })).filter(room => room.items.length))
+function formatLayoutItem(value) {
+  return String(value || 'Unnamed item').replace(/[_-]+/g, ' ').replace(/\b\w/g, character => character.toUpperCase())
+}
 const selectedHouseholdId = ref('')
+
+// Optional: the saved energy plan whose 3D layout the contractor should see (empty = current home layout).
+const selectedPlanId = ref('')
+const planChoices = computed(() => {
+  return plans.value.filter(
+    plan => plan.householdId === selectedHouseholdId.value && Array.isArray(plan.layout) && plan.layout.length
+  )
+})
 
 // Keep the original quotation's property details when editing.
 const originalHouseholdId = ref('')
@@ -87,15 +110,15 @@ const canUseSavedHousehold = computed(() => {
 
 const householdNotice = computed(() => {
   if (households.value.length === 0) {
-    return 'No saved household was found. Complete your household setup in My Profile. You can also enter property details manually here.'
+    return 'No saved household was found. Complete your household setup in My Profile.'
   }
 
   if (households.value.length > 1) {
-    return 'Your account still has multiple saved households. Review them in My Profile. Enter property details manually for this request.'
+    return 'Your account still has multiple saved households. Review them in My Profile.'
   }
 
   if (!canUseSavedHousehold.value) {
-    return 'Your saved household could not be identified. Review it in My Profile or enter property details manually.'
+    return 'Your saved household could not be identified. Review it in My Profile.'
   }
 
   return ''
@@ -170,6 +193,43 @@ const today = [
   String(currentDate.getDate()).padStart(2, '0')
 ].join('-')
 
+// Room choices follow the selected household layout. No design changes are made here.
+async function loadRoomChoices() {
+  const version = ++layoutLoadVersion
+  const layoutKey = `${selectedHouseholdId.value}:${selectedPlanId.value}`
+  if (selectionLayoutKey && selectionLayoutKey !== layoutKey) selectedItemIds.value = []
+  selectionLayoutKey = layoutKey
+  layoutRooms.value = []
+  roomNotice.value = ''
+  roomLoading.value = false
+  layoutPreview.value = []
+  if (!selectedHouseholdId.value) return
+  roomLoading.value = true
+  try {
+    const { data } = await axios.get('/api/quotation-layout', {
+      params: { contractorId, householdId: selectedHouseholdId.value, planId: selectedPlanId.value || undefined }
+    })
+    if (version !== layoutLoadVersion) return
+    layoutPreview.value = Array.isArray(data.rooms) ? data.rooms : []
+    const eligibleIds = layoutPreview.value.flatMap(room => room.items || []).filter(item => item.eligible).map(item => item.id)
+    const removed = selectedItemIds.value.some(id => !eligibleIds.includes(id))
+    selectedItemIds.value = selectedItemIds.value.filter(id => eligibleIds.includes(id))
+    if (removed) errorMessage.value = 'Some previously selected items changed or are no longer offered. Review your selection before saving.'
+    layoutRooms.value = [...new Set((data.rooms || []).map(room => String(room.name || room.type || '').trim()).filter(Boolean))]
+  } catch {
+    if (version === layoutLoadVersion) roomNotice.value = 'The selected layout could not be loaded. Retry before checking its items; you can still describe work areas below.'
+  } finally {
+    if (version === layoutLoadVersion) roomLoading.value = false
+  }
+}
+
+watch([selectedHouseholdId, selectedPlanId], loadRoomChoices)
+watch(() => form.value.services, selected => {
+  workDetails.value = selected.map(service => workDetails.value.find(work => work.service === service) || {
+    service, scope: 'assess', rooms: [], quantity: null, unit: 'points', notes: ''
+  })
+}, { deep: true })
+
 // ============================================================
 // LOAD DATA
 // ============================================================
@@ -177,6 +237,7 @@ const today = [
 async function getData() {
   loading.value = true
   errorMessage.value = ''
+  blockedMessage.value = ''
 
   try {
     const [contractorResponse, plannerResponse] = await Promise.all([
@@ -202,13 +263,20 @@ async function getData() {
       ? plannerResponse.data.users
       : []
 
+    plans.value = Array.isArray(plannerResponse.data.plans)
+      ? plannerResponse.data.plans
+      : []
+
     flatTypes.value = Array.isArray(plannerResponse.data.flatTypes)
       ? plannerResponse.data.flatTypes
       : []
 
+    if (!canUseSavedHousehold.value) throw new Error(householdNotice.value || 'Set up your household in My Profile first.')
+
     if (isEditMode) {
       await loadExistingRequest()
     } else {
+      await checkActiveRequest()
       form.value.services = services
         .filter(service =>
           selectedServiceCodes.includes(service.code) &&
@@ -216,13 +284,7 @@ async function getData() {
         )
         .map(service => service.name)
 
-      if (canUseSavedHousehold.value) {
-        propertyMode.value = 'saved'
-        populateSavedHousehold()
-      } else {
-        propertyMode.value = 'manual'
-        selectedHouseholdId.value = ''
-      }
+      populateSavedHousehold()
     }
   } catch (error) {
     console.error(error)
@@ -265,7 +327,12 @@ async function loadExistingRequest() {
     throw new Error('Only pending quotation requests can be updated.')
   }
 
+  workDetails.value = Array.isArray(existingRequest.workDetails) ? existingRequest.workDetails.map(work => ({ ...work, rooms: [...(work.rooms || [])] })) : []
+
+  selectedItemIds.value = (existingRequest.selectedLayoutItems || []).map(item => item.id)
+
   originalHouseholdId.value = getId(existingRequest.householdId)
+  const originalPlanId = getId(existingRequest.planId)
 
   originalHouseholdSnapshot.value = {
     householdName: existingRequest.household?.name || '',
@@ -290,14 +357,17 @@ async function loadExistingRequest() {
     getId(savedHousehold.value.id) === originalHouseholdId.value
 
   if (matchesSavedHousehold) {
-    propertyMode.value = 'saved'
     selectedHouseholdId.value = originalHouseholdId.value
+    // A plan that has since been deleted can't be attached any more.
+    selectedPlanId.value = plans.value.some(plan => plan.id === originalPlanId)
+      ? originalPlanId
+      : ''
 
     // Preserve the quotation snapshot instead of replacing it
     // with the household's current profile values.
   } else {
-    propertyMode.value = 'manual'
-    selectedHouseholdId.value = ''
+    populateSavedHousehold()
+    selectedPlanId.value = ''
   }
 }
 
@@ -330,36 +400,30 @@ function populateSavedHousehold() {
   form.value.bedrooms = household.bedrooms ?? 1
 }
 
-function changePropertyMode() {
-  errorMessage.value = ''
-
-  if (propertyMode.value === 'saved') {
-    if (!canUseSavedHousehold.value) {
-      propertyMode.value = 'manual'
-      selectedHouseholdId.value = ''
-      return
-    }
-
-    populateSavedHousehold()
-    return
-  }
-
-  // Keep the displayed details available for manual editing.
-  selectedHouseholdId.value = ''
-}
-
 // ============================================================
 // SUBMIT OR UPDATE
 // ============================================================
 
+async function checkActiveRequest() {
+  const { data } = await axios.get(QUOTATION_API)
+  const requests = Array.isArray(data) ? data : data.requests || []
+  const active = requests.find(request =>
+    getId(request.contractorId) === contractorId &&
+    ['pending', 'quoted', 'accepted'].includes(request.status)
+  )
+  blockedMessage.value = active
+    ? 'You already have an active request with this contractor. Review it in My Quotations.'
+    : ''
+  return Boolean(active)
+}
+
 async function submitRequest() {
-  if (submitting.value) return
+  if (submitting.value || successMessage.value || blockedMessage.value) return
 
   errorMessage.value = ''
   successMessage.value = ''
 
   if (
-    propertyMode.value === 'saved' &&
     (
       !canUseSavedHousehold.value ||
       !selectedHouseholdId.value ||
@@ -367,7 +431,7 @@ async function submitRequest() {
     )
   ) {
     errorMessage.value =
-      'Your saved household is unavailable. Please enter your property details manually.'
+      'Your saved household is unavailable. Please update it in My Profile.'
     return
   }
 
@@ -388,11 +452,6 @@ async function submitRequest() {
     return
   }
 
-  if (form.value.services.length === 0) {
-    errorMessage.value = 'Please select at least one renovation service.'
-    return
-  }
-
   if (!form.value.description.trim()) {
     errorMessage.value = 'Please describe your renovation requirements.'
     return
@@ -408,12 +467,38 @@ async function submitRequest() {
     return
   }
 
+  for (const work of workDetails.value) {
+    if (work.scope === 'rooms' && !work.rooms.length) {
+      errorMessage.value = `Choose rooms for ${work.service}, or select contractor to assess.`
+      return
+    }
+    if (work.quantity != null && work.quantity !== '' && (!Number.isFinite(Number(work.quantity)) || Number(work.quantity) <= 0)) {
+      errorMessage.value = `Enter a positive quantity for ${work.service}, or leave it blank.`
+      return
+    }
+  }
+
+  if (roomLoading.value || roomNotice.value) {
+    errorMessage.value = 'Load the layout successfully before submitting.'
+    return
+  }
+  if (!selectedItems.value.length && !form.value.services.length) {
+    errorMessage.value = 'Select at least one layout item or additional renovation requirement.'
+    return
+  }
   const requestData = {
+    selectedItemIds: [...selectedItemIds.value],
+    workDetails: workDetails.value.map(work => ({
+      service: work.service, scope: work.scope,
+      rooms: work.scope === 'rooms' ? [...work.rooms] : [],
+      quantity: work.quantity === '' || work.quantity == null ? null : Number(work.quantity),
+      unit: work.unit || 'points', notes: String(work.notes || '').trim()
+    })),
     contractorId,
 
-    householdId: propertyMode.value === 'saved'
-      ? selectedHouseholdId.value
-      : null,
+    householdId: selectedHouseholdId.value,
+
+    planId: selectedPlanId.value || null,
 
     household: {
       name: form.value.householdName.trim(),
@@ -431,6 +516,8 @@ async function submitRequest() {
   submitting.value = true
 
   try {
+    if (!isEditMode && await checkActiveRequest()) return
+
     if (isEditMode) {
       await axios.put(
         `${QUOTATION_API}/${encodeURIComponent(requestId)}`,
@@ -451,6 +538,10 @@ async function submitRequest() {
     errorMessage.value =
       error.response?.data?.error ||
       'Unable to save quotation request.'
+
+    if (error.response?.status === 409) {
+      blockedMessage.value = errorMessage.value
+    }
   } finally {
     submitting.value = false
   }
@@ -518,6 +609,11 @@ onMounted(getData)
       </div>
     </div>
 
+    <div v-else-if="blockedMessage" class="alert alert-info" role="status">
+      <p>{{ blockedMessage }}</p>
+      <RouterLink to="/MyQuotations" class="btn btn-success">View My Quotations →</RouterLink>
+    </div>
+
     <!-- FORM -->
     <div v-else-if="contractor">
       <!-- CONTRACTOR INFORMATION -->
@@ -550,8 +646,7 @@ onMounted(getData)
             </h4>
 
             <p class="text-muted">
-              Use your saved household from My Profile or enter
-              your property information manually.
+              Your property details come from My Profile. Choose a layout below and review the items it contains.
             </p>
 
             <div
@@ -562,43 +657,8 @@ onMounted(getData)
               {{ householdNotice }}
             </div>
 
-            <!-- PROPERTY MODE -->
-            <div class="d-flex flex-wrap gap-4 mb-4">
-              <label class="form-check">
-                <input
-                  type="radio"
-                  name="propertyMode"
-                  class="form-check-input"
-                  value="saved"
-                  v-model="propertyMode"
-                  :disabled="!canUseSavedHousehold"
-                  @change="changePropertyMode"
-                />
-
-                <span class="form-check-label">
-                  Use Saved Household
-                </span>
-              </label>
-
-              <label class="form-check">
-                <input
-                  type="radio"
-                  name="propertyMode"
-                  class="form-check-input"
-                  value="manual"
-                  v-model="propertyMode"
-                  @change="changePropertyMode"
-                />
-
-                <span class="form-check-label">
-                  Enter Manually
-                </span>
-              </label>
-            </div>
-
             <!-- SAVED HOUSEHOLD INFORMATION -->
             <div
-              v-if="propertyMode === 'saved'"
               class="bg-light rounded-3 p-3 mb-4"
             >
               <p class="fw-semibold mb-1">
@@ -612,11 +672,65 @@ onMounted(getData)
               <p class="small text-muted mb-0">
                 {{
                   isEditMode
-                    ? 'These are the property details stored with this quotation. Choose Enter Manually to change them.'
-                    : 'Your saved household details have been filled in automatically. Choose Enter Manually to use different property details.'
+                    ? 'These are the saved property details attached to this request.'
+                    : 'Your saved household details have been filled in automatically. Update property details in My Profile.'
                 }}
               </p>
+
+              <div v-if="canUseSavedHousehold" class="mt-3">
+                <label for="layoutPlan" class="form-label fw-semibold small mb-1">
+                  3D layout the contractor will see
+                </label>
+
+                <select
+                  id="layoutPlan"
+                  class="form-select form-select-sm"
+                  v-model="selectedPlanId"
+                >
+                  <option value="">My current home layout</option>
+                  <option
+                    v-for="plan in planChoices"
+                    :key="plan.id"
+                    :value="plan.id"
+                  >
+                    Plan: {{ plan.name }}
+                  </option>
+                </select>
+              </div>
             </div>
+
+            <section class="layout-inventory mb-4" aria-labelledby="layout-items-title" aria-live="polite">
+              <div class="d-flex flex-wrap justify-content-between gap-2 mb-2">
+                <h5 id="layout-items-title" class="fw-bold mb-0">Items to quote for</h5>
+                <span class="small text-muted">{{ selectedPlanId ? planChoices.find(plan => plan.id === selectedPlanId)?.name || 'Saved plan' : 'Current home layout' }}</span>
+              </div>
+              <p class="small text-muted">Select the items you want installed, replaced or worked on. Nothing is selected automatically. Quantities come from your layout; clarify partial quantities in your description.</p>
+              <p v-if="roomLoading" class="small text-muted" role="status">Loading items…</p>
+              <div v-else-if="roomNotice" class="alert alert-warning">{{ roomNotice }} <button type="button" class="btn btn-sm btn-outline-secondary" @click="loadRoomChoices">Retry</button></div>
+              <template v-else>
+                <div class="row g-3">
+                  <div v-for="(room, index) in eligibleRooms" :key="index" class="col-md-6">
+                    <div class="border rounded-3 bg-white p-3 h-100">
+                      <h6 class="fw-bold">{{ room.name }}</h6>
+                      <label v-for="item in room.items" :key="item.id" class="d-flex align-items-start gap-2 py-2">
+                        <input v-model="selectedItemIds" type="checkbox" class="form-check-input mt-1" :value="item.id" />
+                        <span class="small flex-grow-1">{{ formatLayoutItem(item.item) }}</span>
+                        <span class="badge bg-success-subtle text-success-emphasis">× {{ item.quantity }}</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+                <p v-if="!eligibleRooms.length" class="small text-muted">No recognised layout items match this contractor’s services. You can request additional work below.</p>
+                <p class="small text-success mt-3 mb-0">{{ selectedItems.length }} item group(s) selected</p>
+                <details v-if="referenceRooms.length" class="mt-3 border-top pt-3">
+                  <summary class="small text-muted">Other layout items — for reference only</summary>
+                  <div v-for="(room, index) in referenceRooms" :key="index" class="small text-muted mt-3">
+                    <strong>{{ room.name }}</strong>
+                    <p v-for="item in room.items" :key="item.id" class="mb-1">{{ formatLayoutItem(item.item) }} × {{ item.quantity }} — {{ item.service ? 'Outside this contractor’s services' : 'For reference only' }}</p>
+                  </div>
+                </details>
+              </template>
+            </section>
 
             <!-- PROPERTY FIELDS -->
             <div class="row g-3">
@@ -633,7 +747,7 @@ onMounted(getData)
                   type="text"
                   class="form-control"
                   v-model="form.householdName"
-                  :readonly="propertyMode === 'saved'"
+                  readonly
                   placeholder="e.g. My HDB Flat"
                   required
                 />
@@ -651,7 +765,7 @@ onMounted(getData)
                   id="flatType"
                   class="form-select"
                   v-model="form.flatType"
-                  :disabled="propertyMode === 'saved'"
+                  disabled
                   required
                 >
                   <option value="">Select flat type</option>
@@ -681,7 +795,7 @@ onMounted(getData)
                   min="1"
                   step="1"
                   v-model.number="form.occupants"
-                  :readonly="propertyMode === 'saved'"
+                  readonly
                   required
                 />
               </div>
@@ -701,7 +815,7 @@ onMounted(getData)
                   min="0"
                   step="1"
                   v-model.number="form.bedrooms"
-                  :readonly="propertyMode === 'saved'"
+                  readonly
                   required
                 />
               </div>
@@ -713,18 +827,17 @@ onMounted(getData)
         <div class="card border-0 shadow-sm rounded-4 mb-4">
           <div class="card-body p-4">
             <h4 class="fw-bold mb-3">
-              2. Renovation Requirements
+              2. Additional Renovation Requirements
             </h4>
 
             <!-- SERVICES -->
             <div class="mb-4">
               <label class="form-label fw-semibold">
-                Services Required
+                Additional work (optional)
               </label>
 
               <p class="small text-muted">
-                Select the renovation services you would like
-                this contractor to provide.
+                Select extra work such as painting or waterproofing. This is optional when you have selected items above. Only your selected items and additional work will be requested.
               </p>
 
               <div class="row g-3">
@@ -746,6 +859,36 @@ onMounted(getData)
                     <span>{{ service }}</span>
                   </label>
                 </div>
+              </div>
+            </div>
+
+            <div class="mb-4">
+              <h5 v-if="workDetails.length" class="fw-bold">Additional work details and areas</h5>
+              <p class="small text-muted">Describe the extra work and affected rooms. For work that overlaps a layout item, explain the change needed; it should be quoted once. Leave quantities blank if unsure.</p>
+              <p v-if="roomLoading" class="small text-muted" role="status">Loading rooms…</p>
+              <p v-if="roomNotice" class="small text-warning-emphasis">{{ roomNotice }}</p>
+              <div v-for="(work, index) in workDetails" :key="work.service" class="border rounded-4 p-3 mb-3 bg-light">
+                <h6 class="fw-bold">{{ work.service }}</h6>
+                <label :for="`scope-${index}`" class="form-label small">Work area</label>
+                <select :id="`scope-${index}`" v-model="work.scope" class="form-select mb-3">
+                  <option value="assess">Not sure — contractor to assess</option>
+                  <option value="whole">Whole flat</option>
+                  <option value="rooms">Selected rooms / areas</option>
+                </select>
+                <div v-if="work.scope === 'rooms'" class="mb-3">
+                  <div v-if="layoutRooms.length" class="d-flex flex-wrap gap-3">
+                    <label v-for="room in layoutRooms" :key="room" class="d-flex gap-2 align-items-center">
+                      <input v-model="work.rooms" type="checkbox" class="form-check-input mt-0" :value="room" />{{ room }}
+                    </label>
+                  </div>
+                  <input v-else :value="work.rooms.join(', ')" @input="work.rooms = $event.target.value.split(',').map(value => value.trim()).filter(Boolean)" class="form-control" :aria-label="`Areas for ${work.service}`" placeholder="e.g. Kitchen, Bathroom" />
+                </div>
+                <div class="row g-2 mb-3">
+                  <div class="col-6"><label :for="`quantity-${index}`" class="form-label small">Quantity, if known</label><input :id="`quantity-${index}`" v-model.number="work.quantity" type="number" min="0.01" step="any" class="form-control" placeholder="Optional" /></div>
+                  <div class="col-6"><label :for="`unit-${index}`" class="form-label small">Unit</label><select :id="`unit-${index}`" v-model="work.unit" class="form-select"><option value="points">Points</option><option value="units">Units</option><option value="m²">m²</option><option value="m">Metres</option></select></div>
+                </div>
+                <label :for="`work-notes-${index}`" class="form-label small">What needs doing?</label>
+                <textarea :id="`work-notes-${index}`" v-model="work.notes" class="form-control" maxlength="600" rows="2" placeholder="e.g. Paint walls only; keep the ceiling unchanged"></textarea>
               </div>
             </div>
 
@@ -820,6 +963,14 @@ onMounted(getData)
               3. {{ isEditMode ? 'Save Changes' : 'Submit Request' }}
             </h4>
 
+            <div class="border rounded-3 p-3 mb-4">
+              <h5 class="fw-bold">Your selected scope</h5>
+              <p v-if="!selectedItems.length && !form.services.length" class="small text-muted">Select an item or additional work before submitting.</p>
+              <ul v-if="selectedItems.length" class="small mb-2"><li v-for="item in selectedItems" :key="item.id">{{ item.room }} — {{ formatLayoutItem(item.item) }} × {{ item.quantity }}</li></ul>
+              <p v-for="work in workDetails" :key="work.service" class="small mb-1"><strong>{{ work.service }}</strong> — {{ work.scope === 'whole' ? 'Whole flat' : work.scope === 'rooms' ? work.rooms.join(', ') : 'Contractor to assess' }}</p>
+              <p class="small text-muted mt-2 mb-0">Unselected layout items are for reference and will not be included automatically.</p>
+            </div>
+
             <div class="bg-light rounded-3 p-3 mb-4">
               <p class="small text-muted mb-1">
                 Your request will be sent to:
@@ -842,7 +993,7 @@ onMounted(getData)
               <button
                 type="submit"
                 class="btn btn-success px-4 py-2 fw-semibold"
-                :disabled="submitting"
+                :disabled="submitting || roomLoading || Boolean(roomNotice)"
               >
                 {{
                   submitting
@@ -874,6 +1025,7 @@ onMounted(getData)
 </template>
 
 <style scoped>
+.layout-inventory { padding:20px; border:1px solid #dcebe2; border-radius:16px; background:#f4faf6; }
 .service-option {
   cursor: pointer;
   transition: all 0.2s ease;

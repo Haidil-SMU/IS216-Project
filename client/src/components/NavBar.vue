@@ -58,7 +58,7 @@ async function logout() {
             </RouterLink>
 
             <RouterLink class="nav-link" to="/Simulator">
-              My HDB
+              Simulator
             </RouterLink>
 
             <RouterLink class="nav-link" to="/EnergyPlanner/">
@@ -70,7 +70,7 @@ async function logout() {
             </RouterLink>
 
             <RouterLink class="nav-link" to="/3d">
-              3D Spatial
+              My HDB
             </RouterLink>
           </template>
 
