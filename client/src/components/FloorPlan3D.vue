@@ -87,7 +87,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { createAppliance3DModel, resolveSpec } from '../stores/applianceModels.js'
-import { wallPieces, wallPoint, wallLength, placeAt, onWall, counterPose, isBlocked, sharedRange, sameSpotOn, sharedWall, refitPlacements, itemsOfRoom, doorBlockedBeyond, roomBehindOpening, needsOutsideWall, outsideOnlyMessage, nearestWall, NORMAL, WALL_THICKNESS } from '../stores/placement.js'
+import { wallPieces, wallPoint, wallLength, placeAt, onWall, counterPose, isBlocked, sharedRange, sameSpotOn, sharedWall, refitPlacements, itemsOfRoom, gapsOf, doorBlockedBeyond, roomBehindOpening, needsOutsideWall, outsideOnlyMessage, nearestWall, NORMAL, WALL_THICKNESS } from '../stores/placement.js'
 import { sunAt, heatAt, throwOf, airDirection } from '../stores/energy.js'
 
 // ============================================================
@@ -349,11 +349,17 @@ function candidateOf(spec, pos) {
 }
 
 // All the items of a list except one.
-function othersOf(all, item) {
+function othersOf(all, item, room) {
   const others = []
   for (const o of all) {
     if (o !== item) {
       others.push(o)
+    }
+  }
+  // knocked-out wall stretches: wall-mounted things (aircon, TV...) may not sit on them
+  if (room) {
+    for (const g of gapsOf(room)) {
+      others.push(g)
     }
   }
   return others
@@ -1976,7 +1982,7 @@ function dragItem(e) {
     return
   }
   const room = r.dimension
-  const others = othersOf(d.all, d.item)
+  const others = othersOf(d.all, d.item, roomById(d.roomId))
   const local = [p.x - r.origin.x + d.dx, p.z - r.origin.z + d.dz]
   let pos
   if (d.item.spec.mode === 'opening') {
@@ -2350,7 +2356,7 @@ function nudgeSelected(e) {
   const vx = axes.fwd[0] * kf + axes.right[0] * kr
   const vz = axes.fwd[1] * kf + axes.right[1] * kr
   const room = r.dimension
-  const others = othersOf(d.all, d.item)
+  const others = othersOf(d.all, d.item, roomById(d.roomId))
   let pos
 
   if (d.item.spec.mode === 'opening') {

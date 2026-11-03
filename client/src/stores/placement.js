@@ -253,6 +253,16 @@ function footprint(item) {
 
 // Do items a and b overlap? (true = yes)
 function clash(a, b) {
+  // a stretch of wall that has been knocked out: nothing can hang on it
+  if (a.spec.kind === 'gap' || b.spec.kind === 'gap') {
+    const gap = a.spec.kind === 'gap' ? a : b
+    const other = gap === a ? b : a
+    if (other.spec.kind === 'gap' || other.spec.mode !== 'wall' || other.wall !== gap.wall) {
+      return false
+    }
+    return Math.abs(other.t - gap.t) < (other.spec.w + gap.spec.w) / 2
+  }
+
   // ceiling items only clash with other ceiling items
   if (a.spec.mode === 'ceiling' || b.spec.mode === 'ceiling') {
     if (a.spec.mode !== b.spec.mode) {
@@ -280,6 +290,26 @@ function clash(a, b) {
   const along = Math.abs(a.t - b.t) < (a.spec.w + b.spec.w) / 2 + 0.05
   const sameHeight = a.spec.y < b.spec.y + b.spec.h && b.spec.y < a.spec.y + a.spec.h
   return along && sameHeight
+}
+
+// The knocked-out stretches of a room's walls, as pretend items that wall-mounted things
+// (aircon, TV, counter, heater) may not overlap. Add them to the "others" list when checking a spot.
+export function gapsOf(room) {
+  const gaps = []
+  const open = (room && room.openWalls) || []
+  for (let i = 0; i < open.length; i++) {
+    const o = open[i]
+    gaps.push({
+      id: 'gap:' + i,
+      spec: { kind: 'gap', mode: 'opening', w: o.t1 - o.t0, h: 3, d: 0.1, y: 0 },
+      x: 0,
+      z: 0,
+      rotY: 0,
+      wall: o.wall,
+      t: (o.t0 + o.t1) / 2,
+    })
+  }
+  return gaps
 }
 
 // Does the candidate clash with any of the other items?

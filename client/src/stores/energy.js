@@ -10,9 +10,11 @@
 //   sunAt, heatAt, airDirection, throwOf  -> used by FloorPlan3D.vue (the overlays)
 //   factors                               -> used by EnergyPlanner.vue
 //   analyse                               -> used by ThreeDSpatial.vue
+// The placement rules and the way advice is written are in ../data/placementRules.js.
 // It uses the wall helpers from placement.js.
 
 import { NORMAL, TANGENT, wallPoint, nearestWall, wallLength, onWall, placeAt, isBlocked } from './placement.js'
+import { RULES, ruleApplies, ruleTip, tipText, recText } from '../data/placementRules.js'
 
 // ============================================================
 // NUMBERS WE USE (the "rules of thumb")
@@ -21,15 +23,28 @@ import { NORMAL, TANGENT, wallPoint, nearestWall, wallLength, onWall, placeAt, i
 // How many percent of an item's electricity each problem can add.
 const WEIGHTS = {
   sun: 12,    // direct sun on an aircon or fridge
-  heat: 8,    // NEA: keep the fridge away from heat sources (cooker, oven, sun); aircon works harder next to them
+  heat: 14,   // NEA: keep the fridge away from heat sources (cooker, oven, sun); aircon works harder next to them
   air: 8,     // aircon airflow cut short by furniture
   side: 4,    // aircon needs air round it; NEA: fridge needs about 2 cm each side
   clear: 10,  // NEA: fridge needs about 5 cm at the back
   fan: 6,     // a stand fan next to / in front of an aircon fights its airflow (charged to the aircon)
   glare: 5,   // NEA: place TV and computer screens perpendicular to windows, so brightness need not go up
-  corner: 5,  // NEA: put lamps in corners, where wall reflections add light
+  beside: 5,  // guide: put a floor lamp beside a sofa, armchair or study desk, where its light is used
+  door: 3,    // fridge door blocked by something in front of it, so it stays open longer
+  good: 4,    // credit (a saving, not a cost): the most an item earns for standing where nothing works against it
+  cramped: 5, // dryer, purifier, computer or portable aircon squeezed in with no air on both sides
   overlap: 10, // two aircons cooling the same part of a room: the later one mostly adds running cost
   window: 10, // an aircon close to a window loses cool air and picks up the sun's heat
+  sunMild: 4, // direct sun on a screen, washer or kitchen appliance (milder than on an aircon or fridge)
+  occupied: 6, // fan or air purifier far from where people sit or sleep: its air does not reach them
+  sink: 4,    // dishwasher and kettle belong near the sink and water
+  extract: 5, // induction cooker and air fryer: cooking heat and steam should reach the exhaust fan
+  cookzone: 8, // exhaust fan far from the cooking: it removes heat at the source only when close
+  group: 3,   // washer + dryer together, kitchen appliances together (NEA layout principle)
+  centre: 5,  // ceiling light / fan away from the middle of the room or of where people sit
+  hose: 8,    // portable aircon: its hot-air hose must be short, so it stays close to a window
+  outdoor: 3, // air purifier right beside a window keeps pulling in outdoor air
+  draft: 6,   // aircon air blowing straight onto a bed or seat (uncomfortable, so people turn the temperature down)
   reach: 10,  // rooms joined by an opened wall: an aircon should be able to cool the open area next to it
 }
 
@@ -42,27 +57,56 @@ const LABELS = {
   clear: 'Too close to the wall',
   fan: 'Fan too close to the aircon',
   glare: 'Screen facing the window',
-  corner: 'Lamp not in a corner',
+  beside: 'Lamp away from seating',
+  good: 'Not in the best spot',
+  door: 'Fridge door blocked',
+  cramped: 'Squeezed in on both sides',
   overlap: 'Another aircon already cools this spot',
   window: 'Too close to a window',
   reach: 'Not reaching the open area next door',
+  draft: 'Airflow aimed at a bed or seat',
+  occupied: 'Far from where people sit or sleep',
+  sink: 'Far from the sink',
+  extract: 'Far from the exhaust fan',
+  cookzone: 'Far from the cooking area',
+  group: 'Apart from the appliances it works with',
+  centre: 'Not in the middle of the room',
+  hose: 'Far from a window for the hose',
+  outdoor: 'Beside a window',
 }
 
-// The sentence used in a recommendation: "Move the ... , <reason>".
+// The reason in a recommendation. Each one finishes the sentence "This ...", for example
+// "This keeps it out of the sunlight from the window." Several reasons are joined with commas and "and".
 const REASONS = {
-  sun: 'out of the sunlight from the window',
-  heat: 'away from heat sources (cooker, dryer, dishwasher, computer)',
-  air: 'where its airflow can reach more of the room',
-  side: 'with a little more room beside it for air to circulate',
-  clear: 'with a little breathing room behind it',
-  fan: "out of the aircon's airflow and away from the unit",
-  glare: 'at a right angle to the window, so the screen has less glare',
-  corner: 'in a corner, where the walls reflect more of its light',
-  overlap: 'away from the other aircon, so the two are not cooling the same part of the room',
-  window: 'further from the window, so less cool air is lost',
-  reach: 'where it can also cool the open area next to it',
-  sunwindow: 'further from the window, out of its sunlight and warm air',
+  sun: 'keeps it out of the sunlight from the window',
+  heat: 'keeps it away from heat sources (cooker, dryer, dishwasher, computer)',
+  air: 'lets its airflow reach more of the room',
+  side: 'leaves more room beside it for air to circulate',
+  clear: 'leaves more room behind it for air to circulate',
+  fan: "keeps it out of the aircon's airflow and away from the unit",
+  glare: 'turns the screen at a right angle to the window, so there is less glare',
+  beside: 'puts it beside a sofa, armchair or study desk, where its light is used',
+  overlap: 'keeps it away from the other aircon, so the two do not cool the same part of the room',
+  window: 'moves it away from the window, so less cool air is lost',
+  reach: 'lets it also cool the open area next to it',
+  draft: 'stops its airflow blowing straight onto a bed or seat',
+  occupied: 'brings it closer to where people sit or sleep, so its air reaches them',
+  sink: 'brings it closer to the sink and water connections',
+  extract: 'brings it closer to the exhaust fan, so cooking heat and steam are taken out at once',
+  cookzone: 'brings it closer to the cooking area, so it removes heat and steam at the source',
+  group: 'puts it next to the appliances it is used with',
+  centre: 'brings it nearer the middle, so its light or air spreads evenly',
+  hose: 'brings it closer to a window, so the exhaust hose stays short',
+  outdoor: 'moves it away from the window, so it does not keep pulling in outdoor air',
+  door: 'leaves room in front of it so its door can open fully',
+  good: 'leaves nothing else working against it',
+  cramped: 'leaves air space on at least one side of it',
+  sunwindow: 'moves it away from the window, out of its sunlight and warm air',
+  others: 'stops it adding to the running cost of the other aircon and appliances near it',
 }
+
+// The names of all the problems factors() can report, and of the checks that show tips (used by the tests).
+export const FACTOR_KEYS = Object.keys(WEIGHTS)
 
 const FRIDGE_REAR_GAP = 0.05
 const FRIDGE_SIDE_GAP = 0.02
@@ -71,7 +115,12 @@ const MAX_THROW = 3.5
 const FAN_NEAR = 1.0
 const FAN_PATH_REACH = 3.0
 const GLARE_RANGE = 3
-const CORNER_REACH = 0.6
+const FRIDGE_DOOR_SWING = 0.6 // metres of floor in front of a fridge that its door needs
+const CRAMP_GAP = 0.1 // metres of free space on a side below which an item counts as squeezed in
+const LAMP_NEAR = 0.8 // metres from the edge of seating or a desk: a floor lamp this close is well placed
+const WARDROBE_HEAT_RANGE = 0.5 // metres between the edges: a wardrobe this close to a heat source is too near
+const DESK_GLARE = 0.5 // a desk facing a window more than this (0 to 1) should be turned
+const LAMP_SHADE_RANGE = 0.5 // metres: tall things this close to a floor lamp block its light
 const AC_OVERLAP_SPREAD = 3.0 // metres: two aircons closer than this mostly cool the same air
 const AC_M2_PER_KW = 5 // NEA rule of thumb: cooling capacity (kW) = floor area (m²) ÷ 5
 const TALL = 1.2 // appliances this tall (fridge, dryer...) block a window if they stand in front of it
@@ -82,7 +131,11 @@ const REACH_STEP = 0.75 // spacing of the sample points used to measure how much
 const GOOD_TICKS = 3 // NEA checklist: choose a 3-tick air-conditioner, refrigerator or lamp
 const TICKED = ['ac', 'fridge', 'lamp']
 const SAME_SPOT_TOLERANCE = 0.005
-const WORTH_MOVING = 0.01
+const SAME_SPOT_MAX_KWH = 0.5 // spots count as tied only if they are within this many kWh a year, however big the appliance is
+const FLOOR_STEP = 0.5 // metres between the spots tried across the floor or ceiling (the fine search closes the gaps)
+const REFINE_STEPS = [0.25, 0.12, 0.06, 0.03] // metres: the fine search along a wall moves in smaller and smaller steps
+const REFINE_SPOTS = 2 // how many separate good areas get a fine search
+const MIN_SAVING_KWH = 1 // a move must save at least this many kWh a year to be recommended (so no real saving is hidden)
 
 // How much heat each kind of appliance gives off: [strength, how far it spreads in metres]
 const HEAT_GLOW = {
@@ -95,9 +148,20 @@ const HEAT_GLOW = {
   tv: [0.2, 0.5],
 }
 const HEAT_EMITTERS = ['fridge', 'cook', 'dryer', 'dishwasher', 'pc']
-const HEAT_SENSITIVE = ['ac', 'fridge']
+const HEAT_SENSITIVE = ['ac', 'fridge', 'dryer', 'pc'] // guide: away from sun and heat sources
+const SUN_MILD = ['tv', 'pc', 'washer', 'cook'] // guide: avoid direct sun on screens, washers and kitchen appliances
 const SCREENS = ['tv', 'pc']
-const MOVABLE = ['ac', 'fridge', 'standfan', 'tv', 'pc', 'lamp']
+const SEATING = ['bed_single', 'bed_queen', 'sofa_3_seater', 'sofa_2_seater', 'armchair', 'dining_table']
+const CRAMPED_KINDS = ['dryer', 'purifier', 'pc'] // kinds that need air round them (a portable aircon too)
+const LAMP_TARGETS = ['sofa_3_seater', 'sofa_2_seater', 'armchair', 'study_desk']
+// Credits for good placement: the most (in percent) each kind of item can save, and the penalty level at which the credit is gone.
+const GOOD_MAX = { ac: 4, fridge: 3, dryer: 2, pc: 2, tv: 2, lamp: 2, standfan: 3, purifier: 2, ceilingfan: 2 }
+const GOOD_LIMIT = 0.03
+// Safety rails on one item: its placement penalties can add at most 40%, and its credits can take off at most 10%.
+export const MAX_PENALTY = 0.4
+export const MAX_CREDIT = 0.1
+const HEAT_SPREAD = 0.6 // metres of empty gap over which a heat source's effect fades (edge to edge)
+const MOVABLE = ['ac', 'fridge', 'standfan', 'tv', 'pc', 'lamp', 'dryer', 'washer', 'cook', 'dishwasher', 'purifier', 'light', 'ceilingfan', 'exhaust']
 
 // ============================================================
 // SMALL HELPER FUNCTIONS
@@ -119,11 +183,36 @@ function dist(a, b) {
   return Math.hypot(a.x - b.x, a.z - b.z)
 }
 
+// The empty space (metres) between the edges of two items, roughly: the distance between their middles
+// minus half the size of each. Items from the next room have no size, so they count as a point.
+function edgeGap(a, b) {
+  return Math.max(0, dist(a, b) - halfSize(a) - halfSize(b))
+}
+
+// Half the typical width of an item (0 when its size is not known).
+function halfSize(item) {
+  if (isMissing(item.spec.w) || isMissing(item.spec.d)) {
+    return 0
+  }
+  return (item.spec.w + item.spec.d) / 4
+}
+
 // Adds up all the values inside an object, e.g. { sun: 0.1, heat: 0.2 } -> 0.3 (approximately)
 function sumOf(factorObject) {
   let total = 0
   for (const key of Object.keys(factorObject)) {
     total = total + factorObject[key]
+  }
+  return total
+}
+
+// The total of the problems in the object (e.g. { sun: 0.1, good: -0.02 } gives 0.1). Credits (negative numbers) do not count.
+function penaltyOf(factorObject) {
+  let total = 0
+  for (const key of Object.keys(factorObject)) {
+    if (factorObject[key] > 0) {
+      total = total + factorObject[key]
+    }
   }
   return total
 }
@@ -142,7 +231,7 @@ function isMissing(value) {
 export function sunAt(room, items, p) {
   let best = 0
   for (const w of items) {
-    if (w.spec.kind !== 'window') {
+    if (!isGlass(w.spec) || !(w.wall >= 0)) {
       continue
     }
     const mid = wallPoint(room, w.wall, w.t)
@@ -258,16 +347,79 @@ function fanClash(items, ac) {
   return worst
 }
 
-// Free space (metres) on each side of item a along its wall.
-function sideSpace(room, others, a) {
-  let gap = Math.min(a.t, wallLength(room, a.wall) - a.t) - a.spec.w / 2
+// How much an aircon blows straight onto a bed, sofa or dining table: 0 (not at all) to 1 (right in front of it).
+function draftAt(items, ac) {
+  const dir = airDirection(ac)
+  let worst = 0
+  for (const o of items) {
+    if (o.spec.kind !== 'furniture' || !SEATING.includes(o.spec.variant)) {
+      continue
+    }
+    const vx = o.x - ac.x
+    const vz = o.z - ac.z
+    const ahead = vx * dir[0] + vz * dir[1]
+    const sideways = Math.abs(vx * dir[1] - vz * dir[0])
+    if (ahead > 0 && ahead < MAX_THROW && sideways < 0.8) {
+      worst = Math.max(worst, 1 - ahead / MAX_THROW)
+    }
+  }
+  return worst
+}
+
+// Free space (metres) on each side of item a along its wall, as [low side, high side].
+function sideGaps(room, others, a) {
+  let low = a.t - a.spec.w / 2
+  let high = wallLength(room, a.wall) - a.t - a.spec.w / 2
   for (const o of others) {
     if (o.wall !== a.wall || o.spec.mode === 'ceiling' || o.spec.mode === 'top' || o.spec.y !== 0) {
       continue
     }
-    gap = Math.min(gap, Math.abs(a.t - o.t) - (a.spec.w + o.spec.w) / 2)
+    const gap = Math.abs(a.t - o.t) - (a.spec.w + o.spec.w) / 2
+    if (o.t < a.t) {
+      low = Math.min(low, gap)
+    } else {
+      high = Math.min(high, gap)
+    }
   }
-  return Math.max(0, gap)
+  return [Math.max(0, low), Math.max(0, high)]
+}
+
+// Free space (metres) on the tighter side of item a along its wall.
+function sideSpace(room, others, a) {
+  const gaps = sideGaps(room, others, a)
+  return Math.min(gaps[0], gaps[1])
+}
+
+// How squeezed in item a is: 0 (air on at least one side) to 1 (no air on either side).
+function squeezed(room, others, a) {
+  const gaps = sideGaps(room, others, a)
+  let total = 1
+  for (const gap of gaps) {
+    total = total * (1 - clamp(gap / CRAMP_GAP, 0, 1))
+  }
+  return total
+}
+
+// How much the door of a fridge is blocked: 0 (clear) to 1 (something right in front of it).
+// Anything standing on the floor, and counters, count as being in the way.
+function doorBlocked(others, a) {
+  const dir = airDirection(a)
+  let worst = 0
+  for (const o of others) {
+    if (o === a || (o.spec.mode !== 'floor' && o.spec.kind !== 'counter')) {
+      continue
+    }
+    const vx = o.x - a.x
+    const vz = o.z - a.z
+    const ahead = vx * dir[0] + vz * dir[1]
+    const sideways = Math.abs(vx * dir[1] - vz * dir[0])
+    const half = Math.min(o.spec.w, o.spec.d) / 2
+    const free = ahead - a.spec.d / 2 - half
+    if (ahead > 0 && sideways < a.spec.w / 2 + half && free < FRIDGE_DOOR_SWING) {
+      worst = Math.max(worst, clamp((FRIDGE_DOOR_SWING - free) / FRIDGE_DOOR_SWING, 0, 1))
+    }
+  }
+  return worst
 }
 
 // How much a screen (TV or computer) faces a window: 0 (not at all) to 1 (straight at it).
@@ -277,7 +429,7 @@ function glareAt(room, others, a) {
   const fz = faceDir[1]
   let worst = 0
   for (const w of others) {
-    if (w.spec.kind !== 'window') {
+    if (!isGlass(w.spec) || !(w.wall >= 0)) {
       continue
     }
     const inward = NORMAL[w.wall]
@@ -287,16 +439,6 @@ function glareAt(room, others, a) {
     worst = Math.max(worst, facing * facing * near)
   }
   return worst
-}
-
-// Distance from item a to the closest corner of the room.
-function cornerDistance(room, a) {
-  const corners = [[0, 0], [room.w, 0], [0, room.d], [room.w, room.d]]
-  let closest = Infinity
-  for (const corner of corners) {
-    closest = Math.min(closest, Math.hypot(a.x - corner[0], a.z - corner[1]))
-  }
-  return closest
 }
 
 // ============================================================
@@ -492,6 +634,32 @@ function withForeign(link) {
 // FACTORS - WHAT IS WRONG WITH THE SPOT OF ONE ITEM
 // ============================================================
 
+// How much of the cool air of aircon a is already given by an earlier aircon: 0 (none) to 1 (the same air).
+// Only an aircon placed BEFORE a counts, so the later one is the one that pays for the overlap.
+// "extra" is one more item to count (or null), so a spot can be tried without copying the list.
+function overlapOf(a, list, extra) {
+  let overlap = 0
+  for (let i = 0; i <= list.length; i++) {
+    const o = i < list.length ? list[i] : extra
+    if (o && o !== a && o.spec.kind === 'ac' && placedBefore(o, a)) {
+      overlap = Math.max(overlap, gauss(dist(a, o), AC_OVERLAP_SPREAD))
+    }
+  }
+  return overlap
+}
+
+// How much heat from nearby heat sources reaches item a: 0 (none) to 1 (a lot). "extra" is one more item to count (or null).
+function heatOf(a, list, extra) {
+  let heat = 0
+  for (let i = 0; i <= list.length; i++) {
+    const o = i < list.length ? list[i] : extra
+    if (o && o !== a && HEAT_EMITTERS.includes(o.spec.kind)) {
+      heat = heat + gauss(edgeGap(a, o), HEAT_SPREAD)
+    }
+  }
+  return Math.min(1, heat)
+}
+
 // Gives an object like { sun: 0.03, heat: 0.01 } for item a.
 // Each number is the extra share of electricity (0.03 = 3%) caused by that problem.
 // options.ownOnly = true leaves out problems caused by other items (the fan).
@@ -513,18 +681,18 @@ export function factors(room, others, a, options = {}) {
     return f
   }
 
-  // aircons and fridges: sun and nearby heat
-  if (HEAT_SENSITIVE.includes(kind)) {
-    f.sun = (WEIGHTS.sun / 100) * sunAt(room, others, p)
-
-    let heat = 0
-    const everything = withForeignItems(others, link)
-    for (const o of everything) {
-      if (HEAT_EMITTERS.includes(o.spec.kind)) {
-        heat = heat + gauss(dist(a, o), 0.8)
-      }
+  // sun: strong for aircons, fridges, dryers; milder for screens, washers and kitchen appliances
+  if (HEAT_SENSITIVE.includes(kind) || SUN_MILD.includes(kind)) {
+    let sunWeight = WEIGHTS.sun
+    if (SUN_MILD.includes(kind)) {
+      sunWeight = WEIGHTS.sunMild
     }
-    f.heat = (WEIGHTS.heat / 100) * Math.min(1, heat)
+    f.sun = (sunWeight / 100) * sunAt(room, others, p)
+  }
+
+  // nearby heat (aircons, fridges, dryers, computers)
+  if (HEAT_SENSITIVE.includes(kind)) {
+    f.heat = (WEIGHTS.heat / 100) * heatOf(a, withForeignItems(others, link), null)
   }
 
   // fridge: space behind it and beside it
@@ -534,6 +702,12 @@ export function factors(room, others, a, options = {}) {
     if (a.wall >= 0) {
       f.side = (WEIGHTS.side / 100) * Math.max(0, FRIDGE_SIDE_GAP - sideSpace(room, others, a)) / FRIDGE_SIDE_GAP
     }
+    f.door = (WEIGHTS.door / 100) * doorBlocked(others, a)
+  }
+
+  // dryer, purifier, dehumidifier, computer tower and portable aircon: need air on at least one side
+  if ((CRAMPED_KINDS.includes(kind) || (kind === 'ac' && a.spec.variant === 'portable')) && a.wall >= 0) {
+    f.cramped = (WEIGHTS.cramped / 100) * squeezed(room, others, a)
   }
 
   // aircon: airflow, side space, fan, other aircons, window, open rooms
@@ -551,16 +725,24 @@ export function factors(room, others, a, options = {}) {
       f.fan = (WEIGHTS.fan / 100) * fanClash(others, a)
     }
 
-    let overlap = 0
-    const everything = withForeignItems(others, link)
-    for (const o of everything) {
-      if (o.spec.kind === 'ac' && placedBefore(o, a)) {
-        overlap = Math.max(overlap, gauss(dist(a, o), AC_OVERLAP_SPREAD))
-      }
-    }
-    f.overlap = (WEIGHTS.overlap / 100) * overlap
+    f.overlap = (WEIGHTS.overlap / 100) * overlapOf(a, withForeignItems(others, link), null)
 
-    f.window = (WEIGHTS.window / 100) * clamp(1 - windowGap(room, others, p) / WINDOW_KEEP, 0, 1)
+    f.draft = (WEIGHTS.draft / 100) * draftAt(others, a)
+
+    // a normal aircon loses cool air next to glass; a portable one needs a window close by for its hose;
+    // a window aircon is built into the window, so neither rule applies to it
+    if (a.spec.variant === 'portable') {
+      f.hose = (WEIGHTS.hose / 100) * farness(windowGap(room, others, p), 1.0, 2.0)
+    } else if (a.spec.variant !== 'window') {
+      f.window = (WEIGHTS.window / 100) * clamp(1 - windowGap(room, others, p) / WINDOW_KEEP, 0, 1)
+    }
+
+    // sun and window are one problem to the reader (the same window), so together they cost no more than the sun alone
+    if (!isMissing(f.sun) && !isMissing(f.window) && f.sun + f.window > WEIGHTS.sun / 100) {
+      const scale = (WEIGHTS.sun / 100) / (f.sun + f.window)
+      f.sun = f.sun * scale
+      f.window = f.window * scale
+    }
 
     if (link && link.near && link.near.length) {
       f.reach = (WEIGHTS.reach / 100) * (1 - reachShare(room, a, link))
@@ -572,11 +754,171 @@ export function factors(room, others, a, options = {}) {
     f.glare = (WEIGHTS.glare / 100) * glareAt(room, others, a)
   }
 
-  // lamps: should be in a corner
+  neighbourFactors(room, others, a, f)
+
+  // floor lamps: beside a sofa, armchair or study desk
   if (kind === 'lamp') {
-    f.corner = (WEIGHTS.corner / 100) * clamp((cornerDistance(room, a) - CORNER_REACH) / 1.4, 0, 1)
+    let seatDistance = Infinity
+    for (const o of others) {
+      if (o.spec.kind === 'furniture' && LAMP_TARGETS.includes(o.spec.variant)) {
+        seatDistance = Math.min(seatDistance, Math.max(0, dist(a, o) - Math.max(o.spec.w, o.spec.d) / 2))
+      }
+    }
+    f.beside = (WEIGHTS.beside / 100) * farness(seatDistance, LAMP_NEAR, 2.0)
+  }
+
+  // a credit when nothing works against the item: full credit with no penalties, none at GOOD_LIMIT or more
+  if (GOOD_MAX[kind]) {
+    let penalty = 0
+    for (const key of Object.keys(f)) {
+      if (f[key] > 0) {
+        penalty = penalty + f[key]
+      }
+    }
+    f.good = -(GOOD_MAX[kind] / 100) * (1 - clamp(penalty / GOOD_LIMIT, 0, 1))
+  }
+  return capFactors(f)
+}
+
+// Keeps the penalties of one item to MAX_PENALTY and its credits to MAX_CREDIT (every problem is scaled down together).
+export function capFactors(f) {
+  let penalty = 0
+  let credit = 0
+  for (const key of Object.keys(f)) {
+    if (f[key] > 0) {
+      penalty = penalty + f[key]
+    } else {
+      credit = credit - f[key]
+    }
+  }
+  const penaltyScale = penalty > MAX_PENALTY ? MAX_PENALTY / penalty : 1
+  const creditScale = credit > MAX_CREDIT ? MAX_CREDIT / credit : 1
+  for (const key of Object.keys(f)) {
+    if (f[key] > 0) {
+      f[key] = f[key] * penaltyScale
+    } else {
+      f[key] = f[key] * creditScale
+    }
   }
   return f
+}
+
+// ============================================================
+// WHERE AN APPLIANCE BELONGS IN RELATION TO OTHER THINGS
+// ============================================================
+
+// Distance from item a to the closest other item for which test(item) is true. Infinity when there is none.
+function nearestDistance(others, a, test) {
+  let best = Infinity
+  for (const o of others) {
+    if (o !== a && test(o)) {
+      best = Math.min(best, dist(a, o))
+    }
+  }
+  return best
+}
+
+// How far (0 to 1) a distance d is beyond the "near" distance, reaching 1 after "span" more metres.
+// An Infinity distance (nothing to be near) counts as 0, so a missing sink or exhaust fan is never blamed.
+function farness(d, near, span) {
+  if (d === Infinity) {
+    return 0
+  }
+  return clamp((d - near) / span, 0, 1)
+}
+
+function isSeating(o) {
+  return o.spec.kind === 'furniture' && SEATING.includes(o.spec.variant)
+}
+
+// The point a ceiling light or fan should hang over: the middle of the beds and seats, or else of the room.
+function ceilingTarget(room, others, a) {
+  if (a.spec.kind === 'ceilingfan') {
+    let x = 0
+    let z = 0
+    let count = 0
+    for (const o of others) {
+      if (isSeating(o)) {
+        x = x + o.x
+        z = z + o.z
+        count = count + 1
+      }
+    }
+    if (count > 0) {
+      return [x / count, z / count]
+    }
+  }
+  return [room.w / 2, room.d / 2]
+}
+
+// The problems that come from where an appliance stands compared with the other things in the room.
+// These are the placement hints for kitchen, laundry, air, lighting and screens.
+function neighbourFactors(room, others, a, f) {
+  const kind = a.spec.kind
+  const variant = a.spec.variant
+
+  // stand fan, air purifier and dehumidifier: near where people sit or sleep
+  if (kind === 'standfan' || kind === 'purifier') {
+    f.occupied = (WEIGHTS.occupied / 100) * farness(nearestDistance(others, a, isSeating), 1.5, 2.5)
+  }
+  // air purifier and dehumidifier: not right beside a window
+  if (kind === 'purifier') {
+    f.outdoor = (WEIGHTS.outdoor / 100) * clamp(1 - windowGap(room, others, [a.x, a.z]) / 1.0, 0, 1)
+  }
+
+  // dishwasher and kettle: near the sink
+  if (kind === 'dishwasher' || variant === 'electric_kettle') {
+    const sinkDistance = nearestDistance(others, a, function (o) {
+      return o.spec.kind === 'counter' && o.spec.variant === 'sink'
+    })
+    f.sink = (WEIGHTS.sink / 100) * farness(sinkDistance, 1.0, 2.5)
+  }
+
+  // induction cooker and air fryer: near the exhaust fan
+  if (variant === 'induction_cooker' || variant === 'air_fryer') {
+    const exhaustDistance = nearestDistance(others, a, function (o) {
+      return o.spec.kind === 'exhaust'
+    })
+    f.extract = (WEIGHTS.extract / 100) * farness(exhaustDistance, 1.5, 2.5)
+  }
+
+  // exhaust fan: above the cooking
+  if (kind === 'exhaust') {
+    const cookDistance = nearestDistance(others, a, function (o) {
+      return o.spec.kind === 'cook'
+    })
+    f.cookzone = (WEIGHTS.cookzone / 100) * farness(cookDistance, 0.6, 2.0)
+  }
+
+  // washer with dryer; kitchen appliances together
+  if (kind === 'washer' || kind === 'dryer') {
+    const partner = nearestDistance(others, a, function (o) {
+      return o.spec.kind === 'washer' || o.spec.kind === 'dryer'
+    })
+    f.group = (WEIGHTS.group / 100) * farness(partner, 1.5, 3)
+  }
+  if (kind === 'cook') {
+    const partner = nearestDistance(others, a, function (o) {
+      return o.spec.kind === 'cook'
+    })
+    f.group = (WEIGHTS.group / 100) * farness(partner, 1.2, 3)
+  }
+
+  // ceiling fan: over the occupied area. Light: the first light in a room in the middle (the others spread out freely)
+  let wantsCentre = kind === 'ceilingfan'
+  if (kind === 'light') {
+    wantsCentre = true
+    for (const o of others) {
+      if (o.spec.kind === 'light' && placedBefore(o, a)) {
+        wantsCentre = false
+      }
+    }
+  }
+  if (wantsCentre) {
+    const target = ceilingTarget(room, others, a)
+    const half = Math.hypot(room.w, room.d) / 2
+    f.centre = (WEIGHTS.centre / 100) * clamp((Math.hypot(a.x - target[0], a.z - target[1]) - 0.3) / half, 0, 1)
+  }
 }
 
 // ============================================================
@@ -604,27 +946,21 @@ function inFrontOfOpening(pos, a, openings) {
   return false
 }
 
-// A list of positions to try for item a: along every wall, small steps near where it is now,
-// and (for floor items) a grid across the floor.
+// A list of positions to try for item a: along every wall (wall and floor items), along its counter
+// (counter-top items) and a grid across the floor or ceiling.
 function candidates(room, a, others, link) {
   const out = []
+  const mode = a.spec.mode
 
-  // along every wall
-  for (let wall = 0; wall < 4; wall++) {
-    const length = wallLength(room, wall)
-    for (let t = 0.3; t < length - 0.3; t += 0.25) {
-      const pos = onWall(room, a.spec, wall, t)
-      if (pos) {
-        out.push(pos)
+  // things that stand on a counter slide along their own counter (they stay on it)
+  if (mode === 'top') {
+    for (const c of others) {
+      if (c.spec.kind !== 'counter' || c.id !== a.on) {
+        continue
       }
-    }
-  }
-
-  // small moves from the current spot on the same wall
-  if (a.wall >= 0) {
-    for (const step of [0.03, 0.06, 0.1, 0.15, 0.2]) {
-      for (const sign of [-1, 1]) {
-        const pos = onWall(room, a.spec, a.wall, a.t + sign * step)
+      for (let cu = -c.spec.w / 2; cu <= c.spec.w / 2; cu += 0.15) {
+        const point = [c.x + TANGENT[c.wall][0] * cu, c.z + TANGENT[c.wall][1] * cu]
+        const pos = placeAt(room, a.spec, point, a, others)
         if (pos) {
           out.push(pos)
         }
@@ -632,10 +968,26 @@ function candidates(room, a, others, link) {
     }
   }
 
-  // a grid across the floor
-  if (a.spec.mode === 'floor') {
-    for (let x = 0.3; x < room.w; x += 0.25) {
-      for (let z = 0.3; z < room.d; z += 0.25) {
+  // along every wall (ceiling items hang free of the walls, counter-top items stay on their counter)
+  if (mode === 'wall' || mode === 'floor') {
+    for (let wall = 0; wall < 4; wall++) {
+      const length = wallLength(room, wall)
+      for (let t = 0.3; t < length - 0.3; t += 0.25) {
+        const pos = onWall(room, a.spec, wall, t)
+        if (pos) {
+          out.push(pos)
+        }
+      }
+    }
+  }
+
+  // Note: the list does not depend on where the item stands now, so the best spot is the same
+  // before and after the item is moved there (the recommendation disappears once it is applied).
+
+  // a grid across the floor (or the ceiling)
+  if (mode === 'floor' || mode === 'ceiling') {
+    for (let x = 0.3; x < room.w; x += FLOOR_STEP) {
+      for (let z = 0.3; z < room.d; z += FLOOR_STEP) {
         const pos = placeAt(room, a.spec, [x, z], a, others)
         if (pos && pos.wall < 0) {
           out.push(pos)
@@ -644,15 +996,45 @@ function candidates(room, a, others, link) {
     }
   }
 
-  // do not suggest a spot in front of an opening between rooms
+  return notInFrontOfOpening(out, a, link)
+}
+
+// Leaves out the spots that are in front of an opening between rooms (we do not suggest those).
+function notInFrontOfOpening(spots, a, link) {
   const openings = openingsOf(link)
   const allowed = []
-  for (const pos of out) {
+  for (const pos of spots) {
     if (pos.wall < 0 || !inFrontOfOpening(pos, a, openings)) {
       allowed.push(pos)
     }
   }
   return allowed
+}
+
+// The spots one step away from pos: the two next to it along a wall, or the eight around it on the floor or ceiling.
+function nearbySpots(room, a, others, pos, step) {
+  const out = []
+  const mode = a.spec.mode
+  if (pos.wall >= 0 && (mode === 'wall' || mode === 'floor')) {
+    for (const dir of [-1, 1]) {
+      const moved = onWall(room, a.spec, pos.wall, pos.t + dir * step)
+      if (moved) {
+        out.push(moved)
+      }
+    }
+  } else if (pos.wall < 0 && (mode === 'floor' || mode === 'ceiling')) {
+    for (const i of [-1, 0, 1]) {
+      for (const j of [-1, 0, 1]) {
+        if (i !== 0 || j !== 0) {
+          const moved = placeAt(room, a.spec, [pos.x + i * step, pos.z + j * step], a, others)
+          if (moved && moved.wall < 0) {
+            out.push(moved)
+          }
+        }
+      }
+    }
+  }
+  return out
 }
 
 // The extra electricity of putting item "test" in its spot.
@@ -673,7 +1055,27 @@ function costOf(room, others, test, a, link) {
       }
     }
   }
-  return { own: own, knock: knock, kwh: a.kwh * sumOf(own) + knock }
+
+  // The extra electricity this spot causes the OTHER appliances (an aircon placed before another one makes the later one
+  // pay for the overlap; a heat source raises the cost of the aircon, fridge, dryer or computer next to it).
+  // Without this, an item's best spot is only best for itself and the whole flat can still come out higher.
+  let other = 0
+  const kind = test.spec.kind
+  if (kind === 'ac' || HEAT_EMITTERS.includes(kind)) {
+    const everyone = withForeignItems(others, link)
+    for (const o of everyone) {
+      if (!(o.kwh > 0)) {
+        continue
+      }
+      if (kind === 'ac' && o.spec.kind === 'ac') {
+        other = other + o.kwh * (WEIGHTS.overlap / 100) * overlapOf(o, everyone, test)
+      }
+      if (HEAT_EMITTERS.includes(kind) && HEAT_SENSITIVE.includes(o.spec.kind)) {
+        other = other + o.kwh * (WEIGHTS.heat / 100) * heatOf(o, everyone, test)
+      }
+    }
+  }
+  return { own: own, knock: knock, other: other, kwh: a.kwh * sumOf(own) + knock + other }
 }
 
 // A copy of item a with the new position pos put on top of it.
@@ -689,19 +1091,63 @@ function movedCopy(a, pos) {
 }
 
 // Tries every candidate spot and returns the one that costs the least electricity.
-// If several are almost as good, it takes the one closest to where the item is now.
+// If several are almost as good, it takes the one in the middle of that group.
 function findBestSpot(room, a, others, link) {
   const tried = []
-  for (const pos of candidates(room, a, others, link)) {
+
+  // works out the cost of one spot, remembers it and gives it back (null when the spot is blocked)
+  function tryOne(pos) {
     const test = movedCopy(a, pos)
     if (isBlocked(test, others)) {
-      continue
+      return null
     }
     const cost = costOf(room, others, test, a, link)
-    tried.push({ pos: pos, own: cost.own, knock: cost.knock, kwh: cost.kwh })
+    const spot = { pos: pos, own: cost.own, knock: cost.knock, other: cost.other, kwh: cost.kwh }
+    tried.push(spot)
+    return spot
+  }
+
+  for (const pos of candidates(room, a, others, link)) {
+    tryOne(pos)
   }
   if (!tried.length) {
     return null
+  }
+
+  // The fine search: from each of the best few areas, step to a cheaper neighbouring spot, with smaller and smaller steps,
+  // so the best spot is not missed because it fell between two coarse spots.
+  const ranked = tried.slice().sort(function (x, y) {
+    return x.kwh - y.kwh
+  })
+  const areas = []
+  for (const s of ranked) {
+    let isNewArea = true
+    for (const done of areas) {
+      if (dist(s.pos, done.pos) < 0.5) {
+        isNewArea = false
+      }
+    }
+    if (isNewArea && areas.length < REFINE_SPOTS) {
+      areas.push(s)
+    }
+  }
+  for (const area of areas) {
+    let current = area
+    for (const step of REFINE_STEPS) {
+      for (let turn = 0; turn < 4; turn++) {
+        let cheaper = null
+        for (const pos of notInFrontOfOpening(nearbySpots(room, a, others, current.pos, step), a, link)) {
+          const spot = tryOne(pos)
+          if (spot && spot.kwh < current.kwh - 1e-9 && (cheaper === null || spot.kwh < cheaper.kwh)) {
+            cheaper = spot
+          }
+        }
+        if (cheaper === null) {
+          break
+        }
+        current = cheaper
+      }
+    }
   }
 
   // the lowest cost of all the spots
@@ -725,19 +1171,74 @@ function findBestSpot(room, a, others, link) {
   // keep the spots that are nearly as good as the best one
   const nearlyBest = []
   for (const s of tried) {
-    if (s.kwh <= lowest + SAME_SPOT_TOLERANCE * Math.max(stake, 20)) {
+    if (s.kwh <= lowest + Math.min(SAME_SPOT_TOLERANCE * Math.max(stake, 20), SAME_SPOT_MAX_KWH)) {
       nearlyBest.push(s)
     }
   }
 
-  // and of those, pick the closest to the current spot
-  let closest = nearlyBest[0]
-  for (let i = 1; i < nearlyBest.length; i++) {
-    if (dist(a, nearlyBest[i].pos) < dist(a, closest.pos)) {
-      closest = nearlyBest[i]
+  // and of those, pick the one in the middle of the group (the smallest total distance to the others)
+  let middle = nearlyBest[0]
+  let middleTotal = Infinity
+  for (const s of nearlyBest) {
+    let total = 0
+    for (const other of nearlyBest) {
+      total = total + dist(s.pos, other.pos)
+    }
+    if (total < middleTotal - 1e-9) {
+      middle = s
+      middleTotal = total
     }
   }
-  return closest
+  return middle
+}
+
+// ============================================================
+// REMEMBERING SEARCH RESULTS
+// ============================================================
+// Looking for the best spot is the slowest part, and analyse() runs again for every room after every edit.
+// When nothing that matters has changed (the room, the item, the other items, the open rooms), the answer is the same,
+// so we keep it and give it back instead of searching again. Editing one room then only searches that room again.
+const spotCache = new Map()
+const CACHE_LIMIT = 400
+
+// A short text that changes whenever something that the search depends on changes.
+function itemKey(o) {
+  const spec = o.spec
+  return [idOf(o), rankOf(o), o.on, spec.kind, spec.variant, spec.mode, spec.w, spec.d, spec.h, spec.y,
+    o.kwh, o.wall, Number(o.x).toFixed(3), Number(o.z).toFixed(3), Number(o.t).toFixed(3), Number(o.rotY).toFixed(3)].join(',')
+}
+
+function searchKey(room, a, others, link) {
+  const parts = [room.w, room.d, itemKey(a)]
+  for (const o of others) {
+    parts.push(itemKey(o))
+  }
+  if (link) {
+    for (const gap of link.open) {
+      parts.push('open', gap.to, gap.wall, gap.t0, gap.t1)
+    }
+    for (const n of link.near) {
+      parts.push('near', n.name, n.w, n.d, n.dx, n.dz)
+    }
+    for (const o of link.foreign) {
+      parts.push('far', idOf(o), o.spec.kind, o.kwh, Number(o.x).toFixed(3), Number(o.z).toFixed(3))
+    }
+  }
+  return parts.join('|')
+}
+
+// findBestSpot, but remembers the answer.
+function findBestSpotCached(room, a, others, link) {
+  const key = searchKey(room, a, others, link)
+  if (spotCache.has(key)) {
+    return spotCache.get(key)
+  }
+  const found = findBestSpot(room, a, others, link)
+  if (spotCache.size >= CACHE_LIMIT) {
+    spotCache.clear()
+  }
+  spotCache.set(key, found)
+  return found
 }
 
 // ============================================================
@@ -784,7 +1285,166 @@ function howFar(m) {
 
 // ============================================================
 // TIPS (general advice that is not about one exact spot)
+// Every tip is written as:  {Title}: {Instruction}. {Reason}. ({Source})
 // ============================================================
+
+// The first item standing in the way of the aircon's air (a tall thing in its path), or null.
+function airBlocker(room, items, ac) {
+  const wanted = Math.min(MAX_THROW, 0.8 * Math.max(room.w, room.d))
+  const dir = airDirection(ac)
+  let blocker = null
+  let nearest = Math.min(wanted, distanceToWall(room, [ac.x, ac.z], dir))
+  for (const o of items) {
+    if (o === ac || o.spec.mode !== 'floor' || o.spec.h < 1.2 || o.spec.kind === 'standfan') {
+      continue
+    }
+    const vx = o.x - ac.x
+    const vz = o.z - ac.z
+    const ahead = vx * dir[0] + vz * dir[1]
+    const sideways = Math.abs(vx * dir[1] - vz * dir[0])
+    if (ahead > 0 && sideways < 0.45 && ahead < nearest) {
+      blocker = o
+      nearest = ahead
+    }
+  }
+  return blocker
+}
+
+// True when item o stands in front of one of the windows (or glass doors).
+function blocksWindow(room, items, o) {
+  if (o.spec.mode !== 'floor' || !(o.spec.h >= TALL || o.spec.kind === 'furniture')) {
+    return false
+  }
+  for (const w of items) {
+    if (!isGlass(w.spec) || !(w.wall >= 0)) {
+      continue
+    }
+    const mid = wallPoint(room, w.wall, w.t)
+    const along = TANGENT[w.wall]
+    const inward = NORMAL[w.wall]
+    const into = (o.x - mid[0]) * inward[0] + (o.z - mid[1]) * inward[1]
+    const side = Math.abs((o.x - mid[0]) * along[0] + (o.z - mid[1]) * along[1])
+    if (into > -0.05 && into < WINDOW_CLEAR + o.spec.d / 2 && side < (w.spec.w + o.spec.w) / 2) {
+      return true
+    }
+  }
+  return false
+}
+
+// The checks that decide whether a rule's tip is shown (the "detect" name in placementRules.js).
+// Each one gives the list of items the tip is about.
+const DETECTORS = {
+  // things in the way of an aircon's air
+  acBlocked: function (room, items) {
+    const found = []
+    for (const ac of items) {
+      if (ac.spec.kind !== 'ac' || ac.spec.variant !== 'split') {
+        continue
+      }
+      const blocker = airBlocker(room, items, ac)
+      if (blocker && !found.includes(blocker)) {
+        found.push(blocker)
+      }
+    }
+    return found
+  },
+  // things standing in front of a window
+  windowBlocked: function (room, items) {
+    const found = []
+    for (const o of items) {
+      if (blocksWindow(room, items, o)) {
+        found.push(o)
+      }
+    }
+    return found
+  },
+  // a desk that faces a window
+  deskGlare: function (room, items) {
+    const found = []
+    for (const o of items) {
+      if (o.spec.kind === 'furniture' && o.spec.variant === 'study_desk' && glareAt(room, items, o) > DESK_GLARE) {
+        found.push(o)
+      }
+    }
+    return found
+  },
+  // a wardrobe close to something that gives off heat
+  wardrobeHeat: function (room, items) {
+    const found = []
+    for (const o of items) {
+      if (o.spec.kind !== 'furniture' || o.spec.variant !== 'wardrobe') {
+        continue
+      }
+      for (const h of items) {
+        if (HEAT_EMITTERS.includes(h.spec.kind) && dist(o, h) - (o.spec.w + h.spec.w) / 2 < WARDROBE_HEAT_RANGE) {
+          found.push(o)
+          break
+        }
+      }
+    }
+    return found
+  },
+  // a floor lamp with something tall right beside it
+  lampBlocked: function (room, items) {
+    const found = []
+    for (const o of items) {
+      if (o.spec.kind !== 'lamp') {
+        continue
+      }
+      for (const t of items) {
+        if (t !== o && t.spec.mode === 'floor' && t.spec.h >= TALL && dist(o, t) < LAMP_SHADE_RANGE + t.spec.w / 2) {
+          found.push(o)
+          break
+        }
+      }
+    }
+    return found
+  },
+}
+
+// The names of the checks (used by the tests).
+export const DETECTOR_NAMES = Object.keys(DETECTORS)
+
+// The tips that come from the rule table.
+// A rule with a "detect" check gives one tip for each item the check finds.
+// A rule with neither a factor nor a check is plain advice: it gives one tip for the room, when an item it applies to is there.
+// A rule with a factor (and no check) is measured from the position, so it shows up as a recommendation instead.
+function ruleTips(room, items) {
+  const tips = []
+  const seen = {}
+  const used = {}
+  for (const r of RULES) {
+    if (r.detect) {
+      const detector = DETECTORS[r.detect]
+      if (!used[r.detect]) {
+        used[r.detect] = {}
+      }
+      for (const o of detector(room, items)) {
+        if (!ruleApplies(r, o.spec) || used[r.detect][idOf(o)]) {
+          continue
+        }
+        used[r.detect][idOf(o)] = true
+        const text = ruleTip(r, o.name)
+        if (!seen[text]) {
+          seen[text] = true
+          tips.push({ id: o.id, text: text, rule: r.id })
+        }
+      }
+    } else if (!r.factor) {
+      for (const o of items) {
+        if (ruleApplies(r, o.spec)) {
+          const text = ruleTip(r, o.name)
+          if (!seen[text]) {
+            seen[text] = true
+            tips.push({ id: o.id, text: text, rule: r.id })
+          }
+          break
+        }
+      }
+    }
+  }
+  return tips
+}
 
 function tipsFor(room, items, roomName, link) {
   const tips = []
@@ -802,7 +1462,12 @@ function tipsFor(room, items, roomName, link) {
     const lastAc = acs[acs.length - 1]
     tips.push({
       id: lastAc.id,
-      text: `${roomName} is about ${area.toFixed(0)} m², which needs roughly ${(area / AC_M2_PER_KW).toFixed(1)} kW of cooling (NEA rule of thumb: floor area ÷ 5). One aircon is enough here; a second one mostly adds running cost, so consider keeping it for another room.`,
+      text: tipText({
+        title: 'Aircon size',
+        instruction: `Use one aircon in the ${roomName}`,
+        reason: `The ${roomName} is about ${area.toFixed(0)} m², which needs roughly ${(area / AC_M2_PER_KW).toFixed(1)} kW of cooling (floor area ÷ 5), so a second aircon mostly adds running cost and could be kept for another room`,
+        source: 'NEA',
+      }),
     })
   }
 
@@ -812,49 +1477,43 @@ function tipsFor(room, items, roomName, link) {
     tips.push(tip)
   }
 
-  // an aircon but no fan
+  // an aircon but no fan (a stand fan or a ceiling fan both count; an exhaust fan does not)
   let hasFan = false
   for (const o of items) {
-    if (o.spec.kind === 'standfan') {
+    if (o.spec.kind === 'standfan' || o.spec.kind === 'ceilingfan') {
       hasFan = true
     }
   }
   if (acs.length && !hasFan) {
     tips.push({
       id: acs[0].id,
-      text: `Add a fan to ${roomName}. NEA says using a fan instead of the aircon can save about $460 a year, so keep the aircon for the hottest hours.`,
+      text: tipText({
+        title: 'Add a fan',
+        instruction: `Add a fan to the ${roomName}`,
+        reason: 'Using a fan instead of the aircon can save about $460 a year, so keep the aircon for the hottest hours',
+        source: 'NEA',
+      }),
     })
   }
 
+  // low-tick models
   for (const o of items) {
-    // low-tick models
     if (TICKED.includes(o.spec.kind) && o.ticks && o.ticks < GOOD_TICKS) {
       tips.push({
         id: o.id,
-        text: `The ${o.name} is a ${o.ticks}-tick model. NEA suggests ${GOOD_TICKS} ticks or better: it costs more to buy but saves on electricity over its lifespan.`,
+        text: tipText({
+          title: 'Energy label',
+          instruction: `Choose a model with ${GOOD_TICKS} ticks or more when you replace the ${o.name}, which has ${o.ticks}`,
+          reason: 'A better model costs more to buy but saves on electricity over its lifespan',
+          source: 'NEA',
+        }),
       })
     }
+  }
 
-    // tall things standing in front of a window
-    if (o.spec.mode === 'floor' && o.spec.h >= TALL) {
-      for (const w of items) {
-        if (w.spec.kind !== 'window') {
-          continue
-        }
-        const mid = wallPoint(room, w.wall, w.t)
-        const along = TANGENT[w.wall]
-        const inward = NORMAL[w.wall]
-        const into = (o.x - mid[0]) * inward[0] + (o.z - mid[1]) * inward[1]
-        const side = Math.abs((o.x - mid[0]) * along[0] + (o.z - mid[1]) * along[1])
-        if (into > -0.05 && into < WINDOW_CLEAR + o.spec.d / 2 && side < (w.spec.w + o.spec.w) / 2) {
-          tips.push({
-            id: o.id,
-            text: `The ${o.name} stands in front of a window. NEA advises keeping windows clear of large furniture so air can flow through the room.`,
-          })
-          break
-        }
-      }
-    }
+  // the rest of the placement rules (kitchen, cooling, laundry, bathroom, lighting, screens, furniture)
+  for (const tip of ruleTips(room, items)) {
+    tips.push(tip)
   }
   return tips
 }
@@ -897,18 +1556,43 @@ function openSpaceTips(roomName, area, acs, link) {
     return []
   }
   if (!acs.length) {
-    return [{ id: null, text: `${roomName} is open to ${nearNames.join(' and ')}, so the aircon there can cool this space too. Put it close to the opening so its air reaches both, rather than adding another aircon here.` }]
+    return [{ id: null, text: tipText({
+      title: 'Open space',
+      instruction: 'Put the aircon close to the opening so its air reaches both rooms, rather than adding another aircon here',
+      reason: `The ${roomName} is open to ${nearNames.join(' and ')}, so the aircon there can cool this space too`,
+      source: 'NEA',
+    }) }]
   }
   if (allCount >= 2 && totalArea / AC_M2_PER_KW <= 5) {
-    return [{ id: acs[acs.length - 1].id, text: `${together} are now one open space of about ${totalArea.toFixed(0)} m², which needs roughly ${kw} kW of cooling (NEA rule of thumb: floor area ÷ 5). One aircon placed near the opening can serve both, so a second one mostly adds running cost.` }]
+    return [{ id: acs[acs.length - 1].id, text: tipText({
+      title: 'Open space',
+      instruction: 'Keep one aircon near the opening to serve both rooms',
+      reason: `${together} are now one open space of about ${totalArea.toFixed(0)} m², which needs roughly ${kw} kW of cooling (floor area ÷ 5), so a second aircon mostly adds running cost`,
+      source: 'NEA',
+    }) }]
   }
   if (allCount === 1 && totalArea / AC_M2_PER_KW <= 5) {
-    return [{ id: acs[0].id, text: `${together} are one open space of about ${totalArea.toFixed(0)} m² (roughly ${kw} kW of cooling). This one aircon can serve both if it sits near the opening.` }]
+    return [{ id: acs[0].id, text: tipText({
+      title: 'Open space',
+      instruction: 'Keep this aircon near the opening so it serves both rooms',
+      reason: `${together} are one open space of about ${totalArea.toFixed(0)} m² (roughly ${kw} kW of cooling), which one aircon can serve from near the opening`,
+      source: 'NEA',
+    }) }]
   }
   if (allCount >= 2) {
-    return [{ id: null, text: `${together} are one open space of about ${totalArea.toFixed(0)} m² (roughly ${kw} kW of cooling), more than one aircon covers. Two is reasonable here, but keep them well apart so each cools its own end.` }]
+    return [{ id: null, text: tipText({
+      title: 'Open space',
+      instruction: 'Keep the two aircons well apart so each cools its own end',
+      reason: `${together} are one open space of about ${totalArea.toFixed(0)} m² (roughly ${kw} kW of cooling), which is more than one aircon covers, so two is reasonable here`,
+      source: 'NEA',
+    }) }]
   }
-  return [{ id: acs[0].id, text: `${together} are one open space of about ${totalArea.toFixed(0)} m² (roughly ${kw} kW of cooling). One aircon will struggle to cool the far end, so keep it near the opening and use a fan to move the air.` }]
+  return [{ id: acs[0].id, text: tipText({
+    title: 'Open space',
+    instruction: 'Keep the aircon near the opening and use a fan to move the air',
+    reason: `${together} are one open space of about ${totalArea.toFixed(0)} m² (roughly ${kw} kW of cooling), and one aircon will struggle to cool the far end`,
+    source: 'NEA',
+  }) }]
 }
 
 // ============================================================
@@ -949,9 +1633,9 @@ export function analyse(room, items, roomName = 'room', openLink = null) {
     // look for a better spot; "avoidable" is how much of each problem the better spot would remove
     const avoidable = {}
     let best = null
-    if (now.kwh > 0) {
-      const found = findBestSpot(room, a, others, link)
-      if (found && now.kwh - found.kwh >= WORTH_MOVING * a.kwh) {
+    if (a.kwh * penaltyOf(now.own) + now.knock + now.other >= MIN_SAVING_KWH) {
+      const found = findBestSpotCached(room, a, others, link)
+      if (found && now.kwh - found.kwh >= MIN_SAVING_KWH) {
         best = found
         for (const key of Object.keys(now.own)) {
           let better = 0
@@ -962,10 +1646,27 @@ export function analyse(room, items, roomName = 'room', openLink = null) {
         }
       }
     }
-    const avoidFraction = sumOf(avoidable)
+    let avoidFraction = sumOf(avoidable)
     let knockSaved = 0
+    let otherSaved = 0
     if (best) {
       knockSaved = Math.max(0, now.knock - best.knock)
+      otherSaved = Math.max(0, now.other - best.other)
+    }
+
+    // A move too small to be worth recommending is not shown as a loss either
+    // (so once every recommendation is applied, no "+% from placement" is left).
+    if (best) {
+      const small = Math.hypot(best.pos.x - a.x, best.pos.z - a.z) < 0.02
+      if (small || a.kwh * avoidFraction + knockSaved + otherSaved < MIN_SAVING_KWH) {
+        best = null
+        avoidFraction = 0
+        knockSaved = 0
+        otherSaved = 0
+        for (const key of Object.keys(avoidable)) {
+          avoidable[key] = 0
+        }
+      }
     }
     const avoidKwh = a.kwh * avoidFraction + knockSaved
 
@@ -989,6 +1690,7 @@ export function analyse(room, items, roomName = 'room', openLink = null) {
       id: a.id,
       base: a.kwh,
       kwh: a.kwh * (1 + nowPenalty),
+      creditPct: Math.max(0, -(isMissing(full.good) ? 0 : full.good)) * 100,
       avoidKwh: avoidKwh,
       factors: rowFactors,
       causedByOthers: causedByOthers,
@@ -1002,7 +1704,7 @@ export function analyse(room, items, roomName = 'room', openLink = null) {
     const moveX = best.pos.x - a.x
     const moveZ = best.pos.z - a.z
     const distance = Math.hypot(moveX, moveZ)
-    if (distance < 0.02 || (avoidFraction < WORTH_MOVING && knockSaved < 1)) {
+    if (distance < 0.02 || avoidKwh + otherSaved < MIN_SAVING_KWH) {
       continue
     }
 
@@ -1039,18 +1741,30 @@ export function analyse(room, items, roomName = 'room', openLink = null) {
     if (knockSaved >= 1) {
       reasonKeys.push('fan')
     }
+    if (otherSaved >= 1) {
+      reasonKeys.push('others')
+    }
 
-    // what the move should save
-    const effects = []
-    if (avoidFraction >= WORTH_MOVING) {
-      effects.push(`It should use about ${(avoidFraction * 100).toFixed(0)}% less (around ${kwhText(a.kwh * avoidFraction)} a year)`)
+    // what the move should save: "about 12% (around 40 kWh a year)", and the aircon's saving if a stand fan was the cause
+    let saving = ''
+    if (avoidFraction >= 0.005) {
+      saving = `about ${(avoidFraction * 100).toFixed(0)}% (around ${kwhText(a.kwh * avoidFraction)} a year)`
+    } else if (a.kwh * avoidFraction >= MIN_SAVING_KWH) {
+      saving = `around ${kwhText(a.kwh * avoidFraction)} a year`
     }
     if (knockSaved >= 1) {
-      let start = 'It'
-      if (effects.length) {
-        start = 'and it'
+      if (saving) {
+        saving = `${saving}, plus about ${kwhText(knockSaved)} a year less for the aircon`
+      } else {
+        saving = `about ${kwhText(knockSaved)} a year less for the aircon`
       }
-      effects.push(`${start} should cut the aircon's use by about ${kwhText(knockSaved)} a year`)
+    }
+    if (otherSaved >= 1) {
+      if (saving) {
+        saving = `${saving}, plus about ${kwhText(otherSaved)} a year less for the other appliances`
+      } else {
+        saving = `about ${kwhText(otherSaved)} a year less for the other appliances`
+      }
     }
 
     const reasonTexts = []
@@ -1060,8 +1774,15 @@ export function analyse(room, items, roomName = 'room', openLink = null) {
     recs.push({
       id: a.id,
       to: best.pos,
-      savedKwh: avoidKwh,
-      text: `Move the ${a.name} ${howFar(distance)} ${compass(moveX, moveZ)}, ${joinReasons(reasonTexts)}. ${effects.join(' ')}.`,
+      savedKwh: avoidKwh + otherSaved,
+      title: 'Move the ' + a.name,
+      text: recText({
+        name: a.name,
+        distance: howFar(distance),
+        direction: compass(moveX, moveZ),
+        reason: 'This ' + joinReasons(reasonTexts),
+        saving: saving,
+      }),
     })
   }
 
