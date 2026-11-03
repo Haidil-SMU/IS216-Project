@@ -525,16 +525,30 @@ app.use((error, req, res, next) => {
     .json({ error: "Unable to process the planner request." });
 });
 
+// Serve the built Vue app (client/dist) so the site and /api share one origin.
+// Any other GET outside /api gets index.html so Vue Router can handle it.
+const CLIENT_DIST = path.join(__dirname, '..', 'client', 'dist');
+if (fs.existsSync(CLIENT_DIST)) {
+    app.use(express.static(CLIENT_DIST));
+    app.use((req, res, next) => {
+        if (req.method !== 'GET' || req.path.startsWith('/api')) return next();
+        res.sendFile(path.join(CLIENT_DIST, 'index.html'));
+    });
+}
 
 app.use((req, res) => {
     res.status(404).type('text/plain').send('Not found');
 });
 
+// Render needs the server reachable from outside the container;
+// locally it stays on 127.0.0.1.
+const HOST = isProduction ? '0.0.0.0' : '127.0.0.1';
+
 // Start listening once MongoDB is connected.
 dbReady
     .then(() => {
-        app.listen(PORT, '127.0.0.1', () => {
-            console.log(`Server running at http://127.0.0.1:${PORT}/`);
+        app.listen(PORT, HOST, () => {
+            console.log(`Server running at http://${HOST}:${PORT}/`);
         });
         loadLayouts(getDb())
     })
