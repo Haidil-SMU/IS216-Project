@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, nextTick, onMounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
 import ContractorProfile from '@/components/ContractorProfile.vue'
@@ -40,7 +40,7 @@ async function decideQuotation(request, status) {
   if (decisionRequestId.value || request.status !== 'quoted') return
   if (status === 'accepted' && (!request.quotation?.startDate || request.quotation.startDate < calendarToday)) { errorMessage.value = 'Ask the contractor to propose an upcoming start date before accepting.'; return }
   const verb = status === 'accepted' ? 'accept' : 'decline'
-  if (!confirm(`Are you sure you want to ${verb} this quotation? ${status === 'accepted' ? `You accept the price, scope and start date of ${formatDate(request.quotation.startDate)}. ` : ''}This decision cannot be changed here.`)) return
+  if (!await requestConfirmation(`Are you sure you want to ${verb} this quotation? ${status === 'accepted' ? `You accept the price, scope and start date of ${formatDate(request.quotation.startDate)}. ` : ''}This decision cannot be changed here.`)) return
   decisionRequestId.value = getRequestId(request)
   errorMessage.value = ''
   try {
@@ -340,7 +340,7 @@ function updateQuotation(request) {
 async function removeQuotation(request) {
   const requestId = getRequestId(request)
 
-  if (!confirm('Cancel this pending request? The contractor will see that you cancelled it, and it will remain in your history.')) {
+  if (!await requestConfirmation('Cancel this pending request? The contractor will see that you cancelled it, and it will remain in your history.')) {
     return
   }
 
@@ -427,6 +427,50 @@ async function openCalendarQuotation(event) {
   target.focus({ preventScroll: true })
   target.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' })
 }
+
+
+// Await the homeowner or contractor decision before running the original action.
+const confirmationDialog = ref(null)
+const confirmation = ref({ title: '', message: '', action: 'Continue', destructive: false })
+let resolveConfirmation = null
+let confirmationDisposed = false
+
+async function requestConfirmation(message) {
+  if (resolveConfirmation || confirmationDisposed) return false
+  const text = String(message)
+  let title = 'Confirm your action'
+  let action = 'Continue'
+  let destructive = false
+  if (text.startsWith('Refreshing')) { title = 'Refresh dashboard?'; action = 'Discard and refresh' }
+  else if (text.startsWith('Saving a replacement')) { title = 'Replace price list?'; action = 'Replace price list' }
+  else if (text.startsWith('Generating again')) { title = 'Replace this draft?'; action = 'Generate again' }
+  else if (text.startsWith('Withdraw')) { title = 'Withdraw quotation?'; action = 'Withdraw quotation'; destructive = true }
+  else if (text.startsWith('Submit quotation')) { title = 'Send quotation?'; action = 'Send quotation' }
+  else if (text.includes('reject this request')) { title = 'Reject request?'; action = 'Reject request'; destructive = true }
+  else if (text.includes('accept this quotation')) { title = 'Accept quotation?'; action = 'Accept quotation' }
+  else if (text.includes('decline this quotation')) { title = 'Decline quotation?'; action = 'Decline quotation'; destructive = true }
+  else if (text.startsWith('Cancel this pending')) { title = 'Cancel request?'; action = 'Cancel request'; destructive = true }
+  confirmation.value = { title, message: text, action, destructive }
+  const decision = new Promise(resolve => { resolveConfirmation = resolve })
+  await nextTick()
+  if (!confirmationDisposed && resolveConfirmation) {
+    try { confirmationDialog.value.showModal() }
+    catch { finishConfirmation(false) }
+  }
+  return decision
+}
+
+function finishConfirmation(accepted = false) {
+  const resolve = resolveConfirmation
+  resolveConfirmation = null
+  if (confirmationDialog.value?.open) confirmationDialog.value.close()
+  resolve?.(accepted)
+}
+
+onUnmounted(() => {
+  confirmationDisposed = true
+  finishConfirmation(false)
+})
 
 </script>
 
@@ -937,6 +981,26 @@ async function openCalendarQuotation(event) {
       />
     </Teleport>
   </div>
+
+  <Teleport to="body">
+    <dialog ref="confirmationDialog" class="eco-confirm-dialog"
+      aria-labelledby="eco-confirm-title" aria-describedby="eco-confirm-message"
+      @cancel.prevent="finishConfirmation(false)" @close="finishConfirmation(false)">
+      <div class="eco-confirm-content">
+        <div class="eco-confirm-heading">
+          <span class="eco-confirm-icon" aria-hidden="true">{{ confirmation.destructive ? '!' : '✓' }}</span>
+          <button type="button" class="eco-confirm-close" aria-label="Close confirmation" @click="finishConfirmation(false)">×</button>
+        </div>
+        <p class="eco-confirm-eyebrow">HDB ECOHOME</p>
+        <h2 id="eco-confirm-title">{{ confirmation.title }}</h2>
+        <p id="eco-confirm-message" class="eco-confirm-message">{{ confirmation.message }}</p>
+        <div class="eco-confirm-actions">
+          <button type="button" class="eco-confirm-cancel" autofocus @click="finishConfirmation(false)">Go back</button>
+          <button type="button" class="eco-confirm-submit" :class="{ 'is-destructive': confirmation.destructive }" @click="finishConfirmation(true)">{{ confirmation.action }}</button>
+        </div>
+      </div>
+    </dialog>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -1130,4 +1194,24 @@ button.rc-event:focus-visible{outline:3px solid #75b99a;outline-offset:3px}.rc-e
 
 .clarification-panel { padding:17px 18px; background:#fff6dd; border:1px solid #eed491; border-left:4px solid #c18a20; border-radius:12px; color:#705018; }
 .clarification-point { margin-top:8px; white-space:pre-wrap; overflow-wrap:anywhere; }
+
+/* Shared confirmation styling, kept self-contained for replacement delivery. */
+.eco-confirm-dialog{box-sizing:border-box;width:min(520px,calc(100vw - 32px));max-height:calc(100dvh - 32px);margin:auto;padding:0;border:1px solid #d7e7df;border-radius:24px;color:#203d30;background:#fff;box-shadow:0 24px 80px #102f3540;overflow:auto;font-family:inherit}
+.eco-confirm-dialog::backdrop{background:rgba(16,36,29,.48);backdrop-filter:blur(4px)}
+.eco-confirm-dialog[open]{animation:eco-confirm-enter .18s ease-out}
+.eco-confirm-content{padding:28px}.eco-confirm-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+.eco-confirm-icon{display:grid;place-items:center;width:46px;height:46px;border-radius:16px;background:#e8f6ee;color:#187b4d;font-size:24px;font-weight:800}
+.eco-confirm-close{display:grid;place-items:center;width:36px;height:36px;padding:0;border:0;border-radius:50%;background:#f1f6f3;color:#52695b;font-size:26px;line-height:1}
+.eco-confirm-eyebrow{margin:0 0 8px;font-size:11px;font-weight:800;letter-spacing:.12em;color:#408460}
+.eco-confirm-dialog h2{margin:0 0 14px;font-size:25px;font-weight:750;letter-spacing:-.02em;color:#203d30}
+.eco-confirm-message{white-space:pre-line;overflow-wrap:anywhere;color:#5a6e61;line-height:1.65;margin:0 0 26px;font-size:15px}
+.eco-confirm-actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap}
+.eco-confirm-actions button{padding:11px 20px;border-radius:999px;font-size:14px;font-weight:700;cursor:pointer;transition:background .16s,box-shadow .16s}
+.eco-confirm-cancel{border:1px solid #d6e4da;background:#fff;color:#426450}.eco-confirm-cancel:hover{background:#f1f7f3}
+.eco-confirm-submit{border:1px solid #188653;background:#188653;color:#fff;box-shadow:0 4px 12px #18865322}.eco-confirm-submit:hover{background:#126b42}
+.eco-confirm-submit.is-destructive{background:#a83b3b;border-color:#a83b3b}.eco-confirm-submit.is-destructive:hover{background:#8c2e2e}
+.eco-confirm-dialog button:focus-visible{outline:3px solid #78b993;outline-offset:3px}
+@keyframes eco-confirm-enter{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@media(max-width:480px){.eco-confirm-content{padding:22px}.eco-confirm-actions{flex-direction:column-reverse}.eco-confirm-actions button{width:100%}.eco-confirm-dialog h2{font-size:23px}}
+@media(prefers-reduced-motion:reduce){.eco-confirm-dialog[open]{animation:none}.eco-confirm-actions button{transition:none}}
 </style>
