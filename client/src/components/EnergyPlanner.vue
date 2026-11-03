@@ -1,8 +1,14 @@
 <style scoped src="../assets/style.css"></style>
+<script>
+export function itemEnergy(item, days) {
+  return (((item.annualKwh || 0) / 365) * days * item.quantity * item.usagePercent) / 100
+}
+</script>
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import axios from 'axios'
 import Chart from 'chart.js/auto'
+import retailerData from '../data/electricity-retailers.json'
 import plannerNoticeImage from '../assets/planner-notice.svg'
 import { factors } from '../stores/energy.js'
 import { resolveSpec } from '../stores/applianceModels.js'
@@ -17,6 +23,7 @@ async function showNotice(message, title = 'A quick heads-up') {
   if (noticeDialog.value && !noticeDialog.value.open) noticeDialog.value.showModal()
 }
 
+const retailerPlans = retailerData.plans
 const API_URL = '/api'
 const household = ref(null)
 const plans = ref([])
@@ -30,7 +37,14 @@ const busy = ref(false)
 const loadFailed = ref(false)
 const plannerForm = ref(null)
 const profile = ref({})
-const plan = ref({ id: '', name: 'Everyday plan', days: 30, tariff: 0.32, items: [] })
+const plan = ref({
+  id: '',
+  name: 'Everyday plan',
+  days: 30,
+  tariff: retailerPlans[0].rate,
+  retailer: { ...retailerPlans[0] },
+  items: [],
+})
 // A plan keeps the room geometry and positions as they were when Add plan was pressed.
 const layoutPreview = computed(() => {
   const rooms = []
@@ -205,6 +219,24 @@ async function showEditor() {
 function money(value) {
   return 'S$' + Number(value || 0).toFixed(2)
 }
+const selectedRetailer = computed({
+  get() {
+    for (const retailer of retailerPlans) {
+      if (retailer.id === plan.value.retailer?.id && retailer.rate === plan.value.tariff)
+        return retailer.id
+    }
+    return 'saved-rate'
+  },
+  set(id) {
+    for (const retailer of retailerPlans) {
+      if (retailer.id !== id) continue
+      plan.value.retailer = { ...retailer }
+      plan.value.tariff = retailer.rate
+      break
+    }
+  },
+})
+
 async function getData() {
   const response = await axios.get(API_URL + '/planner')
   household.value = response.data.users[0] || null
@@ -334,7 +366,8 @@ async function startPlan(scroll = true) {
       id: '',
       name: 'Everyday plan',
       days: 30,
-      tariff: 0.32,
+      tariff: retailerPlans[0].rate,
+      retailer: { ...retailerPlans[0] },
       items,
       layout: JSON.parse(JSON.stringify(response.data.rooms)),
       layoutCapturedAt: new Date().toISOString(),
@@ -347,6 +380,17 @@ async function startPlan(scroll = true) {
   }
   busy.value = false
 }
+function validUsage(item) {
+  if (Number(item.usagePercent) > 100) {
+    showNotice(
+      'You cannot save the plan when the usage rate is above 100%. Please enter 100% or less.',
+      'Usage rate too high',
+    )
+    return false
+  }
+  return true
+}
+
 function checkInputs(section) {
   const inputs = section.querySelectorAll('input, select, textarea')
   for (const input of inputs) {
@@ -363,6 +407,7 @@ async function savePlan() {
     return
   }
   for (const item of plan.value.items) {
+    if (!validUsage(item)) return
     if (item.annualKwh == null) {
       showNotice(
         'Energy information is missing for ' +
@@ -393,6 +438,7 @@ async function savePlan() {
       profile: profile.value,
       days: plan.value.days,
       tariff: plan.value.tariff,
+      retailer: plan.value.retailer,
       items: plan.value.items,
       layout: plan.value.layout || [],
       layoutCapturedAt: plan.value.layoutCapturedAt,
@@ -457,9 +503,6 @@ function loadPlan(saved) {
   showEditor()
 }
 
-function itemEnergy(item, days) {
-  return (((item.annualKwh || 0) / 365) * days * item.quantity * item.usagePercent) / 100
-}
 function estimate(currentPlan) {
   let kwh = 0
   const byAppliance = []
@@ -593,22 +636,38 @@ function estimate(currentPlan) {
                         />
                       </div>
                       <div class="col-md-6">
-                        <label for="tariff" class="form-label">S$ per kWh</label
-                        ><input
-                          id="tariff"
-                          v-model.number="plan.tariff"
-                          class="form-control"
-                          type="number"
-                          min="0"
-                          max="10"
-                          step="0.0001"
-                          required
-                        />
+                        <label for="tariff" class="form-label"
+                          >Electricity retailer · S$ per kWh</label
+                        >
+                        <select id="tariff" v-model="selectedRetailer" class="form-select" required>
+                          <option v-if="selectedRetailer === 'saved-rate'" value="saved-rate">
+                            {{ plan.retailer?.name || 'Previously saved rate' }} — S${{
+                              Number(plan.tariff).toFixed(4)
+                            }}/kWh (saved)
+                          </option>
+                          <option
+                            v-for="retailer in retailerPlans"
+                            :key="retailer.id"
+                            :value="retailer.id"
+                          >
+                            {{ retailer.name }} — {{ retailer.plan }} — S${{
+                              retailer.rate.toFixed(4)
+                            }}/kWh
+                          </option>
+                        </select>
                       </div>
                     </div>
                     <p class="small text-secondary mt-3 mb-0">
-                      S$0.32/kWh is an illustrative starting rate. Enter the rate from your bill,
-                      including tax if applicable. Estimates exclude fixed charges.
+                      Published rates include GST. Rates are not updated automatically. Estimates
+                      exclude rebates, add-ons and other charges; forecasts keep the selected rate
+                      constant.
+                      <a
+                        v-if="plan.retailer?.source"
+                        :href="plan.retailer.source"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        >View retailer’s published plan</a
+                      >
                     </p>
                   </div>
                 </div>
@@ -725,10 +784,11 @@ function estimate(currentPlan) {
                       <input
                         :id="'plan-usage-' + index"
                         v-model.number="item.usagePercent"
+                        @change="validUsage(item)"
                         class="form-control"
                         type="number"
                         min="0"
-                        max="200"
+                        max="100"
                         step="1"
                         required
                       />

@@ -1,0 +1,40 @@
+{
+  "gstIncluded": true,
+  "plans": [
+    {
+      "id": "sp-q4-2026",
+      "name": "SP Group",
+      "plan": "Regulated tariff (Oct–Dec 2026)",
+      "rate": 0.3116,
+      "source": "https://www.spgroup.com.sg/our-services/utilities/tariff-information"
+    },
+    {
+      "id": "geneco-fixed24",
+      "name": "Geneco",
+      "plan": "Get It Fixed 24 (24 months)",
+      "rate": 0.29,
+      "source": "https://www.geneco.sg/residential/electricity-plans/"
+    },
+    {
+      "id": "senoko-power24",
+      "name": "Senoko Energy",
+      "plan": "LifePower24 (24 months)",
+      "rate": 0.305,
+      "source": "https://www.senokoenergy.com/households/price-plans"
+    },
+    {
+      "id": "tuas-fixed24",
+      "name": "Tuas Power",
+      "plan": "PowerFIX 24 (24 months)",
+      "rate": 0.309,
+      "source": "https://www.savewithtuas.com/our-electricity-plans/"
+    },
+    {
+      "id": "pacific-savvy24",
+      "name": "PacificLight",
+      "plan": "Savvy Saver (24 months)",
+      "rate": 0.29,
+      "source": "https://www.pacificlight.com.sg/home/plans-new"
+    }
+  ]
+}
