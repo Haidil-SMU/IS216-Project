@@ -1,24 +1,17 @@
 import { test, expect } from '@playwright/test'
+
+// Run with playwright.quotations.config.js and a signed-in homeowner test account.
+// Requires one saved household and a painting contractor without an active request.
 const createdRequestIds = []
 
 test.afterEach(async ({ page }) => {
-  const ids = createdRequestIds.splice(0)
-
-  for (const id of ids) {
-    const response = await page.request.delete(
-      `/api/quotation-requests/${encodeURIComponent(id)}`
-    )
-
-    expect(
-      response.status(),
-      `Cleanup should remove test request ${id}`
-    ).toBe(200)
+  for (const id of createdRequestIds.splice(0)) {
+    const response = await page.request.delete(`/api/quotation-requests/${encodeURIComponent(id)}`)
+    expect(response.status(), `Cleanup should cancel test request ${id}`).toBe(200)
   }
 })
-test('homeowner can submit a quotation request and find it in MyQuotations',
-  async ({ page }) => {
-    const description = `E2E painting request ${Date.now()}`
 
+async function submitOwnRequest(page, description) {
     // Use predictable data for the unrelated government service.
     // Our own app's server requests still run normally.
     await page.route('https://data.gov.sg/**', async route => {
@@ -71,8 +64,12 @@ test('homeowner can submit a quotation request and find it in MyQuotations',
       exact: true
     })).toBeChecked()
 
-    await page.getByLabel('Renovation Description').fill(description)
-    await page.getByLabel('Estimated Budget (S$)').fill('5000')
+    await page.locator('.project-notes').evaluate(element => { element.open = true })
+    await page.locator('#description').fill(description)
+    await page.getByLabel('Contact name', { exact: true }).fill('E2E Test Homeowner')
+    await page.getByLabel('Contact number', { exact: true }).fill('+6591234567')
+    await page.locator('#quotation-contact-email').fill('')
+    await page.locator('#budget').fill('5000')
 
     const submitted = page.waitForResponse(response =>
       response.url().endsWith('/api/quotation-requests') &&
@@ -86,88 +83,31 @@ test('homeowner can submit a quotation request and find it in MyQuotations',
     const response = await submitted
     expect(response.status()).toBe(201)
     const savedRequest = await response.json()
-createdRequestIds.push(savedRequest.requestId)
-    await expect(page.getByRole('heading', {
-      name: 'Request Submitted!',
-      exact: true
-    })).toBeVisible()
-await page.screenshot({
-  path: 'test-results/evidence/B1-request-submitted.png',
-  fullPage: true
+expect(savedRequest.requestId).toBeTruthy()
+    createdRequestIds.push(savedRequest.requestId)
+    await expect(page.getByRole('heading', { name: 'Request Submitted!', exact: true })).toBeVisible()
+}
+
+test('homeowner can submit a quotation request and find it in MyQuotations', async ({ page }) => {
+  const description = `E2E painting request ${Date.now()}`
+  await submitOwnRequest(page, description)
+  await page.screenshot({ path: 'test-results/evidence/B1-request-submitted.png', fullPage: true })
+  await page.getByRole('button', { name: 'View My Quotations' }).click()
+  const card = page.locator('.quotation-card').filter({ hasText: description })
+  await expect(card).toHaveCount(1)
+  await expect(card).toContainText('Pending Response')
+  await expect(card).toContainText('S$5,000.00')
+  await page.reload()
+  await expect(card).toHaveCount(1)
+  await expect(card).toContainText(description)
+  await expect(card).toContainText('S$5,000.00')
+  await card.screenshot({ path: 'test-results/evidence/B2-saved-request.png' })
 })
-    await page.getByRole('button', {
-      name: 'View My Quotations'
-    }).click()
 
-    const requestCard = page.locator('.quotation-card')
-      .filter({ hasText: description })
-
-    await expect(requestCard).toHaveCount(1)
-    await expect(requestCard).toContainText('Pending Response')
-    await expect(requestCard).toContainText('S$5,000.00')
-
-    await page.reload()
-
-    await expect(requestCard).toHaveCount(1)
-    await expect(requestCard).toContainText(description)
-    await requestCard.screenshot({
-  path: 'test-results/evidence/B2-saved-request.png'
-})
-  }
-)
-
-
-
-
-// update pending quotation and verify changes
-test('homeowner can update a pending quotation request',
-  async ({ page }) => {
+test('homeowner can update a pending quotation request', async ({ page }) => {
     const description = `E2E edit request ${Date.now()}`
     const updatedDescription = `${description} updated`
-
-    // Create this test's own request using the real server.
-    // It does not depend on the first test passing.
-    const contractorsResponse = await page.request.get('/api/contractors')
-    expect(contractorsResponse.ok()).toBe(true)
-
-    const contractorData = await contractorsResponse.json()
-    const contractors = Array.isArray(contractorData)
-      ? contractorData
-      : contractorData.contractors
-
-    expect(contractors.length).toBeGreaterThan(0)
-
-    const contractor = contractors[0]
-
-    const serviceValue = contractor.services[0]
-    const service = typeof serviceValue === 'string'
-      ? serviceValue
-      : serviceValue.name || serviceValue.code
-
-    const createResponse = await page.request.post(
-      '/api/quotation-requests',
-      {
-        data: {
-          contractorId: contractor._id,
-          householdId: null,
-          planId: null,
-          household: {
-            name: 'E2E test property',
-            flatType: '5-room',
-            occupants: 2,
-            bedrooms: 3
-          },
-          services: [service],
-          description,
-          budget: 5000,
-          preferredStartDate: null
-        }
-      }
-    )
-
-    expect(createResponse.status()).toBe(201)
-const savedRequest = await createResponse.json()
-createdRequestIds.push(savedRequest.requestId)
+    await submitOwnRequest(page, description)
     await page.goto('/MyQuotations')
 
     const splash = page.locator('#app-loader')
@@ -189,11 +129,15 @@ createdRequestIds.push(savedRequest.requestId)
 
     await expect(page).toHaveURL(/\/QuotationRequest\?/)
     await expect(page.getByLabel('Renovation Description'))
+    await expect(page.getByRole('heading', { name: 'Update Quotation', exact: true })).toBeVisible()
+    await expect(page.locator('#description')).toHaveValue(description)
+    await page.locator('.project-notes').evaluate(element => { element.open = true })
+    await expect(page.locator('#description'))
       .toHaveValue(description)
 
-    await page.getByLabel('Renovation Description')
+    await page.locator('#description')
       .fill(updatedDescription)
-    await page.getByLabel('Estimated Budget (S$)').fill('6500')
+    await page.locator('#budget').fill('6500')
 
     const updated = page.waitForResponse(response =>
       response.url().includes('/api/quotation-requests/') &&

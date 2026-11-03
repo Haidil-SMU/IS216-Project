@@ -30,6 +30,9 @@ let wrapper
 
 function mockData({ savedHousehold = true } = {}) {
   axios.get.mockImplementation(async (url) => {
+    if (url === '/api/auth/me') return { data: { user: { name: 'Test Homeowner', email: 'test@example.com' } } }
+    if (url === '/api/quotation-requests') return { data: [] }
+    if (url === '/api/quotation-layout') return { data: { rooms: [] } }
     if (url === '/api/contractors') {
       return {
         data: [
@@ -99,6 +102,8 @@ async function openPage() {
 async function fillRequirements() {
   await wrapper.get('#description').setValue('Paint the living room')
   await wrapper.get('#budget').setValue('5000')
+  await wrapper.get('#quotation-contact-name').setValue('Test Homeowner')
+  await wrapper.get('#quotation-contact-phone').setValue('+65 9123 4567')
 }
 
 async function submitForm() {
@@ -154,7 +159,11 @@ describe('QuotationRequest component', () => {
         services: ['Painting & Redecoration'],
         description: 'Paint the living room',
         budget: 5000,
-        preferredStartDate: null
+        preferredStartDate: null,
+        contact: { name: 'Test Homeowner', phone: '+6591234567', email: 'test@example.com' },
+        selectedItemIds: [],
+        selectedItemWork: {},
+        workDetails: [{ service: 'Painting & Redecoration', scope: 'assess', rooms: [], quantity: null, unit: 'points', notes: '' }]
       }
     )
     expect(wrapper.text()).toContain('Request Submitted!')
@@ -169,23 +178,23 @@ describe('QuotationRequest component', () => {
       await submitForm()
 
       expect(wrapper.text()).toContain(
-        'Please select at least one renovation service.'
+        'Select at least one layout item or additional renovation requirement.'
       )
       expect(axios.post).not.toHaveBeenCalled()
     }
   )
 
-  it('blocks a description containing only spaces', async () => {
+  it('generates a scope summary when optional project notes are blank', async () => {
     await openPage()
     await fillRequirements()
-
     await wrapper.get('#description').setValue('   ')
     await submitForm()
-
-    expect(wrapper.text()).toContain(
-      'Please describe your renovation requirements.'
-    )
-    expect(axios.post).not.toHaveBeenCalled()
+    expect(axios.post).toHaveBeenCalledWith('/api/quotation-requests',
+      expect.objectContaining({
+        description: '[Selected scope summary]\nPainting & Redecoration — Contractor to assess',
+        selectedItemIds: []
+      }))
+    expect(wrapper.text()).toContain('Request Submitted!')
   })
 
   it.each([
@@ -228,39 +237,23 @@ describe('QuotationRequest component', () => {
     }
   )
 
-  it('supports manual property details when no household is saved',
-    async () => {
-      mockData({ savedHousehold: false })
-      await openPage()
+  it('requires household setup when no saved household exists', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockData({ savedHousehold: false })
+    await openPage()
+    expect(wrapper.text()).toContain('No saved household was found. Complete your household setup in My Profile.')
+    expect(wrapper.find('form').exists()).toBe(false)
+    expect(axios.post).not.toHaveBeenCalled()
+  })
 
-      expect(wrapper.get('input[value="saved"]').element.disabled)
-        .toBe(true)
-      expect(wrapper.get('input[value="manual"]').element.checked)
-        .toBe(true)
-
-      await wrapper.get('#householdName').setValue('Manual property')
-      await wrapper.get('#flatType').setValue('5-room')
-      await wrapper.get('#occupants').setValue('2')
-      await wrapper.get('#bedrooms').setValue('3')
-      await fillRequirements()
-      await submitForm()
-
-      expect(axios.post).toHaveBeenCalledWith(
-        '/api/quotation-requests',
-        expect.objectContaining({
-          householdId: null,
-          planId: null,
-          household: {
-            name: 'Manual property',
-            flatType: '5-room',
-            occupants: 2,
-            bedrooms: 3
-          }
-        })
-      )
-      expect(wrapper.text()).toContain('Request Submitted!')
-    }
-  )
+  it('blocks a missing contact number', async () => {
+    await openPage()
+    await fillRequirements()
+    await wrapper.get('#quotation-contact-phone').setValue('')
+    await submitForm()
+    expect(wrapper.text()).toContain('Enter a valid contact number')
+    expect(axios.post).not.toHaveBeenCalled()
+  })
 
   it('shows a server error without claiming submission succeeded',
     async () => {

@@ -143,55 +143,27 @@ describe('MyQuotations component', () => {
 
     expect(wrapper.text()).not.toContain('Two coats of paint')
 
-    await findButton('View Quotation Breakdown').trigger('click')
+    await findButton('Quotation breakdown').trigger('click')
 
     expect(wrapper.text()).toContain('Itemised Quotation Breakdown')
     expect(wrapper.text()).toContain('Wall painting')
     expect(wrapper.text()).toContain('Two coats of paint')
 
-    await findButton('Hide Quotation Breakdown').trigger('click')
+    await findButton('Quotation breakdown').trigger('click')
 
     expect(wrapper.text()).not.toContain('Two coats of paint')
   })
 
-  it('requires two received quotations before comparison is ready',
-    async () => {
-      mockResponses([
-        makeRequest(),
-        makeRequest({
-          _id: 'request-2',
-          contractorId: 'contractor-2'
-        })
-      ])
+  it('requires a proposed start date before accepting a quotation', async () => {
+    mockResponses([makeRequest()])
+    await openPage()
+    expect(findButton('Accept Quotation').element.disabled).toBe(true)
+    expect(wrapper.text()).toContain('Not set — ask the contractor to revise the quotation with a start date.')
+    expect(wrapper.text()).toContain('Accepting confirms this quotation’s price, scope and proposed start date.')
+    expect(findButton('Decline').element.disabled).toBe(false)
+  })
 
-      await openPage()
-
-      expect(wrapper.text()).not.toContain('Ready for Comparison')
-
-      const checkboxes = wrapper.findAll('input[type="checkbox"]')
-
-      expect(checkboxes).toHaveLength(2)
-
-      await checkboxes[0].setValue(true)
-
-      expect(wrapper.text()).toContain('1 quotation(s) selected')
-      expect(wrapper.text()).not.toContain('Ready for Comparison')
-
-      await checkboxes[1].setValue(true)
-
-      expect(wrapper.text()).toContain('2 quotation(s) selected')
-      expect(wrapper.text()).toContain('Ready for Comparison')
-
-      await findButton('Clear Selection').trigger('click')
-
-      expect(wrapper.text()).toContain('0 quotation(s) selected')
-      expect(wrapper.text()).not.toContain('Ready for Comparison')
-      expect(checkboxes[0].element.checked).toBe(false)
-      expect(checkboxes[1].element.checked).toBe(false)
-    }
-  )
-
-  it('does not offer pending or rejected requests for comparison',
+  it('shows pending and rejected states without quotation decision controls',
     async () => {
       mockResponses([
         makeRequest({
@@ -213,7 +185,7 @@ describe('MyQuotations component', () => {
       expect(wrapper.text()).toContain(
         'This contractor has rejected your quotation request.'
       )
-      expect(wrapper.findAll('input[type="checkbox"]')).toHaveLength(0)
+      expect(wrapper.findAll('button').some(button => button.text().includes('Accept Quotation'))).toBe(false)
     }
   )
 
