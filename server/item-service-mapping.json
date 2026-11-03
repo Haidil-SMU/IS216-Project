@@ -1,0 +1,472 @@
+{
+  "instant_water_heater": {
+    "name": "Instant Water Heater",
+    "serviceCategories": [
+      "Plumbing & Sanitary Works",
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": false,
+    "scope": "Water and electrical connection work; equipment supply only if explicitly quoted."
+  },
+  "storage_water_heater": {
+    "name": "Storage Water Heater (25L)",
+    "serviceCategories": [
+      "Plumbing & Sanitary Works",
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": false,
+    "scope": "Water and electrical connection work; equipment supply only if explicitly quoted."
+  },
+  "single_glazed_window": {
+    "name": "Single-Glazed Window",
+    "serviceCategories": [
+      "Windows"
+    ],
+    "requiresExplicitWorkRequest": false,
+    "scope": "Window installation or replacement."
+  },
+  "double_glazed_window": {
+    "name": "Double-Glazed Low-E Window",
+    "serviceCategories": [
+      "Windows"
+    ],
+    "requiresExplicitWorkRequest": false,
+    "scope": "Window installation or replacement."
+  },
+  "timber_flush_door": {
+    "name": "Solid Timber Door",
+    "serviceCategories": [
+      "Doors"
+    ],
+    "requiresExplicitWorkRequest": false,
+    "scope": "Door installation or replacement."
+  },
+  "glass_sliding_door": {
+    "name": "Balcony Glass Sliding Door",
+    "serviceCategories": [
+      "Doors"
+    ],
+    "requiresExplicitWorkRequest": false,
+    "scope": "Door installation or replacement."
+  },
+  "quartz_countertop": {
+    "name": "Kitchen Quartz Countertop",
+    "serviceCategories": [
+      "Interior Design & Renovation"
+    ],
+    "requiresExplicitWorkRequest": false,
+    "scope": "Countertop installation or replacement; associated sink plumbing must be explicitly requested."
+  },
+  "plain_countertop": {
+    "name": "Plain Countertop",
+    "serviceCategories": [
+      "Interior Design & Renovation"
+    ],
+    "requiresExplicitWorkRequest": false,
+    "scope": "Countertop installation or replacement; associated sink plumbing must be explicitly requested."
+  },
+  "sofa_3_seater": {
+    "name": "3-seater sofa",
+    "serviceCategories": [
+      "Interior Design & Renovation"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit furniture layout, assembly or custom fitting work; not automatic furniture purchase."
+  },
+  "sofa_2_seater": {
+    "name": "2-seater sofa",
+    "serviceCategories": [
+      "Interior Design & Renovation"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit furniture layout, assembly or custom fitting work; not automatic furniture purchase."
+  },
+  "armchair": {
+    "name": "Armchair",
+    "serviceCategories": [
+      "Interior Design & Renovation"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit furniture layout, assembly or custom fitting work; not automatic furniture purchase."
+  },
+  "coffee_table": {
+    "name": "Coffee table",
+    "serviceCategories": [
+      "Interior Design & Renovation"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit furniture layout, assembly or custom fitting work; not automatic furniture purchase."
+  },
+  "tv_console": {
+    "name": "TV console",
+    "serviceCategories": [
+      "Interior Design & Renovation"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit furniture layout, assembly or custom fitting work; not automatic furniture purchase."
+  },
+  "dining_table": {
+    "name": "Dining table",
+    "serviceCategories": [
+      "Interior Design & Renovation"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit furniture layout, assembly or custom fitting work; not automatic furniture purchase."
+  },
+  "dining_chair": {
+    "name": "Dining chair",
+    "serviceCategories": [
+      "Interior Design & Renovation"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit furniture layout, assembly or custom fitting work; not automatic furniture purchase."
+  },
+  "bed_single": {
+    "name": "Single bed",
+    "serviceCategories": [
+      "Interior Design & Renovation"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit furniture layout, assembly or custom fitting work; not automatic furniture purchase."
+  },
+  "bed_queen": {
+    "name": "Queen bed",
+    "serviceCategories": [
+      "Interior Design & Renovation"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit furniture layout, assembly or custom fitting work; not automatic furniture purchase."
+  },
+  "bedside_table": {
+    "name": "Bedside table",
+    "serviceCategories": [
+      "Interior Design & Renovation"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit furniture layout, assembly or custom fitting work; not automatic furniture purchase."
+  },
+  "wardrobe": {
+    "name": "Wardrobe",
+    "serviceCategories": [
+      "Interior Design & Renovation"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit furniture layout, assembly or custom fitting work; not automatic furniture purchase."
+  },
+  "bookshelf": {
+    "name": "Bookshelf",
+    "serviceCategories": [
+      "Interior Design & Renovation"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit furniture layout, assembly or custom fitting work; not automatic furniture purchase."
+  },
+  "study_desk": {
+    "name": "Study desk",
+    "serviceCategories": [
+      "Interior Design & Renovation"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit furniture layout, assembly or custom fitting work; not automatic furniture purchase."
+  },
+  "office_chair": {
+    "name": "Office chair",
+    "serviceCategories": [
+      "Interior Design & Renovation"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit furniture layout, assembly or custom fitting work; not automatic furniture purchase."
+  },
+  "aircon_single_split": {
+    "name": "Split Air Conditioner (Single, Multi-Split & VRF)",
+    "serviceCategories": [
+      "Air-conditioning",
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": false,
+    "scope": "Air-conditioning installation and associated electrical work; portable unit setup must be explicitly requested."
+  },
+  "aircon_window": {
+    "name": "Window Air Conditioner",
+    "serviceCategories": [
+      "Air-conditioning",
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": false,
+    "scope": "Air-conditioning installation and associated electrical work; portable unit setup must be explicitly requested."
+  },
+  "aircon_casement": {
+    "name": "Casement Air Conditioner",
+    "serviceCategories": [
+      "Air-conditioning",
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": false,
+    "scope": "Air-conditioning installation and associated electrical work; portable unit setup must be explicitly requested."
+  },
+  "aircon_portable": {
+    "name": "Portable Air Conditioner",
+    "serviceCategories": [
+      "Air-conditioning",
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Air-conditioning installation and associated electrical work; portable unit setup must be explicitly requested."
+  },
+  "ceiling_fan": {
+    "name": "Ceiling Fan",
+    "serviceCategories": [
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": false,
+    "scope": "Fan installation and electrical connection."
+  },
+  "stand_fan": {
+    "name": "Stand Fan",
+    "serviceCategories": [
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit associated power-point or fixed wiring work only; not appliance supply, repair or automatic installation."
+  },
+  "air_purifier": {
+    "name": "Air Purifier",
+    "serviceCategories": [
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit associated power-point or fixed wiring work only; not appliance supply, repair or automatic installation."
+  },
+  "dehumidifier": {
+    "name": "Dehumidifier",
+    "serviceCategories": [
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit associated power-point or fixed wiring work only; not appliance supply, repair or automatic installation."
+  },
+  "tv_43_inch_wall_mounted": {
+    "name": "43-inch Wall-Mounted TV",
+    "serviceCategories": [
+      "Interior Design & Renovation",
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit mounting, cable management or new power-point work; not device purchase."
+  },
+  "tv_55_inch_wall_mounted": {
+    "name": "55-inch Wall-Mounted TV",
+    "serviceCategories": [
+      "Interior Design & Renovation",
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit mounting, cable management or new power-point work; not device purchase."
+  },
+  "tv_65_inch_wall_mounted": {
+    "name": "65-inch Wall-Mounted TV",
+    "serviceCategories": [
+      "Interior Design & Renovation",
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit mounting, cable management or new power-point work; not device purchase."
+  },
+  "desktop_computer": {
+    "name": "Desktop Computer + Monitor",
+    "serviceCategories": [
+      "Interior Design & Renovation",
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit mounting, cable management or new power-point work; not device purchase."
+  },
+  "refrigerator_no_freezer": {
+    "name": "Refrigerator Without Freezer",
+    "serviceCategories": [
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit associated power-point or fixed wiring work only; not appliance supply, repair or automatic installation."
+  },
+  "refrigerator_freezer_400l": {
+    "name": "Refrigerator-Freezer (400L)",
+    "serviceCategories": [
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit associated power-point or fixed wiring work only; not appliance supply, repair or automatic installation."
+  },
+  "refrigerator_ice_dispenser": {
+    "name": "Refrigerator-Freezer With Ice Dispenser",
+    "serviceCategories": [
+      "Electrical Works",
+      "Plumbing & Sanitary Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit power-point work; water connection only if this model requires plumbing. Do not assume a connection is needed."
+  },
+  "commercial_storage_refrigerator": {
+    "name": "Commercial Storage Refrigerator",
+    "serviceCategories": [
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit associated power-point or fixed wiring work only; not appliance supply, repair or automatic installation."
+  },
+  "microwave_oven": {
+    "name": "Microwave Oven",
+    "serviceCategories": [
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit associated power-point or fixed wiring work only; not appliance supply, repair or automatic installation."
+  },
+  "air_fryer": {
+    "name": "Air Fryer",
+    "serviceCategories": [
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit associated power-point or fixed wiring work only; not appliance supply, repair or automatic installation."
+  },
+  "rice_cooker": {
+    "name": "Rice Cooker",
+    "serviceCategories": [
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit associated power-point or fixed wiring work only; not appliance supply, repair or automatic installation."
+  },
+  "induction_cooker": {
+    "name": "Induction Cooker",
+    "serviceCategories": [
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit associated power-point or fixed wiring work only; not appliance supply, repair or automatic installation."
+  },
+  "electric_kettle": {
+    "name": "Electric Kettle",
+    "serviceCategories": [
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit associated power-point or fixed wiring work only; not appliance supply, repair or automatic installation."
+  },
+  "toaster": {
+    "name": "Toaster",
+    "serviceCategories": [
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit associated power-point or fixed wiring work only; not appliance supply, repair or automatic installation."
+  },
+  "dishwasher": {
+    "name": "Dishwasher",
+    "serviceCategories": [
+      "Plumbing & Sanitary Works",
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit water, drainage or electrical installation work; not appliance purchase."
+  },
+  "exhaust_fan": {
+    "name": "Kitchen Exhaust Fan",
+    "serviceCategories": [
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": false,
+    "scope": "Fan installation and electrical connection."
+  },
+  "washer_front_load": {
+    "name": "Front-Load Washing Machine",
+    "serviceCategories": [
+      "Plumbing & Sanitary Works",
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit water, drainage or electrical installation work; not appliance purchase."
+  },
+  "washer_top_load": {
+    "name": "Top-Load Washing Machine",
+    "serviceCategories": [
+      "Plumbing & Sanitary Works",
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit water, drainage or electrical installation work; not appliance purchase."
+  },
+  "dryer_vented": {
+    "name": "Vented Clothes Dryer",
+    "serviceCategories": [
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit associated power-point or fixed wiring work only; not appliance supply, repair or automatic installation."
+  },
+  "dryer_condenser": {
+    "name": "Condenser Clothes Dryer",
+    "serviceCategories": [
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit associated power-point or fixed wiring work only; not appliance supply, repair or automatic installation."
+  },
+  "dryer_heat_pump": {
+    "name": "Heat Pump Clothes Dryer",
+    "serviceCategories": [
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit associated power-point or fixed wiring work only; not appliance supply, repair or automatic installation."
+  },
+  "light_led_10w": {
+    "name": "10W LED Lamp",
+    "serviceCategories": [
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit light fitting or wiring work; distinguish replaceable bulbs from fixed installation."
+  },
+  "light_led_15w": {
+    "name": "15W LED Lamp",
+    "serviceCategories": [
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit light fitting or wiring work; distinguish replaceable bulbs from fixed installation."
+  },
+  "light_cfl": {
+    "name": "Compact Fluorescent Lamp",
+    "serviceCategories": [
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit light fitting or wiring work; distinguish replaceable bulbs from fixed installation."
+  },
+  "light_linear_led": {
+    "name": "Linear LED Tube",
+    "serviceCategories": [
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit light fitting or wiring work; distinguish replaceable bulbs from fixed installation."
+  },
+  "light_fluorescent_tube": {
+    "name": "Fluorescent Tube",
+    "serviceCategories": [
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit light fitting or wiring work; distinguish replaceable bulbs from fixed installation."
+  },
+  "floor_lamp": {
+    "name": "LED Floor Lamp",
+    "serviceCategories": [
+      "Electrical Works"
+    ],
+    "requiresExplicitWorkRequest": true,
+    "scope": "Explicit associated power-point or fixed wiring work only; not appliance supply, repair or automatic installation."
+  }
+}
