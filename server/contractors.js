@@ -32,6 +32,15 @@ router.get('/quotation-requests', async (req, res) => {
       .sort({ createdAt: -1 })
       .toArray();
 
+    if (req.session.role !== 'contractor') {
+      // The existing homeowner page sends no version number. Remember the
+      // versions returned to it so a revision requires a fresh view before deciding.
+      req.session.quotationViewedVersions = Object.fromEntries(
+        requests.filter(request => request.status === 'quoted')
+          .map(request => [String(request._id), request.quotationVersion || 1])
+      );
+    }
+    res.set('Cache-Control', 'no-store');
     res.status(200).json(requests);
 
   } catch (error) {
@@ -486,6 +495,8 @@ router.patch(
         });
       }
 
+      const viewedVersion = req.session.quotationViewedVersions?.[requestId] || 1;
+
       // Only the owner can decide, and only while the quotation
       // is awaiting a homeowner decision.
       const result = await getDb()
@@ -495,6 +506,9 @@ router.patch(
             _id: new ObjectId(requestId),
             userId: new ObjectId(req.session.userId),
             status: 'quoted',
+            $or: viewedVersion === 1
+              ? [{ quotationVersion: 1 }, { quotationVersion: { $exists: false } }]
+              : [{ quotationVersion: viewedVersion }],
             quotation: {
               $type: 'object'
             }
@@ -951,6 +965,49 @@ res.json({ analysis });
     }
 });
 
+
+// Revise only a quotation that is still awaiting the homeowner's decision.
+router.patch('/quotation-requests/:requestId/revise', auth.requireContractor, ownContractorProfile, async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const { contractorId, expectedVersion, quotation } = req.body;
+    if (!ObjectId.isValid(requestId) || !ObjectId.isValid(contractorId) || !Number.isInteger(expectedVersion) || expectedVersion < 1) return res.status(400).json({ error: 'Invalid quotation revision.' });
+    if (!Array.isArray(quotation?.items) || !quotation.items.length || quotation.items.length > 100) return res.status(400).json({ error: 'Include 1 to 100 quotation items.' });
+    const items = quotation.items.map(item => {
+      const quantity = Number(item.quantity), unitPrice = Number(item.unitPrice);
+      if (!String(item.service || '').trim() || item.quantity == null || item.quantity === '' || item.unitPrice == null || item.unitPrice === '' || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(unitPrice) || unitPrice < 0 || !Number.isFinite(quantity * unitPrice)) throw new Error('Every item needs a name, positive quantity and valid price.');
+      return { service: String(item.service).trim().slice(0, 150), description: String(item.description || '').slice(0, 1000), quantity, unitPrice, amount: Math.round(quantity * unitPrice * 100) / 100, source: String(item.source || '').slice(0, 1000), needsReview: Boolean(item.needsReview) };
+    });
+    const total = Math.round(items.reduce((sum, item) => sum + item.amount, 0) * 100) / 100;
+    if (!Number.isFinite(total) || total <= 0) return res.status(400).json({ error: 'Quotation total must be greater than zero.' });
+    const collection = getDb().collection('quotationRequests');
+    const current = await collection.findOne({ _id: new ObjectId(requestId), contractorId: new ObjectId(contractorId), status: 'quoted' });
+    if (!current?.quotation) return res.status(409).json({ error: 'This quotation is no longer awaiting a decision. Refresh the dashboard.' });
+    const version = current.quotationVersion || 1;
+    if (version !== expectedVersion) return res.status(409).json({ error: 'A newer quotation exists. Refresh before revising.' });
+    const previous = current.quotation;
+    const now = new Date();
+    const contractorNotes = String(quotation.notes || '').slice(0, 4000);
+    const changes = items.map((item, index) => {
+      const old = (previous.items || [])[index];
+      return !old || old.service !== item.service || old.description !== item.description || Number(old.quantity) !== item.quantity || Number(old.unitPrice) !== item.unitPrice
+        ? `${item.service}: ${item.description}; ${item.quantity} x S$${item.unitPrice.toFixed(2)}` : null;
+    }).filter(Boolean);
+    if ((previous.items || []).length > items.length) changes.push(`${previous.items.length - items.length} previous line item(s) removed; review the current breakdown.`);
+    const revisionSummary = `Quotation revised to version ${version + 1}. Previous total: S$${Number(previous.total).toFixed(2)}. New total: S$${total.toFixed(2)}.\n` + (changes.length ? 'Changed lines: ' + changes.join('; ') : 'Line items unchanged; notes updated.');
+    const savedQuotation = { total, items, contractorNotes, notes: [contractorNotes, revisionSummary].filter(Boolean).join('\n\n'), warnings: Array.isArray(quotation.warnings) ? quotation.warnings.map(String).slice(0, 20) : [], revisedAt: now };
+    const versionFilter = current.quotationVersion == null ? { quotationVersion: { $exists: false } } : { quotationVersion: version };
+    const result = await collection.updateOne(
+      { _id: current._id, contractorId: current.contractorId, status: 'quoted', updatedAt: current.updatedAt, ...versionFilter },
+      { $set: { quotation: savedQuotation, quotationVersion: version + 1, updatedAt: now }, $push: { quotationHistory: { version, quotation: previous, replacedAt: now } } }
+    );
+    if (!result.matchedCount) return res.status(409).json({ error: 'The quotation changed or the homeowner made a decision. Refresh before continuing.' });
+    return res.json({ quotation: savedQuotation, quotationVersion: version + 1, quotationHistory: [...(current.quotationHistory || []), { version, quotation: previous, replacedAt: now }] });
+  } catch (error) {
+    console.error('Quotation revision:', error);
+    return res.status(error.message?.startsWith('Every item') ? 400 : 500).json({ error: error.message?.startsWith('Every item') ? error.message : 'Unable to revise quotation.' });
+  }
+});
 
   return router;
 };

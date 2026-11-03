@@ -136,8 +136,18 @@ const pendingCount = computed(() =>
 )
 
 const sentCount = computed(() =>
-  myRequests.value.filter(isSent).length
+  myRequests.value.filter(request => request.status === 'quoted').length
 )
+
+const acceptedRequestCount = computed(() => myRequests.value.filter(request => request.status === 'accepted').length)
+const rejectedRequestCount = computed(() => myRequests.value.filter(request => request.status === 'rejected').length)
+const requestFilterOptions = computed(() => [
+  { key: 'all', label: 'Total', count: myRequests.value.length, colour: 'total' },
+  { key: 'pending', label: 'Pending', count: pendingCount.value, colour: 'pending' },
+  { key: 'sent', label: 'Sent', count: sentCount.value, colour: 'received' },
+  { key: 'accepted', label: 'Accepted', count: acceptedRequestCount.value, colour: 'accepted' },
+  { key: 'rejected', label: 'Rejected', count: rejectedRequestCount.value, colour: 'rejected' }
+])
 
 function requestedTimestamp(request) {
   if (!request.createdAt) return null
@@ -153,9 +163,11 @@ const visibleRequests = computed(() => {
       if (statusFilter.value === 'pending' && request.status !== 'pending') {
         return false
       }
-      if (statusFilter.value === 'sent' && !isSent(request)) {
+      if (statusFilter.value === 'sent' && request.status !== 'quoted') {
         return false
       }
+      if (statusFilter.value === 'accepted' && request.status !== 'accepted') return false
+      if (statusFilter.value === 'rejected' && request.status !== 'rejected') return false
       if (!query) return true
 
       const searchable = [
@@ -1076,11 +1088,29 @@ async function syncConflictedRequest(request, error) {
       .find(item => getId(item) === getId(request))
     if (latest) {
       Object.assign(request, latest)
-      if (request.status !== 'pending') request.aiDraft = null
+      if (request.status !== 'pending') { request.aiDraft = null; request.revising = false }
     }
   } catch {
     notify('The request changed. Refresh the dashboard to see its latest status.')
   }
+}
+
+function startQuotationRevision(request) {
+  if (dashboardBusy.value || request.status !== 'quoted' || !request.quotation) return
+  request.revising = true
+  request.revisionBaseVersion = request.quotationVersion || 1
+  request.actionError = ''
+  request.aiDraft = {
+    items: (request.quotation.items || []).map(item => ({ ...item })),
+    notes: request.quotation.contractorNotes ?? request.quotation.notes ?? '',
+    warnings: [...(request.quotation.warnings || [])]
+  }
+}
+function cancelQuotationRevision(request) {
+  if (dashboardBusy.value) return
+  request.revising = false
+  request.aiDraft = null
+  request.actionError = ''
 }
 
 // SEND OR REJECT
@@ -1089,7 +1119,7 @@ async function submitQuotation(request) {
   if (
     !request.aiDraft ||
     dashboardBusy.value ||
-    request.status !== 'pending'
+    !(request.status === 'pending' || (request.status === 'quoted' && request.revising))
   ) return
 
   if (pdfFile.value) {
@@ -1148,19 +1178,19 @@ async function submitQuotation(request) {
       }))
     }
 
-    await axios.patch(
-      `${API}/quotation-requests/${requestId}/respond`,
-      {
-        contractorId: getCurrentContractorId(),
-        status: 'quoted',
-        quotation
-      }
+    const revising = request.status === 'quoted' && request.revising
+    const { data } = await axios.patch(
+      `${API}/quotation-requests/${requestId}/${revising ? 'revise' : 'respond'}`,
+      { contractorId: getCurrentContractorId(), status: 'quoted', quotation,
+        ...(revising ? { expectedVersion: request.revisionBaseVersion } : {}) }
     )
-
     request.status = 'quoted'
-    request.quotation = quotation
+    request.quotation = data.quotation || quotation
+    request.quotationVersion = data.quotationVersion || 1
+    if (data.quotationHistory) request.quotationHistory = data.quotationHistory
     request.aiDraft = null
-    notify('Quotation sent successfully.')
+    request.revising = false
+    notify(revising ? 'Revised quotation sent. The previous version is kept in history.' : 'Quotation sent successfully.')
   } catch (error) {
     console.error(error)
     request.actionError =
@@ -1438,6 +1468,7 @@ onUnmounted(() => {
       <!-- TABS -->
       <div
         class="dashboard-tabs mb-4"
+        :style="{ '--active-tab-index': Math.max(0, TABS.indexOf(activeTab)) }"
         role="tablist"
         aria-label="Contractor dashboard sections"
         @keydown="handleTabKey"
@@ -1453,7 +1484,7 @@ onUnmounted(() => {
           aria-controls="panel-requests"
           @click="activeTab = 'requests'"
         >
-          Quotation Requests <span class="tab-count">{{ pendingCount }}</span>
+          <span class="dashboard-tab-icon" aria-hidden="true">📋</span> <span>Quotation Requests</span> <span class="tab-count">{{ pendingCount }}</span>
         </button>
         <button
           id="tab-priceList"
@@ -1466,7 +1497,7 @@ onUnmounted(() => {
           aria-controls="panel-priceList"
           @click="activeTab = 'priceList'"
         >
-          Price List
+          <span class="dashboard-tab-icon" aria-hidden="true">📄</span> <span>Price List</span>
           <span
             class="status-dot"
             :class="{ ready: priceListLoaded && latestPriceList }"
@@ -1484,7 +1515,7 @@ onUnmounted(() => {
           aria-controls="panel-photos"
           @click="activeTab = 'photos'"
         >
-          Portfolio <span class="tab-count">{{ portfolio.length }}</span>
+          <span class="dashboard-tab-icon" aria-hidden="true">🖼️</span> <span>Portfolio</span> <span class="tab-count">{{ portfolio.length }}</span>
         </button>
       </div>
 
@@ -1527,27 +1558,6 @@ onUnmounted(() => {
           >Manage Price List</button>
         </div>
 
-        <div class="row g-3 mb-4">
-          <div class="col-md-4">
-            <div class="card border-0 shadow-sm rounded-4 p-4 h-100">
-              <p class="text-muted mb-1">Total Requests</p>
-              <h2 class="fw-bold mb-0">{{ myRequests.length }}</h2>
-            </div>
-          </div>
-          <div class="col-md-4">
-            <div class="card border-0 shadow-sm rounded-4 p-4 h-100">
-              <p class="text-muted mb-1">Pending Requests</p>
-              <h2 class="fw-bold text-warning mb-0">{{ pendingCount }}</h2>
-            </div>
-          </div>
-          <div class="col-md-4">
-            <div class="card border-0 shadow-sm rounded-4 p-4 h-100">
-              <p class="text-muted mb-1">Quotations Sent</p>
-              <h2 class="fw-bold text-success mb-0">{{ sentCount }}</h2>
-            </div>
-          </div>
-        </div>
-
         <div class="d-flex justify-content-between align-items-center gap-3 mb-3">
           <h2 class="h4 fw-bold mb-0">Quotation Requests</h2>
           <button
@@ -1558,11 +1568,19 @@ onUnmounted(() => {
           >Refresh</button>
         </div>
 
+        <div class="dashboard-status-filters mb-4" role="group" aria-label="Filter quotation requests">
+          <button v-for="filter in requestFilterOptions" :key="filter.key" type="button"
+            class="dashboard-status-filter" :class="['status-' + filter.colour, { 'is-active': statusFilter === filter.key }]"
+            :aria-pressed="statusFilter === filter.key" @click="statusFilter = filter.key">
+            <span>{{ filter.label }}</span><strong>{{ filter.count }}</strong>
+          </button>
+        </div>
+
         <!-- SEARCH, FILTER AND SORT -->
-        <div class="card border-0 shadow-sm rounded-4 mb-4">
-          <div class="card-body p-3 p-md-4">
+        <div class="requests-toolbar mb-4">
+          <div class="requests-toolbar-inner">
             <div class="row g-3 align-items-end">
-              <div class="col-lg-7">
+              <div class="col-lg-8">
                 <label for="request-search" class="form-label small fw-semibold">
                   Search requests
                 </label>
@@ -1571,12 +1589,12 @@ onUnmounted(() => {
                   v-model="requestSearch"
                   type="search"
                   class="form-control"
-                  placeholder="Search household, flat type, service or description"
+                  placeholder="Search household, service or description"
                 />
               </div>
-              <div class="col-lg-5">
+              <div class="col-lg-4">
                 <label for="date-sort" class="form-label small fw-semibold">
-                  Requested date
+                  Sort requests
                 </label>
                 <select id="date-sort" v-model="dateSort" class="form-select">
                   <option value="newest">Newest first</option>
@@ -1586,26 +1604,7 @@ onUnmounted(() => {
             </div>
 
             <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mt-3">
-              <div class="filter-buttons" role="group" aria-label="Filter requests by status">
-                <button
-                  type="button"
-                  :class="{ active: statusFilter === 'all' }"
-                  :aria-pressed="statusFilter === 'all'"
-                  @click="statusFilter = 'all'"
-                >All <span>{{ myRequests.length }}</span></button>
-                <button
-                  type="button"
-                  :class="{ active: statusFilter === 'pending' }"
-                  :aria-pressed="statusFilter === 'pending'"
-                  @click="statusFilter = 'pending'"
-                >Pending <span>{{ pendingCount }}</span></button>
-                <button
-                  type="button"
-                  :class="{ active: statusFilter === 'sent' }"
-                  :aria-pressed="statusFilter === 'sent'"
-                  @click="statusFilter = 'sent'"
-                >Sent <span>{{ sentCount }}</span></button>
-              </div>
+              <p class="small text-muted mb-0">{{ requestFilterOptions.find(filter => filter.key === statusFilter)?.label || 'Total' }} requests</p>
               <p class="small text-muted mb-0" aria-live="polite">
                 Showing {{ visibleRequests.length }} of {{ myRequests.length }}
               </p>
@@ -1639,9 +1638,9 @@ onUnmounted(() => {
         <section
           v-for="request in visibleRequests"
           :key="getId(request)"
-          class="card border-0 shadow-sm rounded-4 mb-4"
+          class="card request-entry mb-3"
         >
-          <div class="card-body p-4">
+          <div class="card-body p-3 p-md-4">
             <div class="d-flex justify-content-between flex-wrap gap-3 mb-4">
               <div>
                 <h3 class="h5 fw-bold mb-1">
@@ -1656,6 +1655,18 @@ onUnmounted(() => {
               </span>
             </div>
 
+            <div class="request-facts">
+              <div><span>Property</span><strong>{{ flatTypeLabel(request.household?.flatType) }}</strong></div>
+              <div><span>Homeowner budget</span><strong>{{ formatMoney(request.budget) }}</strong></div>
+              <div><span>Preferred start</span><strong>{{ formatDate(request.preferredStartDate) }}</strong></div>
+              <div><span>{{ request.quotation && isSent(request) ? 'Quotation total' : 'Requested scope' }}</span>
+                <strong :class="{ 'text-success': request.quotation && isSent(request) }">{{ request.quotation && isSent(request) ? formatMoney(request.quotation.total) : `${request.selectedLayoutItems?.length || 0} item groups · ${request.workDetails?.length || 0} additional works` }}</strong>
+              </div>
+            </div>
+
+            <details class="request-disclosure request-information">
+              <summary><span><strong>Request details</strong><small>Property, selected items and homeowner notes</small></span><span class="standard-expand"><span class="standard-expand-label" aria-hidden="true"></span><svg class="standard-chevron" width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 7 5 5 5-5" /></svg></span></summary>
+              <div class="disclosure-content">
             <div class="row g-3 mb-4">
               <div class="col-md-6">
                 <p class="mb-1">
@@ -1680,6 +1691,37 @@ onUnmounted(() => {
               </div>
             </div>
 
+            <section class="border rounded-3 p-3 mb-3">
+                <h6 class="fw-bold">Items requested for quotation</h6>
+                <ul v-if="request.selectedLayoutItems?.length" class="small mb-0">
+                  <li v-for="item in request.selectedLayoutItems" :key="item.id">{{ item.room }} — {{ String(item.item).replace(/[_-]/g, ' ') }} × {{ item.quantity }}</li>
+                </ul>
+                <p v-else-if="request.scopeVersion === 1" class="small text-muted mb-0">No layout items selected. See additional work below.</p>
+                <p v-else class="small text-muted mb-0">This older request has no explicit item selection. The homeowner must update it before a new AI draft can be generated.</p>
+              </section>
+              <div v-if="request.workDetails?.length" class="bg-light rounded-3 p-3 mb-3">
+              <h4 class="h6 fw-bold">Additional renovation work</h4>
+              <div v-for="work in request.workDetails" :key="work.service" class="small mb-2">
+                <strong>{{ work.service }}</strong> — {{ work.scope === 'whole' ? 'Whole flat' : work.scope === 'rooms' ? work.rooms.join(', ') : 'Contractor to assess' }}
+                <span v-if="work.quantity"> · {{ work.quantity }} {{ work.unit }}</span>
+                <p v-if="work.notes" class="mb-0 text-muted">{{ work.notes }}</p>
+              </div>
+            </div>
+            <p v-if="!request.workDetails?.length && request.services?.length" class="fw-semibold mb-2">Additional service categories</p>
+            <div v-if="!request.workDetails?.length && request.services?.length" class="d-flex flex-wrap gap-2 mb-3">
+              <span
+                v-for="service in request.services || []"
+                :key="service"
+                class="badge bg-success-subtle text-success-emphasis"
+              >{{ service }}</span>
+            </div>
+
+            <p class="fw-semibold mb-1">Renovation Description</p>
+            <p class="text-muted preserve-lines">{{ request.description }}</p>
+
+              </div>
+            </details>
+
             <!-- TEAMMATE'S READ-ONLY 3D LAYOUT VIEWER -->
             <div class="bg-light border rounded-3 p-3 mb-4">
               <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
@@ -1691,7 +1733,8 @@ onUnmounted(() => {
                 </div>
                 <button
                   type="button"
-                  class="btn btn-outline-success fw-semibold"
+                  class="btn btn-outline-success fw-semibold layout-expand-button"
+                  :class="{ 'is-expanded': request.showLayout }"
                   :disabled="request.layoutLoading"
                   :aria-expanded="request.showLayout"
                   @click="toggleLayout(request)"
@@ -1703,6 +1746,7 @@ onUnmounted(() => {
                         ? 'Hide 3D Layout'
                         : 'View 3D Layout'
                   }}
+                  <svg class="standard-chevron ms-2" width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 7 5 5 5-5" /></svg>
                 </button>
               </div>
 
@@ -1720,40 +1764,12 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <section class="border rounded-3 p-3 mb-3">
-                <h6 class="fw-bold">Items requested for quotation</h6>
-                <ul v-if="request.selectedLayoutItems?.length" class="small mb-0">
-                  <li v-for="item in request.selectedLayoutItems" :key="item.id">{{ item.room }} — {{ String(item.item).replace(/[_-]/g, ' ') }} × {{ item.quantity }}</li>
-                </ul>
-                <p v-else-if="request.scopeVersion === 1" class="small text-muted mb-0">No layout items selected. See additional work below.</p>
-                <p v-else class="small text-muted mb-0">This older request has no explicit item selection. The homeowner must update it before a new AI draft can be generated.</p>
-              </section>
-              <div v-if="request.workDetails?.length" class="bg-light rounded-3 p-3 mb-3">
-              <h4 class="h6 fw-bold">Additional renovation work</h4>
-              <div v-for="work in request.workDetails" :key="work.service" class="small mb-2">
-                <strong>{{ work.service }}</strong> — {{ work.scope === 'whole' ? 'Whole flat' : work.scope === 'rooms' ? work.rooms.join(', ') : 'Contractor to assess' }}
-                <span v-if="work.quantity"> · {{ work.quantity }} {{ work.unit }}</span>
-                <p v-if="work.notes" class="mb-0 text-muted">{{ work.notes }}</p>
-              </div>
-            </div>
-            <p class="fw-semibold mb-2">Requested Service Categories</p>
-            <div class="d-flex flex-wrap gap-2 mb-3">
-              <span
-                v-for="service in request.services || []"
-                :key="service"
-                class="badge bg-success-subtle text-success-emphasis"
-              >{{ service }}</span>
-            </div>
-
-            <p class="fw-semibold mb-1">Renovation Description</p>
-            <p class="text-muted preserve-lines">{{ request.description }}</p>
-
             <!-- PENDING REQUEST -->
             <div
-              v-if="request.status === 'pending'"
+              v-if="request.status === 'pending' || (request.status === 'quoted' && request.revising)"
               class="bg-light rounded-3 p-3 p-md-4 mt-4"
             >
-              <h4 class="h6 fw-bold mb-2">Prepare Quotation</h4>
+              <h4 class="h6 fw-bold mb-2">{{ request.revising ? 'Revise quotation' : 'Prepare quotation' }}</h4>
               <p class="small text-muted">
                 Generate a draft from your latest saved price list,
                 then review it before sending.
@@ -1761,6 +1777,7 @@ onUnmounted(() => {
 
               <button
                 type="button"
+                v-if="!request.revising"
                 class="btn btn-success mb-3"
                 :disabled="dashboardBusy"
                 @click="generateAIQuotation(request)"
@@ -1774,6 +1791,8 @@ onUnmounted(() => {
                 }}
               </button>
 
+              <p v-if="request.revising" class="small text-muted">Edit the existing quotation below. Changes are sent only when you approve the revision; the previous version stays in history.</p>
+              <button v-if="request.revising" type="button" class="btn btn-sm btn-outline-secondary mb-3" :disabled="dashboardBusy" @click="cancelQuotationRevision(request)">Cancel revision</button>
               <fieldset
                 v-if="request.aiDraft"
                 class="bg-white border rounded-3 p-3 p-md-4 mt-2"
@@ -1785,29 +1804,26 @@ onUnmounted(() => {
                   Verify prices, quantities and conditions against your price list.
                 </p>
 
-                <div v-if="request.aiDraft.warnings.length" class="alert alert-warning">
-                  <strong>AI Warnings</strong>
+                <details v-if="request.aiDraft.warnings.length" class="alert alert-warning draft-warnings">
+                  <summary class="fw-semibold">Review notes ({{ request.aiDraft.warnings.length }})<span class="standard-expand"><span class="standard-expand-label" aria-hidden="true"></span><svg class="standard-chevron" width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 7 5 5 5-5" /></svg></span></summary>
                   <ul class="mb-0 mt-2">
                     <li v-for="(warning, index) in request.aiDraft.warnings" :key="index">
                       {{ warning }}
                     </li>
                   </ul>
-                </div>
+                </details>
 
-                <div
+                <details
                   v-for="(item, index) in request.aiDraft.items"
                   :key="index"
-                  class="border rounded-3 p-3 mb-3"
+                  class="request-disclosure draft-item mb-3"
                 >
-                  <div class="d-flex justify-content-between align-items-center gap-2 mb-3">
-                    <h5 class="h6 fw-bold mb-0">Item {{ index + 1 }}</h5>
-                    <button
-                      type="button"
-                      class="btn btn-sm btn-outline-danger"
-                      @click="removeQuotationItem(request, index)"
-                    >Remove</button>
-                  </div>
-
+                  <summary>
+                    <span class="draft-item-caption"><small>Item {{ index + 1 }}</small><strong>{{ item.service || 'New quotation item' }}</strong><small>{{ item.description || 'Open to edit scope, quantity and price' }}</small></span>
+                    <span class="draft-item-price">{{ getItemAmount(item) === null ? 'Price needed' : formatMoney(getItemAmount(item)) }} </span>
+                  <span class="standard-expand"><span class="standard-expand-label" aria-hidden="true"></span><svg class="standard-chevron" width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 7 5 5 5-5" /></svg></span></summary>
+                  <div class="disclosure-content">
+                    <div class="d-flex justify-content-end mb-3"><button type="button" class="btn btn-sm btn-outline-danger" @click="removeQuotationItem(request, index)">Remove item</button></div>
                   <div class="row g-3">
                     <div class="col-md-6">
                       <label class="form-label small d-block">
@@ -1860,16 +1876,17 @@ onUnmounted(() => {
                     </div>
                   </div>
 
-                  <div class="evidence-box p-3 mt-3">
-                    <p class="small fw-semibold mb-1">Price List Evidence</p>
+                  <details class="evidence-box p-3 mt-3">
+                    <summary class="small fw-semibold">Price-list evidence<span class="standard-expand"><span class="standard-expand-label" aria-hidden="true"></span><svg class="standard-chevron" width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 7 5 5 5-5" /></svg></span></summary>
                     <p class="small text-muted preserve-lines mb-0">
                       {{ item.source || 'No supporting excerpt provided.' }}
                     </p>
-                  </div>
+                  </details>
                   <p v-if="item.needsReview" class="small text-warning-emphasis mt-2 mb-0">
                     This item requires manual verification.
                   </p>
-                </div>
+                  </div>
+                </details>
 
                 <button
                   type="button"
@@ -1903,7 +1920,7 @@ onUnmounted(() => {
                   :disabled="dashboardBusy || hasMissingPrices(request) || !request.aiDraft.items.length"
                   @click="submitQuotation(request)"
                 >
-                  {{ savingId === getId(request) ? 'Submitting...' : 'Approve & Send Quotation' }}
+                  {{ savingId === getId(request) ? 'Submitting...' : request.revising ? 'Approve & Send Revision' : 'Approve & Send Quotation' }}
                 </button>
               </fieldset>
 
@@ -1911,7 +1928,7 @@ onUnmounted(() => {
                 {{ request.actionError }}
               </div>
 
-              <div class="border-top pt-3 mt-4">
+              <div v-if="request.status === 'pending'" class="border-top pt-3 mt-4">
                 <button
                   type="button"
                   class="btn btn-outline-danger"
@@ -1923,16 +1940,22 @@ onUnmounted(() => {
               </div>
             </div>
 
+            <div v-if="request.status === 'quoted' && !request.revising" class="d-flex flex-wrap justify-content-between align-items-center gap-3 mt-3">
+              <p class="small text-muted mb-0">Awaiting homeowner decision · Version {{ request.quotationVersion || 1 }}</p>
+              <button type="button" class="btn btn-outline-success" :disabled="dashboardBusy" @click="startQuotationRevision(request)">Revise quotation</button>
+            </div>
+            <p v-if="request.actionError && request.status !== 'pending' && !request.revising" class="alert alert-danger mt-3" role="alert">{{ request.actionError }}</p>
             <!-- SENT QUOTATION -->
             <div
               v-if="request.quotation && isSent(request)"
-              class="bg-success-subtle rounded-3 p-3 p-md-4 mt-4"
+              class="sent-quotation-wrap mt-3"
             >
-              <h4 class="h6 fw-bold">Quotation Submitted</h4>
-              <p class="mb-3">
-                <strong>Total:</strong> {{ formatMoney(request.quotation.total) }}
-              </p>
-
+              <details class="request-disclosure submitted-quotation">
+                <summary>
+                  <span><small class="sent-eyebrow">SENT TO HOMEOWNER</small><strong>Quotation submitted</strong><small>{{ request.quotation.items?.length || 0 }} line items · View breakdown and notes</small></span>
+                  <span class="sent-total">{{ formatMoney(request.quotation.total) }} </span>
+                <span class="standard-expand"><span class="standard-expand-label" aria-hidden="true"></span><svg class="standard-chevron" width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 7 5 5 5-5" /></svg></span></summary>
+                <div class="disclosure-content">
               <div v-if="request.quotation.items?.length" class="bg-white rounded-3 p-3 mb-3">
                 <h5 class="h6 fw-bold mb-3">Quotation Breakdown</h5>
                 <div
@@ -1953,8 +1976,19 @@ onUnmounted(() => {
               <p class="mb-0 preserve-lines">
                 <strong>Notes:</strong> {{ request.quotation.notes || 'None' }}
               </p>
+                </div>
+              </details>
             </div>
 
+            <details v-if="request.quotationHistory?.length" class="request-disclosure mt-3">
+              <summary><span><strong>Previous versions</strong><small>{{ request.quotationHistory.length }} saved version(s)</small></span><span class="standard-expand"><span class="standard-expand-label" aria-hidden="true"></span><svg class="standard-chevron" width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 7 5 5 5-5" /></svg></span></summary>
+              <div class="disclosure-content">
+                <details v-for="entry in [...request.quotationHistory].reverse()" :key="entry.version" class="request-disclosure">
+                  <summary><span><strong>Version {{ entry.version }} · {{ formatMoney(entry.quotation.total) }}</strong><small>Replaced {{ formatDate(entry.replacedAt) }}</small></span><span class="standard-expand"><span class="standard-expand-label" aria-hidden="true"></span><svg class="standard-chevron" width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 7 5 5 5-5" /></svg></span></summary>
+                  <div class="disclosure-content"><p v-for="(item, index) in entry.quotation.items || []" :key="index" class="small">{{ item.service }} — {{ item.description }} · {{ item.quantity }} × {{ formatMoney(item.unitPrice) }}</p><p class="small preserve-lines">{{ entry.quotation.notes || 'No notes' }}</p></div>
+                </details>
+              </div>
+            </details>
             <div v-if="request.status === 'accepted'" class="alert alert-success mt-3 mb-0">
               The homeowner accepted this quotation. Contact them to arrange the next steps.
             </div>
@@ -2408,6 +2442,36 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+
+/* Quotation requests: compact summaries and progressive disclosure. */
+.requests-toolbar { padding: 4px 0 18px; border-bottom: 1px solid #e5ece8; }
+.requests-toolbar .form-control, .requests-toolbar .form-select { border-radius: 10px; min-height: 44px; background-color: #fafcfb; border-color: #dbe5df; }
+.requests-toolbar .form-label { color: #617368; font-size: .76rem; }
+.request-entry { border: 1px solid #e0e8e3; border-radius: 18px; background: #fff; box-shadow: 0 3px 14px rgba(21,55,39,.035); }
+.request-facts { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; padding:16px 18px; margin-bottom:18px; background:#f6f9f7; border-radius:12px; }
+.request-facts > div { display:flex; flex-direction:column; gap:5px; min-width:0; }
+.request-facts span { color:#6a7b71; font-size:.73rem; }
+.request-facts strong { font-size:.88rem; overflow-wrap:anywhere; }
+.request-disclosure { border:1px solid #e0e8e3; border-radius:12px; margin-bottom:14px; background:#fff; }
+.request-disclosure > summary { display:flex; justify-content:space-between; align-items:center; gap:18px; padding:16px 18px; cursor:pointer; list-style:none; }
+.request-disclosure > summary::-webkit-details-marker { display:none; }
+.request-disclosure > summary > span:first-child { display:flex; flex-direction:column; gap:4px; min-width:0; }
+.request-disclosure > summary strong { font-size:.9rem; }
+.request-disclosure > summary small { color:#6b7c72; font-size:.76rem; font-weight:400; overflow-wrap:anywhere; }
+.request-disclosure > summary:hover { background:#f7faf8; border-radius:12px; }
+.request-disclosure > summary:focus-visible { outline:3px solid #198754; outline-offset:3px; border-radius:12px; }
+.disclosure-arrow { display:inline-block; color:#648170; font-size:1.2rem; flex-shrink:0; }
+.request-disclosure[open] > summary .disclosure-arrow { transform:rotate(180deg); }
+.disclosure-content { border-top:1px solid #e8eeea; padding:18px; }
+.submitted-quotation { background:#f2f9f5; border-color:#cde4d6; margin-bottom:0; }
+.sent-total { font-size:1.25rem; font-weight:750; color:#167344; white-space:nowrap; }
+.request-disclosure > summary .sent-eyebrow { font-size:.65rem; font-weight:700; letter-spacing:.09em; color:#358058; }
+.draft-item-caption { flex:1; }
+.draft-item-price { font-weight:650; font-size:.9rem; text-align:right; white-space:nowrap; color:#167344; }
+.draft-warnings { font-size:.85rem; }
+@media(max-width:767px) { .request-facts { grid-template-columns:repeat(2,minmax(0,1fr)); padding:14px; gap:16px 12px; } .request-disclosure > summary { padding:14px; gap:10px; } .disclosure-content { padding:14px; } .sent-total { font-size:1rem; } }
+@media(max-width:420px) { .submitted-quotation > summary { align-items:flex-start; flex-wrap:wrap; } }
+
 /* Corppass navy, as on the Corppass login button. */
 .corppass-badge {
   background: #0444ce;
@@ -3010,4 +3074,60 @@ fieldset {
     height: 340px;
   }
 }
+
+/* Shared visual language with MyQuotations. */
+.dashboard-status-filters { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; padding:8px; background:#f7f9f8; border:1px solid #e0e8e3; border-radius:14px; }
+.dashboard-status-filter { --status-ink:#475569; --status-soft:#edf1f5; --status-line:#cbd5e1; display:flex; align-items:center; justify-content:center; gap:10px; padding:15px 12px; border:1px solid #e5ebe7; border-radius:10px; background:#fff; color:var(--status-ink); font-size:.88rem; font-weight:600; transition:background .16s ease,border-color .16s ease; }
+.dashboard-status-filter::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--status-ink); flex-shrink:0; }
+.dashboard-status-filter.status-pending { --status-ink:#92400e; --status-soft:#fff5da; --status-line:#e9bc58; }
+.dashboard-status-filter.status-received { --status-ink:#146c43; --status-soft:#eaf6ee; --status-line:#81b99a; }
+.dashboard-status-filter.status-rejected { --status-ink:#b42332; --status-soft:#fff0f1; --status-line:#e8a2aa; }
+.dashboard-status-filter strong { display:inline-flex; align-items:center; justify-content:center; min-width:28px; padding:4px 8px; border-radius:8px; background:var(--status-soft); color:var(--status-ink); font-size:.75rem; }
+.dashboard-status-filter:hover { color:var(--status-ink); background:var(--status-soft); border-color:var(--status-line); }
+.dashboard-status-filter.is-active { background:var(--status-soft); border-color:var(--status-line); box-shadow:inset 0 -3px 0 var(--status-ink),0 2px 6px rgba(20,40,30,.04); }
+.dashboard-status-filter.is-active strong { color:#fff; background:var(--status-ink); }
+.dashboard-status-filter:focus-visible { outline:3px solid var(--status-ink); outline-offset:3px; }
+.request-entry { border-radius:16px; }
+.request-facts { background:#f6f9f7; }
+.sent-quotation-wrap .submitted-quotation { background:#f0f8f3; border-color:#d4e8da; }
+@media(max-width:480px) { .dashboard-status-filters { grid-template-columns:repeat(2,minmax(0,1fr)); } .dashboard-status-filter { padding:12px 8px; } }
+@media(prefers-reduced-motion:reduce) { .dashboard-status-filter { transition:none; } }
+
+
+/* Consistent View / Hide controls in the quotation request list. */
+.request-entry details > summary { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:15px 18px; border-radius:10px; background:#f0f7f3; color:#194f35; cursor:pointer; list-style:none; }
+.request-entry details > summary::-webkit-details-marker { display:none; }
+.request-entry details > summary::marker { content:''; }
+.request-entry details > summary:hover { background:#e3f0e8; }
+.request-entry details > summary:focus-visible { outline:3px solid #198754; outline-offset:-3px; }
+.standard-expand { display:inline-flex; align-items:center; gap:8px; flex-shrink:0; padding:6px 10px; border:1px solid #c6dccd; border-radius:8px; background:#fff; color:#146c43; font-size:.75rem; font-weight:650; margin-left:auto; }
+.standard-expand-label::before { content:'View'; }
+.request-entry details[open] > summary .standard-expand-label::before { content:'Hide'; }
+.request-entry details[open] > summary .standard-chevron { transform:rotate(180deg); }
+.request-entry .draft-item-price { white-space:normal; }
+.request-entry .sent-total { font-size:1.1rem; }
+@media(max-width:600px) { .request-entry .submitted-quotation > summary { flex-wrap:wrap; } .request-entry details > summary { padding:13px; } }
+
+.layout-expand-button.is-expanded .standard-chevron { transform:rotate(180deg); }
+
+/* Rounded tabs matching the homeowner profile navigation. */
+.dashboard-tabs { position:relative; isolation:isolate; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:0; width:min(100%,820px); margin-left:auto; margin-right:auto; padding:6px; border:1px solid #d6e8dc; border-radius:999px; background:#fff; box-shadow:0 8px 20px rgba(28,65,43,.08); overflow:visible; }
+.dashboard-tabs::before { content:''; position:absolute; z-index:0; left:6px; top:6px; bottom:6px; width:calc((100% - 12px) / 3); border-radius:999px; background:linear-gradient(115deg,#16854e,#26bf6b); box-shadow:0 5px 12px rgba(23,143,79,.23); transform:translateX(calc(var(--active-tab-index,0) * 100%)); transition:transform .32s cubic-bezier(.22,.8,.25,1); pointer-events:none; }
+.dashboard-tab { position:relative; z-index:1; display:flex; flex:initial; align-items:center; justify-content:center; gap:9px; min-width:0; min-height:54px; padding:12px 16px; border:0; border-radius:999px; background:transparent; box-shadow:none; color:#52645a; font-size:.95rem; font-weight:650; white-space:normal; text-align:center; transition:color .2s ease; }
+.dashboard-tab:hover { background:transparent; color:#167344; }
+.dashboard-tab.active { background:transparent; color:white; box-shadow:none; }
+.dashboard-tab.active:hover { color:#fff; }
+.dashboard-tab:focus-visible { outline:3px solid #135c3a; outline-offset:3px; }
+.dashboard-tab-icon { display:inline-flex; font-size:1.15rem; flex-shrink:0; }
+.dashboard-tab .tab-count { display:inline-flex; align-items:center; justify-content:center; min-width:24px; padding:3px 7px; border-radius:999px; background:#edf4ef; color:#34714d; font-size:.73rem; }
+.dashboard-tab.active .tab-count { background:rgba(255,255,255,.23); color:#fff; }
+.dashboard-tab.active .status-dot { background:#fff; box-shadow:0 0 0 3px rgba(255,255,255,.15); }
+@media(max-width:600px) { .dashboard-tabs { padding:5px; border-radius:28px; } .dashboard-tabs::before { left:5px; top:5px; bottom:5px; width:calc((100% - 10px) / 3); border-radius:24px; } .dashboard-tab { font-size:.78rem; padding:10px 6px; gap:5px; min-height:58px; border-radius:24px; } .dashboard-tab-icon { display:none; } .dashboard-tab .tab-count { min-width:20px; padding:2px 5px; font-size:.65rem; } }
+@media(prefers-reduced-motion:reduce) { .dashboard-tabs::before,.dashboard-tab { transition:none; } }
+
+
+.dashboard-status-filters { grid-template-columns:repeat(5,minmax(0,1fr)); }
+.dashboard-status-filter.status-accepted { --status-ink:#1d4ed8; --status-soft:#eff6ff; --status-line:#93b4ed; }
+@media(max-width:700px) { .dashboard-status-filters { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media(max-width:480px) { .dashboard-status-filters { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 </style>

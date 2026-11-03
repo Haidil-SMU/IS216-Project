@@ -45,7 +45,6 @@ async function decideQuotation(request, status) {
   try {
     await axios.patch(`${API}/quotation-requests/${encodeURIComponent(getRequestId(request))}/decision`, { status })
     request.status = status
-    selectedQuotationIds.value = selectedQuotationIds.value.filter(id => id !== getRequestId(request))
   } catch (error) {
     const message = error.response?.data?.error || 'Unable to save your decision.'
     if (error.response?.status === 409) await getData()
@@ -60,9 +59,8 @@ function hasQuotation(request) {
 }
 
 
-// New: quotation breakdown and comparison
+// Quotation breakdown
 const expandedQuotations = ref([])
-const selectedQuotationIds = ref([])
 
 // ============================================================
 // FETCH DATA FROM MONGODB
@@ -85,18 +83,6 @@ async function getData() {
     contractors.value = Array.isArray(contractorResponse.data)
       ? contractorResponse.data
       : contractorResponse.data.contractors || []
-
-    // Keep only selections that still exist and are quoted.
-    const availableIds = quotationRequests.value
-      .filter(request =>
-        request.status === 'quoted' &&
-        request.quotation
-      )
-      .map(request => getRequestId(request))
-
-    selectedQuotationIds.value = selectedQuotationIds.value.filter(
-      id => availableIds.includes(id)
-    )
 
   } catch (error) {
     console.error(error)
@@ -166,6 +152,25 @@ const rejectedCount = computed(() =>
     request => request.status === 'rejected'
   ).length
 )
+
+const activeFilter = ref('total')
+const receivedCount = computed(() => quotationRequests.value.filter(request => request.status === 'quoted' && request.quotation).length)
+const acceptedCount = computed(() => quotationRequests.value.filter(request => request.status === 'accepted').length)
+const quotationFilters = computed(() => [
+  { key: 'total', label: 'Total', count: quotationRequests.value.length },
+  { key: 'pending', label: 'Pending', count: pendingCount.value },
+  { key: 'received', label: 'Received', count: receivedCount.value },
+  { key: 'accepted', label: 'Accepted', count: acceptedCount.value },
+  { key: 'rejected', label: 'Rejected', count: rejectedCount.value }
+])
+const filteredRequests = computed(() => quotationRequests.value.filter(request => {
+  if (activeFilter.value === 'pending') return request.status === 'pending'
+  if (activeFilter.value === 'received') return request.status === 'quoted' && Boolean(request.quotation)
+  if (activeFilter.value === 'accepted') return request.status === 'accepted'
+  if (activeFilter.value === 'rejected') return request.status === 'rejected'
+  return true
+}))
+const activeFilterLabel = computed(() => quotationFilters.value.find(filter => filter.key === activeFilter.value)?.label || 'Total')
 
 function canEditRequest(request) {
   return request.status === 'pending'
@@ -300,49 +305,6 @@ function getBudgetDifference(request) {
 }
 
 // ============================================================
-// NEW: SELECT QUOTATIONS FOR COMPARISON
-// ============================================================
-
-const selectedQuotations = computed(() =>
-  quotationRequests.value.filter(request =>
-    selectedQuotationIds.value.includes(getRequestId(request)) &&
-    request.status === 'quoted' &&
-    request.quotation
-  )
-)
-
-const canCompare = computed(() =>
-  selectedQuotations.value.length >= 2
-)
-
-function toggleQuotationSelection(request) {
-  if (
-    request.status !== 'quoted' ||
-    !request.quotation
-  ) {
-    return
-  }
-
-  const requestId = getRequestId(request)
-
-  if (selectedQuotationIds.value.includes(requestId)) {
-    selectedQuotationIds.value = selectedQuotationIds.value.filter(
-      id => id !== requestId
-    )
-  } else {
-    selectedQuotationIds.value.push(requestId)
-  }
-}
-
-function isQuotationSelected(request) {
-  return selectedQuotationIds.value.includes(getRequestId(request))
-}
-
-function clearComparisonSelection() {
-  selectedQuotationIds.value = []
-}
-
-// ============================================================
 // ACTIONS
 // ============================================================
 
@@ -373,10 +335,6 @@ async function removeQuotation(request) {
 
     request.status = 'cancelled'
 
-    selectedQuotationIds.value = selectedQuotationIds.value.filter(
-      id => id !== requestId
-    )
-
     expandedQuotations.value = expandedQuotations.value.filter(
       id => id !== requestId
     )
@@ -405,14 +363,14 @@ onMounted(() => {
 </script>
 
 <template>
-  <div>
+  <div class="my-quotations-page">
 
     <!-- HEADER -->
     <div class="mb-4">
 
       <p class="text-muted">
         Track your renovation quotation requests,
-        review contractor responses and compare quotations.
+        view contractor portfolios and review quotation prices before deciding.
       </p>
 
       <RouterLink
@@ -451,176 +409,13 @@ onMounted(() => {
 
     <template v-if="!loading">
 
-      <!-- SUMMARY -->
-      <div class="row g-3 mb-5">
-
-        <div class="col-md-3">
-          <div class="card border-0 shadow-sm rounded-4 p-4 h-100">
-
-            <p class="text-muted mb-1">
-              Total Requests
-            </p>
-
-            <h2 class="fw-bold mb-0">
-              {{ quotationRequests.length }}
-            </h2>
-
-          </div>
-        </div>
-
-        <div class="col-md-3">
-          <div class="card border-0 shadow-sm rounded-4 p-4 h-100">
-
-            <p class="text-muted mb-1">
-              Pending
-            </p>
-
-            <h2 class="fw-bold text-warning mb-0">
-              {{ pendingCount }}
-            </h2>
-
-          </div>
-        </div>
-
-        <div class="col-md-3">
-          <div class="card border-0 shadow-sm rounded-4 p-4 h-100">
-
-            <p class="text-muted mb-1">
-              Quotations Received
-            </p>
-
-            <h2 class="fw-bold text-success mb-0">
-              {{ quotedCount }}
-            </h2>
-
-          </div>
-        </div>
-
-        <div class="col-md-3">
-          <div class="card border-0 shadow-sm rounded-4 p-4 h-100">
-
-            <p class="text-muted mb-1">
-              Rejected
-            </p>
-
-            <h2 class="fw-bold text-danger mb-0">
-              {{ rejectedCount }}
-            </h2>
-
-          </div>
-        </div>
-
-      </div>
-
-      <!-- NEW: COMPARISON SELECTION PANEL -->
-      <div
-        v-if="quotedCount > 0"
-        class="card border-0 shadow-sm rounded-4 mb-5 comparison-panel"
-      >
-        <div class="card-body p-4">
-
-          <div
-            class="d-flex justify-content-between align-items-start flex-wrap gap-3"
-          >
-
-            <div>
-              <h4 class="fw-bold mb-2">
-                Compare Contractor Quotations
-              </h4>
-
-              <p class="text-muted mb-2">
-                Select at least two received quotations to compare
-                their prices, renovation services and scope of work.
-              </p>
-
-              <span
-                class="badge bg-success-subtle text-success-emphasis px-3 py-2"
-              >
-                {{ selectedQuotations.length }} quotation(s) selected
-              </span>
-            </div>
-
-            <button
-              v-if="selectedQuotationIds.length > 0"
-              class="btn btn-outline-secondary"
-              @click="clearComparisonSelection"
-            >
-              Clear Selection
-            </button>
-
-          </div>
-
-          <!-- SELECTED CONTRACTORS -->
-          <div
-            v-if="selectedQuotations.length > 0"
-            class="mt-4"
-          >
-
-            <h6 class="fw-semibold mb-3">
-              Selected Quotations
-            </h6>
-
-            <div
-              v-for="request in selectedQuotations"
-              :key="getRequestId(request)"
-              class="selected-quotation d-flex justify-content-between align-items-center gap-3 mb-2"
-            >
-
-              <div>
-                <strong>
-                  {{ getContractorName(request) }}
-                </strong>
-
-                <p class="small text-muted mb-0">
-                  {{ request.household?.flatType || 'HDB Flat' }}
-                </p>
-              </div>
-
-              <div class="text-end">
-                <strong class="text-success">
-                  {{ formatMoney(request.quotation.total) }}
-                </strong>
-
-                <button
-                  class="btn btn-sm btn-link text-danger d-block ms-auto p-0"
-                  @click="toggleQuotationSelection(request)"
-                >
-                  Remove
-                </button>
-              </div>
-
-            </div>
-
-          </div>
-
-          <!-- COMPARISON READINESS -->
-          <div
-            v-if="!canCompare"
-            class="alert alert-light border mt-4 mb-0"
-          >
-            Select at least two quotations below to enable comparison.
-          </div>
-
-          <div
-            v-else
-            class="alert alert-success mt-4 mb-0"
-          >
-            <strong>
-              Ready for Comparison
-            </strong>
-
-            <p class="mb-0 mt-1">
-              {{ selectedQuotations.length }} quotations selected.
-              The Gemini AI comparison feature will be connected next.
-            </p>
-          </div>
-
-          <p class="small text-muted mt-3 mb-0">
-            For meaningful results, select quotations covering
-            comparable renovation requirements and scope of work.
-          </p>
-
-        </div>
+      <!-- SUMMARY FILTERS -->
+      <div class="quotation-filter-bar mb-4" role="group" aria-label="Filter quotation requests">
+        <button v-for="filter in quotationFilters" :key="filter.key" type="button"
+          class="quotation-filter" :class="['filter-' + filter.key, { 'is-active': activeFilter === filter.key }]"
+          :aria-pressed="activeFilter === filter.key" @click="activeFilter = filter.key">
+          <span>{{ filter.label }}</span><strong>{{ filter.count }}</strong>
+        </button>
       </div>
 
       <!-- SECTION HEADER -->
@@ -634,7 +429,7 @@ onMounted(() => {
           </h3>
 
           <p class="text-muted mb-0">
-            {{ quotationRequests.length }} request(s) submitted
+            Showing {{ filteredRequests.length }} of {{ quotationRequests.length }} requests · {{ activeFilterLabel }}
           </p>
         </div>
 
@@ -675,60 +470,46 @@ onMounted(() => {
 
       </div>
 
+      <div v-if="quotationRequests.length > 0 && filteredRequests.length === 0" class="filter-empty text-center py-5" role="status">
+        <h4 class="h6 fw-bold">No {{ activeFilterLabel.toLowerCase() }} requests</h4>
+        <p class="small text-muted">Try another filter to view your other requests.</p>
+        <button type="button" class="btn btn-sm btn-outline-success" @click="activeFilter = 'total'">Show all requests</button>
+      </div>
+
       <!-- QUOTATION REQUEST CARDS -->
       <div class="row g-4">
 
         <div
-          v-for="request in quotationRequests"
+          v-for="request in filteredRequests"
           :key="getRequestId(request)"
-          class="col-md-6 col-lg-4"
+          class="col-12"
         >
 
           <div
             class="card h-100 border-0 shadow-sm rounded-4 quotation-card"
-            :class="{
-              'selected-card': isQuotationSelected(request)
-            }"
           >
 
-            <div class="card-body p-4">
+            <div class="card-body p-3 p-md-4">
 
-              <!-- STATUS -->
-              <span
-                class="badge mb-3"
-                :class="getStatusClass(request.status)"
-              >
-                {{ getStatusText(request.status) }}
-              </span>
+              <div class="quote-card-heading">
+                <div>
+                  <span class="badge mb-2" :class="getStatusClass(request.status)">{{ getStatusText(request.status) }}</span>
+                  <h4 class="h5 fw-bold mb-1">{{ getContractorName(request) }}</h4>
+                  <p class="small text-muted mb-0">{{ getContractorLocation(request) }}</p>
+                </div>
+                <button v-if="getContractor(request)" type="button" class="portfolio-shortcut" aria-haspopup="dialog" :aria-label="`View portfolio and photos for ${getContractorName(request)}`" @click="openProfile(request, $event)">Portfolio &amp; photos ↗</button>
+              </div>
 
-              <!-- CONTRACTOR -->
-              <h5 class="fw-bold mb-1">
-                {{ getContractorName(request) }}
-              </h5>
+              <div class="quote-facts">
+                <div><span>Home</span><strong>{{ request.household?.flatType || 'Not specified' }}</strong></div>
+                <div><span>Your budget</span><strong>{{ formatMoney(request.budget) }}</strong></div>
+                <div><span>Preferred start</span><strong>{{ formatDate(request.preferredStartDate) }}</strong></div>
+                <div><span>Requested</span><strong>{{ formatDate(request.createdAt) }}</strong></div>
+              </div>
 
-              <p class="text-muted small mb-3">
-                {{ getContractorLocation(request) }}
-              </p>
-
-              <button
-                v-if="getContractor(request)"
-                type="button"
-                class="portfolio-button"
-                aria-haspopup="dialog"
-                :aria-label="`View portfolio and photos for ${getContractorName(request)}`"
-                @click="openProfile(request, $event)"
-              >
-                <span class="portfolio-icon" aria-hidden="true">▧</span>
-                <span class="portfolio-copy">
-                  <strong>View Portfolio &amp; Photos</strong>
-                  <small>Explore their past renovation projects</small>
-                </span>
-                <span aria-hidden="true">↗</span>
-              </button>
-              <p v-else class="small text-muted">Contractor portfolio is currently unavailable.</p>
-
-              <hr />
-
+              <details class="scope-disclosure unified-disclosure">
+                <summary><span class="expand-copy"><strong>Your request details</strong><small>Selected items, additional work and renovation notes</small></span><span class="expand-affordance"><span class="expand-word" aria-hidden="true"></span><svg class="expand-chevron" viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 7 5 5 5-5" /></svg></span></summary>
+                <div class="scope-content">
               <!-- HOUSEHOLD -->
               <p class="small text-muted mb-1">
                 Household
@@ -800,41 +581,19 @@ onMounted(() => {
 
               </template>
 
-              <!-- BUDGET -->
-              <p class="small mb-1">
-                <strong>Budget:</strong>
-                {{ formatMoney(request.budget) }}
-              </p>
-
-              <!-- PREFERRED START -->
-              <p class="small mb-1">
-                <strong>Preferred Start:</strong>
-                {{ formatDate(request.preferredStartDate) }}
-              </p>
-
-              <!-- REQUEST DATE -->
-              <p class="small mb-2">
-                <strong>Requested:</strong>
-                {{ formatDate(request.createdAt) }}
-              </p>
+                </div>
+              </details>
 
               <!-- QUOTATION RECEIVED -->
               <div
                 v-if="hasQuotation(request)"
-                class="bg-success-subtle rounded-3 p-3 mt-4"
+                class="received-quote p-3 p-md-4 mt-3"
               >
 
-                <h6 class="fw-bold text-success mb-3">
-                  Contractor Quotation
-                </h6>
-
-                <p class="small text-muted mb-1">
-                  Total Quotation Amount
-                </p>
-
-                <h4 class="fw-bold mb-2">
-                  {{ formatMoney(request.quotation.total) }}
-                </h4>
+                <div class="received-quote-heading mb-3">
+                  <div><span class="quote-eyebrow">CONTRACTOR QUOTATION</span><h5 class="fw-bold mb-0">{{ formatMoney(request.quotation.total) }}</h5></div>
+                  <span class="small text-muted">{{ request.quotation.items?.length || 0 }} line items</span>
+                </div>
 
                 <!-- BUDGET COMPARISON -->
                 <div
@@ -856,22 +615,21 @@ onMounted(() => {
                   This quotation is within your stated budget.
                 </div>
 
-                <!-- NEW: EXPAND BREAKDOWN -->
-                <button
-                  class="btn btn-outline-success btn-sm w-100 mb-3"
-                  @click="toggleBreakdown(request)"
-                >
-                  {{
-                    isBreakdownExpanded(request)
-                      ? 'Hide Quotation Breakdown ↑'
-                      : 'View Quotation Breakdown ↓'
-                  }}
+                <!-- Same disclosure row used throughout the page -->
+                <button type="button" class="unified-expand-button mb-3"
+                  :class="{ 'is-expanded': isBreakdownExpanded(request) }"
+                  :aria-expanded="isBreakdownExpanded(request)"
+                  :aria-controls="'quotation-breakdown-' + getRequestId(request)"
+                  @click="toggleBreakdown(request)">
+                  <span class="expand-copy"><strong>Quotation breakdown</strong><small>{{ getQuotationItems(request).length }} line items, prices and review notes</small></span>
+                  <span class="expand-affordance"><span>{{ isBreakdownExpanded(request) ? 'Hide' : 'View' }}</span><svg class="expand-chevron" viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 7 5 5 5-5" /></svg></span>
                 </button>
 
                 <!-- NEW: FULL QUOTATION BREAKDOWN -->
                 <div
                   v-if="isBreakdownExpanded(request)"
                   class="quotation-breakdown bg-white rounded-3 p-3 mb-3"
+                  :id="'quotation-breakdown-' + getRequestId(request)"
                 >
 
                   <h6 class="fw-bold mb-3">
@@ -926,18 +684,16 @@ onMounted(() => {
                     </p>
 
                     <!-- PDF SOURCE -->
-                    <div
+                    <details
                       v-if="item.source"
-                      class="source-box rounded-2 p-2"
+                      class="source-box unified-disclosure evidence-disclosure rounded-2"
                     >
-                      <p class="small text-muted mb-1">
-                        <strong>Price List Reference</strong>
-                      </p>
+                      <summary><span class="expand-copy"><strong>Price-list reference</strong></span><span class="expand-affordance"><span class="expand-word" aria-hidden="true"></span><svg class="expand-chevron" viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 7 5 5 5-5" /></svg></span></summary>
 
                       <p class="small mb-0">
                         {{ item.source }}
                       </p>
-                    </div>
+                    </details>
 
                     <p
                       v-if="item.needsReview"
@@ -993,25 +749,7 @@ onMounted(() => {
                   {{ request.quotation.notes }}
                 </p>
 
-                <!-- NEW: SELECT FOR COMPARISON -->
-                <div v-if="request.status === 'quoted'" class="comparison-checkbox rounded-3 p-3">
 
-                  <label
-                    class="d-flex align-items-center gap-2 mb-0"
-                  >
-                    <input
-                      type="checkbox"
-                      class="form-check-input mt-0"
-                      :checked="isQuotationSelected(request)"
-                      @change="toggleQuotationSelection(request)"
-                    />
-
-                    <span class="fw-semibold small">
-                      Select for AI Comparison
-                    </span>
-                  </label>
-
-                </div>
 
               </div>
 
@@ -1152,21 +890,11 @@ onMounted(() => {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1) !important;
 }
 
-.selected-card {
-  outline: 2px solid #198754;
-  outline-offset: -2px;
-}
 
-.comparison-panel {
-  border-left: 4px solid #198754 !important;
-}
 
-.selected-quotation {
-  background: #f8faf9;
-  border: 1px solid #e2e8e5;
-  border-radius: 10px;
-  padding: 12px 16px;
-}
+
+
+
 
 .quotation-breakdown {
   border: 1px solid #e2e8e5;
@@ -1186,15 +914,9 @@ onMounted(() => {
   overflow-wrap: anywhere;
 }
 
-.comparison-checkbox {
-  background: white;
-  border: 1px solid #c3e6cb;
-  cursor: pointer;
-}
 
-.comparison-checkbox:hover {
-  background: #f0faf4;
-}
+
+
 
 .form-check-input {
   cursor: pointer;
@@ -1210,4 +932,94 @@ onMounted(() => {
     margin-bottom: 8px;
   }
 }
+
+/* Homeowner quotation list */
+.my-quotations-page .quotation-card { border:1px solid #e0e8e3 !important; box-shadow:0 3px 14px rgba(21,55,39,.035) !important; }
+.my-quotations-page .quotation-card:hover { transform:none; box-shadow:0 3px 14px rgba(21,55,39,.035) !important; }
+.quote-card-heading { display:flex; justify-content:space-between; align-items:center; gap:18px; margin-bottom:18px; }
+.portfolio-shortcut { background:white; border:1px solid #d8e5dc; border-radius:10px; padding:9px 13px; font-size:.8rem; font-weight:600; color:#167344; white-space:nowrap; }
+.portfolio-shortcut:hover { background:#f1f8f4; }
+.portfolio-shortcut:focus-visible { outline:3px solid #198754; outline-offset:3px; }
+.quote-facts { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; padding:16px 18px; margin-bottom:16px; border-radius:12px; background:#f6f9f7; }
+.quote-facts > div { display:flex; flex-direction:column; gap:5px; min-width:0; }
+.quote-facts span { color:#6b7c72; font-size:.73rem; }
+.quote-facts strong { font-size:.86rem; overflow-wrap:anywhere; }
+.scope-disclosure{ border:1px solid #dfe8e2; border-radius:12px; background:white; }
+.scope-disclosure > summary{ display:flex; align-items:center; justify-content:space-between; gap:16px; padding:15px 18px; cursor:pointer; list-style:none; }
+.scope-disclosure > summary::-webkit-details-marker{ display:none; }
+.scope-disclosure > summary > span:first-child{ display:flex; flex-direction:column; gap:4px; }
+.scope-disclosure summary strong{ font-size:.9rem; }
+.scope-disclosure summary small{ font-size:.76rem; color:#6b7c72; }
+.scope-disclosure > summary:focus-visible{ outline:3px solid #198754; outline-offset:3px; border-radius:12px; }
+.scope-content { border-top:1px solid #e6ede8; padding:18px; }
+.quote-chevron { color:#648170; font-size:1.2rem; }
+.scope-disclosure[open] > summary .quote-chevron { transform:rotate(180deg); }
+
+.received-quote { background:#f0f8f3; border:1px solid #d4e8da; border-radius:12px; }
+.received-quote-heading { display:flex; align-items:center; justify-content:space-between; gap:15px; }
+.received-quote-heading h5 { font-size:1.6rem; color:#146c43; }
+.quote-eyebrow { display:block; font-size:.65rem; letter-spacing:.08em; font-weight:700; color:#41805b; margin-bottom:5px; }
+.my-quotations-page .card-footer { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:10px; border-radius:0 0 16px 16px; }
+.my-quotations-page .card-footer > .w-100 { width:auto !important; }
+.my-quotations-page .card-footer > .d-flex { margin-bottom:0 !important; }
+.my-quotations-page 
+@media(max-width:767px) { .quote-facts { grid-template-columns:repeat(2,minmax(0,1fr)); padding:14px; } .quote-card-heading { align-items:flex-start; flex-wrap:wrap; } .scope-content { padding:14px; } .my-quotations-page .card-footer { justify-content:flex-start; } }
+@media(max-width:420px) {  .my-quotations-page .card-footer > .d-flex { width:100%; flex-wrap:wrap; } }
+
+
+.quotation-filter-bar { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:6px; padding:6px; border:1px solid #e0e8e3; border-radius:14px; background:#f3f6f4; }
+.quotation-filter { display:flex; align-items:center; justify-content:center; gap:10px; padding:14px 10px; border:1px solid transparent; border-radius:10px; background:transparent; color:#617167; font-size:.88rem; font-weight:600; }
+.quotation-filter strong { display:inline-flex; align-items:center; justify-content:center; min-width:25px; padding:3px 7px; border-radius:7px; background:#e6ece8; font-size:.75rem; }
+.quotation-filter:hover { background:#e9f0eb; color:#166c43; }
+.quotation-filter.is-active { background:white; border-color:#dce6df; color:#146c43; box-shadow:0 2px 5px rgba(20,70,42,.06); }
+.quotation-filter.is-active strong { background:#def0e4; }
+.quotation-filter:focus-visible { outline:3px solid #198754; outline-offset:2px; }
+@media(max-width:480px) { .quotation-filter-bar { grid-template-columns:repeat(2,minmax(0,1fr)); } .quotation-filter { padding:12px 8px; } }
+
+/* Status colour accents; text labels and pressed state also identify each filter. */
+.quotation-filter-bar { background:#f7f9f8; gap:8px; padding:8px; }
+.quotation-filter { --filter-ink:#475569; --filter-soft:#edf1f5; --filter-line:#cbd5e1; position:relative; padding:15px 12px; color:var(--filter-ink); background:#fff; border-color:#e5ebe7; transition:background .16s ease,border-color .16s ease,box-shadow .16s ease; }
+.quotation-filter::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--filter-ink); flex-shrink:0; }
+.quotation-filter.filter-pending { --filter-ink:#92400e; --filter-soft:#fff5da; --filter-line:#e9bc58; }
+.quotation-filter.filter-received { --filter-ink:#146c43; --filter-soft:#eaf6ee; --filter-line:#81b99a; }
+.quotation-filter.filter-rejected { --filter-ink:#b42332; --filter-soft:#fff0f1; --filter-line:#e8a2aa; }
+.quotation-filter strong { background:var(--filter-soft); color:var(--filter-ink); min-width:28px; padding:4px 8px; border-radius:8px; }
+.quotation-filter:hover { color:var(--filter-ink); background:var(--filter-soft); border-color:var(--filter-line); }
+.quotation-filter.is-active { color:var(--filter-ink); background:var(--filter-soft); border-color:var(--filter-line); box-shadow:inset 0 -3px 0 var(--filter-ink),0 2px 6px rgba(20,40,30,.04); }
+.quotation-filter.is-active strong { color:#fff; background:var(--filter-ink); }
+.quotation-filter:focus-visible { outline:3px solid var(--filter-ink); outline-offset:3px; }
+@media(prefers-reduced-motion:reduce) { .quotation-filter { transition:none; } }
+
+
+/* Consistent request detail, breakdown and evidence controls. */
+.my-quotations-page .unified-disclosure { border:1px solid #cadfd1 !important; border-radius:12px; overflow:hidden; }
+.my-quotations-page .unified-disclosure > summary,
+.my-quotations-page .unified-expand-button { display:flex; align-items:center; justify-content:space-between; flex-wrap:nowrap; gap:16px; width:100%; margin:0; padding:16px 18px; border:0; border-radius:11px; background:#f0f7f3; color:#194f35; text-align:left; cursor:pointer; list-style:none; font:inherit; }
+.my-quotations-page .unified-expand-button { border:1px solid #cadfd1; }
+.my-quotations-page .unified-disclosure > summary::-webkit-details-marker { display:none; }
+.my-quotations-page .unified-disclosure > summary::marker { content:''; }
+.my-quotations-page .unified-disclosure > summary:hover,
+.my-quotations-page .unified-expand-button:hover { background:#e3f0e8; }
+.my-quotations-page .unified-disclosure > summary:focus-visible,
+.my-quotations-page .unified-expand-button:focus-visible { outline:3px solid #198754; outline-offset:-3px; }
+.my-quotations-page .expand-copy { display:flex; flex:1; flex-direction:column; gap:4px; min-width:0; }
+.my-quotations-page .expand-copy strong { font-size:.88rem; font-weight:650; }
+.my-quotations-page .expand-copy small { font-size:.75rem; color:#61776a; }
+.my-quotations-page .expand-affordance { display:inline-flex; flex-direction:row; align-items:center; gap:8px; flex-shrink:0; padding:6px 10px; border:1px solid #c6dccd; border-radius:8px; background:#fff; color:#146c43; font-size:.75rem; font-weight:650; }
+.my-quotations-page .expand-word::before { content:'View'; }
+.my-quotations-page .unified-disclosure[open] > summary .expand-word::before { content:'Hide'; }
+.my-quotations-page .expand-chevron { display:block; flex-shrink:0; transition:transform .15s ease; }
+.my-quotations-page .unified-disclosure[open] > summary .expand-chevron,
+.my-quotations-page .unified-expand-button.is-expanded .expand-chevron { transform:rotate(180deg); }
+
+.my-quotations-page .evidence-disclosure > p { padding:12px 16px; border-top:1px solid #dce8df; }
+.my-quotations-page .evidence-disclosure > summary { padding:12px 14px; }
+@media(max-width:480px) { .my-quotations-page .unified-disclosure > summary, .my-quotations-page .unified-expand-button { padding:13px; gap:10px; } .my-quotations-page .expand-affordance { padding:5px 7px; } }
+@media(prefers-reduced-motion:reduce) { .my-quotations-page .expand-chevron { transition:none; } }
+
+
+.quotation-filter-bar { grid-template-columns:repeat(5,minmax(0,1fr)); }
+.quotation-filter.filter-accepted { --filter-ink:#1d4ed8; --filter-soft:#eff6ff; --filter-line:#93b4ed; }
+@media(max-width:700px) { .quotation-filter-bar { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media(max-width:480px) { .quotation-filter-bar { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 </style>
