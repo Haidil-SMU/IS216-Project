@@ -18,7 +18,7 @@ import { WINDOW_KEYS, DOOR_KEYS, FURNITURE_KEYS } from './catalog.js'
 // SIZES (in metres) - [width, height, depth]
 // ============================================================
 
-// Exact sizes for some types. Types that are not listed here use the size of their "kind" (see KINDS).
+// Exact sizes for some types. Types that are not listed here use the size of their "kind".
 const SIZES = {
   refrigerator_no_freezer: [0.55, 0.85, 0.58],
   refrigerator_freezer_400l: [0.7, 1.75, 0.7],
@@ -100,9 +100,7 @@ const KINDS = {
 // ============================================================
 
 // Looks at the type key and says which "kind" it is, plus a "variant" for small differences.
-// Example: 'aircon_window' -> { kind: 'ac', variant: 'window' }
 function classify(type, category) {
-  // doors, windows, furniture and counters are in the "build" category
   if (category === 'build') {
     if (WINDOW_KEYS.has(type)) {
       let variant = ''
@@ -214,7 +212,7 @@ function classify(type, category) {
     return { kind: 'cook', variant: type }
   }
 
-  // anything we do not know is drawn like a dryer
+  // anything unidentified is drawn like a dryer
   return { kind: 'dryer', variant: '' }
 }
 
@@ -358,7 +356,6 @@ const METAL = { metalness: 0.8, roughness: 0.25 }
 // FURNITURE PARTS
 // ============================================================
 
-// Four legs, one in each corner. "inset" is how far the legs are from the edges.
 function cornerLegs(spec, b, height, size, color, inset) {
   const w = spec.w
   const d = spec.d
@@ -609,7 +606,7 @@ function buildWindow(spec, b) {
 
   // window sill and handle
   b.box(w + 0.1, 0.04, 0.2, 0xe5e7eb, [0, -0.04, d / 2 + 0.05])
-  b.box(0.03, 0.12, 0.04, 0xcbd5e1, [-0.05, h / 2 - 0.06, d / 2], METAL)
+  b.box(0.03, 0.12, 0.04, 0xcbd5e1, [-0.05, h / 2 - 0.06, d / 2 + 0.015], METAL)
 }
 
 function buildDoor(spec, b) {
@@ -629,14 +626,34 @@ function buildDoor(spec, b) {
   if (spec.variant === 'glass') {
     b.glass(pw, ph, 0.03, 0x9ccbf5, [0, 0, 0])
     b.box(0.03, ph, 0.05, 0xcbd5e1, [0, 0, 0], METAL)
-    b.box(0.03, 0.4, 0.06, 0xe2e8f0, [0.1, 0.9, d / 2], METAL)
+    for (const side of [1, -1]) {
+      b.box(0.03, 0.4, 0.03, 0xe2e8f0, [0.1 * side, 0.7, side * DOOR_HANDLE_OUT], METAL)
+      for (const y of [0.74, 1.04]) {
+        b.box(0.03, 0.03, DOOR_HANDLE_OUT - 0.02, 0xe2e8f0, [0.1 * side, y, side * (DOOR_HANDLE_OUT / 2 + 0.01)], METAL)
+      }
+    }
   } else {
-    // a wooden door with two raised panels and a handle
     b.box(pw, ph, 0.05, 0x8a4b2a, [0, 0, 0], { roughness: 0.7 })
     b.box(pw * 0.7, ph * 0.38, 0.06, 0x73401f, [0, ph * 0.08, 0], { roughness: 0.8 })
     b.box(pw * 0.7, ph * 0.38, 0.06, 0x73401f, [0, ph * 0.54, 0], { roughness: 0.8 })
-    b.box(0.04, 0.04, 0.09, 0xe2e8f0, [pw / 2 - 0.1, 1.0, 0.03], METAL)
+    const latchX = pw / 2 - 0.09
+    addLeverHandle(b, latchX, 1.0, 1)
+    addLeverHandle(b, -latchX, 1.0, -1)
   }
+}
+
+const DOOR_HANDLE_OUT = 0.1
+
+function addLeverHandle(b, x, y, side) {
+  const plateZ = 0.025 + 0.006
+  // back plate, flat on the door leaf
+  b.box(0.05, 0.17, 0.012, 0xcfd6dd, [x, y - 0.085, side * plateZ], METAL)
+  // lock block under the lever
+  b.box(0.04, 0.06, 0.014, 0xcfd6dd, [x, y - 0.2, side * (0.025 + 0.007)], METAL)
+  // stem from the plate out past the wall face
+  b.box(0.026, 0.026, DOOR_HANDLE_OUT - 0.037 - 0.012, 0xe2e8f0, [x, y - 0.013, side * ((0.037 + DOOR_HANDLE_OUT - 0.012) / 2)], METAL)
+  // the lever, pointing back towards the hinge side
+  b.box(0.15, 0.024, 0.024, 0xe2e8f0, [x - Math.sign(x) * 0.065, y - 0.012, side * (DOOR_HANDLE_OUT - 0.012)], METAL)
 }
 
 function buildCounter(spec, b) {

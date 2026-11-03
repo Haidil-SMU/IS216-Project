@@ -184,17 +184,44 @@
           <button class="btn btn-sm btn-pill-danger flex-shrink-0" @click="removeSelectedOpening">Remove</button>
         </section>
 
-        <section v-if="recs.length || tips.length" class="panel-card recs-card">
-          <div class="panel-title mb-2">Recommendations <span class="count-pill">{{ recs.length + tips.length }}</span></div>
-          <div class="recs-scroll">
-            <div v-for="r in recs" :key="r.id" class="rec-row">
-              <span class="small">{{ r.text }}</span>
-              <button class="btn btn-sm btn-eco flex-shrink-0" @click="applyRec(r)">Apply</button>
-            </div>
-            <div v-for="t in tips" :key="t.text" class="rec-row rec-tip" @click="selectedItemId = t.id">
-              <span class="small">{{ t.text }}</span>
-            </div>
+        <section v-if="recs.length || tips.length" class="panel-card recs-card" :class="'recs-' + currentKind">
+          <div class="recs-tabs" role="tablist" aria-label="Advice for this room">
+            <button type="button" role="tab" class="recs-tab" :class="{ active: activeTab === 'recs' }" :aria-selected="activeTab === 'recs'" @click="activeTab = 'recs'">
+              <span>Recommendations</span><span class="recs-tab-count">{{ recs.length }}</span>
+            </button>
+            <button type="button" role="tab" class="recs-tab" :class="{ active: activeTab === 'tips' }" :aria-selected="activeTab === 'tips'" @click="activeTab = 'tips'">
+              <span>Tips</span><span class="recs-tab-count">{{ tips.length }}</span>
+            </button>
           </div>
+
+          <div v-if="!currentList.length" class="recs-empty">
+            {{ activeTab === 'recs' ? 'No moves to suggest right now.' : 'No tips for this room.' }}
+          </div>
+
+          <template v-else>
+            <!-- Fixed controls: they stay put while the text below scrolls -->
+            <div class="recs-nav">
+              <button type="button" class="recs-arrow" :disabled="currentList.length < 2" aria-label="Previous" @click="stepAdvice(-1)">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+              </button>
+              <span class="recs-count" aria-live="polite">{{ currentIndex + 1 }}/{{ currentList.length }}</span>
+              <button type="button" class="recs-arrow" :disabled="currentList.length < 2" aria-label="Next" @click="stepAdvice(1)">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+              </button>
+              <button v-if="activeTab === 'recs'" type="button" class="recs-action recs-action-primary" :disabled="actionBusy" @click="onApplyClick(currentItem)">{{ actionBusy ? 'Applying…' : 'Apply' }}</button>
+              <button v-else-if="currentItem.id" type="button" class="recs-action" :disabled="actionBusy || selectedItemId === currentItem.id" @click="onShowItemClick(currentItem.id)">{{ selectedItemId === currentItem.id ? 'Selected ✓' : 'Show item' }}</button>
+            </div>
+
+            <div class="recs-title" :title="currentItem.title">
+              <span class="source-badge" :class="'badge-' + currentKind">{{ currentLabel }}</span>
+              {{ currentItem.title }}
+            </div>
+
+            <!-- Only this part scrolls -->
+            <div class="recs-scroll" :key="activeTab + currentIndex">
+              <p class="recs-text">{{ currentItem.body }}</p>
+            </div>
+          </template>
         </section>
 
         <section v-if="!selectedRoom" class="panel-card items-card">
@@ -443,8 +470,9 @@ import FloorPlan3D from '../components/FloorPlan3D.vue'
 import AppDialog from '../components/AppDialog.vue'
 import { resolveSpec } from '../stores/applianceModels.js'
 import { OPENING_KEYS, isBuild, isOpening, isCountertop, newPlacementDoc, typeOf, productOf, kwhOfPlacement, loadCatalogue, shortNameOf } from '../stores/catalog.js'
-import { findSpot, onWall, isBlocked, doorBlockedBeyond, needsOutsideWall, roomBehindOpening, sharedWall, sharedRange } from '../stores/placement.js'
+import { findSpot, gapsOf, onWall, isBlocked, doorBlockedBeyond, needsOutsideWall, roomBehindOpening, sharedWall, sharedRange } from '../stores/placement.js'
 import { analyse } from '../stores/energy.js'
+import { splitTip } from '../data/placementRules.js'
 import { useLayoutHistory } from '../utils/layoutHistory.js'
 
 // ============================================================
@@ -1362,6 +1390,121 @@ const tips = computed(function () {
 })
 
 // ============================================================
+// THE ADVICE CAROUSEL (recommendations tab and tips tab)
+// ============================================================
+
+const activeTab = ref('recs') // 'recs' or 'tips'
+const recIndex = ref(0)
+const tipIndex = ref(0)
+
+// Each tip with its title, text and source (NEA or Tips) split apart, so the title can sit above the text.
+const tipCards = computed(function () {
+  return tips.value.map(function (t) {
+    const parts = splitTip(t.text)
+    return { id: t.id, title: parts.title || 'Tip', body: parts.body, source: parts.source }
+  })
+})
+
+// Each recommendation with a short title above its text.
+const recCards = computed(function () {
+  return recs.value.map(function (r) {
+    const full = r.title || 'Move an item'
+    let body = r.text
+    if (r.title && r.text.startsWith(r.title + ' ')) {
+      body = 'Move it ' + r.text.slice(r.title.length + 1)
+    }
+    return { id: r.id, to: r.to, title: full.replace(/\s*\(.*\)\s*$/, ''), body: body, source: '' }
+  })
+})
+
+const currentList = computed(function () {
+  return activeTab.value === 'recs' ? recCards.value : tipCards.value
+})
+
+const currentIndex = computed(function () {
+  const i = activeTab.value === 'recs' ? recIndex.value : tipIndex.value
+  return Math.min(i, Math.max(currentList.value.length - 1, 0))
+})
+
+const currentItem = computed(function () {
+  return currentList.value[currentIndex.value]
+})
+
+// 'rec', 'nea' or 'tip': decides the colour of the card
+const currentKind = computed(function () {
+  if (activeTab.value === 'recs') {
+    return 'rec'
+  }
+  const item = currentItem.value
+  if (item && item.source === 'NEA') {
+    return 'nea'
+  }
+  return 'tip'
+})
+
+const currentLabel = computed(function () {
+  if (currentKind.value === 'rec') {
+    return 'Recommendation'
+  }
+  return currentKind.value === 'nea' ? 'NEA' : 'Tips'
+})
+
+// Arrow buttons: wrap around at both ends.
+function stepAdvice(direction) {
+  const n = currentList.value.length
+  if (n < 2) {
+    return
+  }
+  const next = (currentIndex.value + direction + n) % n
+  if (activeTab.value === 'recs') {
+    recIndex.value = next
+  } else {
+    tipIndex.value = next
+  }
+}
+
+// Pressing Apply or Show item re-draws the 3D view
+const actionBusy = ref(false)
+
+function afterPaint() {
+  return new Promise(function (resolve) {
+    requestAnimationFrame(function () {
+      requestAnimationFrame(resolve)
+    })
+  })
+}
+
+async function onShowItemClick(id) {
+  actionBusy.value = true
+  await afterPaint()
+  selectedItemId.value = id
+  actionBusy.value = false
+}
+
+async function onApplyClick(rec) {
+  actionBusy.value = true
+  await afterPaint()
+  applyRec(rec)
+  actionBusy.value = false
+}
+
+// A different room starts again at the first card of the tab that has something in it.
+watch(selectedRoomId, function () {
+  recIndex.value = 0
+  tipIndex.value = 0
+  activeTab.value = recs.value.length || !tips.value.length ? 'recs' : 'tips'
+})
+
+// If the tab being read becomes empty (e.g. after "Apply"), jump to the other tab.
+watch([recs, tips], function () {
+  if (activeTab.value === 'recs' && !recs.value.length && tips.value.length) {
+    activeTab.value = 'tips'
+  } else if (activeTab.value === 'tips' && !tips.value.length && recs.value.length) {
+    activeTab.value = 'recs'
+  }
+})
+
+// ============================================================
 // THE ROOM BREAKDOWN (the list shown when no room is selected)
 // ============================================================
 
@@ -1954,7 +2097,8 @@ async function handleAddAppliance(appliance) {
   const others = placedOf(room)
   const roomSize = {}
   copyKeys(room.dimension, roomSize)
-  const spot = findSpot(roomSize, spec, others)
+  // knocked-out wall stretches: an aircon, TV or counter may not be put on them
+  const spot = findSpot(roomSize, spec, others.concat(gapsOf(room)))
 
   if (!spot) {
     if (spec.mode === 'top') {
@@ -2626,18 +2770,56 @@ onUnmounted(function () {
   font-weight: 720;
 }
 
-.recs-card { max-height: 28%; display: flex; flex-direction: column; min-height: 0; border-left: 4px solid var(--eco-light); }
-.recs-scroll { overflow-y: auto; min-height: 0; }
-.rec-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 7px 0;
-  border-top: 1px solid #edf4ef;
+.recs-card {
+  --adv: var(--eco-light); --adv-bg: #e9f7ef; --adv-ink: #0f6b44;
+  max-height: max(46%, 250px); display: flex; flex-direction: column; min-height: 0;
+  padding: 10px 14px 12px;
+  border-left: 4px solid var(--adv);
 }
-.rec-row:first-child { border-top: 0; padding-top: 0; }
-.rec-tip { cursor: pointer; color: #5d6f65; }
+/* colour coding: recommendation = amber, NEA = green, tips = blue */
+.recs-card.recs-rec { --adv: #f59e0b; --adv-bg: #fff4de; --adv-ink: #9a5b00; }
+.recs-card.recs-nea { --adv: #16a46a; --adv-bg: #e3f6ec; --adv-ink: #0f6b44; }
+.recs-card.recs-tip { --adv: #3b82f6; --adv-bg: #e6f0ff; --adv-ink: #1d4fa8; }
+
+.recs-tabs { flex: 0 0 auto; display: flex; gap: 2px; margin-bottom: 8px; padding: 2px; border-radius: 999px; background: #eef4f0; }
+.recs-tab {
+  flex: 1 1 auto; display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 4px 10px; border: 0; border-radius: 999px; background: transparent;
+  color: #5d6f65; font-size: 0.76rem; font-weight: 700; line-height: 1.3; white-space: nowrap; cursor: pointer;
+}
+.recs-tab.active { background: #fff; color: var(--ink); box-shadow: 0 1px 4px rgba(15, 34, 25, 0.14); }
+.recs-tab-count {
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  background: #dcebe2; color: var(--eco-dark); font-size: 0.68rem; font-weight: 750; line-height: 18px; text-align: center;
+}
+.recs-tab.active .recs-tab-count { background: var(--adv-bg); color: var(--adv-ink); }
+
+.recs-nav { flex: 0 0 auto; display: flex; align-items: center; gap: 2px; margin-bottom: 6px; }
+.recs-count { min-width: 34px; text-align: center; font-size: 0.74rem; font-weight: 700; color: #5d6f65; font-variant-numeric: tabular-nums; }
+.recs-arrow {
+  display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0;
+  border: 1px solid var(--line); border-radius: 50%; background: #fff; color: var(--ink); cursor: pointer;
+}
+.recs-arrow:hover:not(:disabled) { background: var(--adv-bg); border-color: var(--adv); }
+.recs-arrow:disabled { opacity: 0.35; cursor: default; }
+.recs-action {
+  margin-left: auto; padding: 3px 12px; border: 1px solid var(--line); border-radius: 999px;
+  background: #fff; color: var(--ink); font-size: 0.74rem; font-weight: 700; white-space: nowrap; cursor: pointer;
+}
+.recs-action:hover:not(:disabled) { border-color: var(--adv); background: var(--adv-bg); }
+.recs-action:disabled { opacity: 0.7; cursor: default; }
+.recs-action-primary { border-color: transparent; background: var(--eco-dark); color: #fff; }
+.recs-action-primary:hover:not(:disabled) { background: var(--eco); border-color: transparent; }
+
+.source-badge {
+  display: inline-block; margin-right: 6px; padding: 0 8px; border-radius: 999px; vertical-align: 1px;
+  background: var(--adv-bg); color: var(--adv-ink); font-size: 0.62rem; font-weight: 780; letter-spacing: 0.4px; line-height: 1.7; text-transform: uppercase;
+}
+.recs-title { flex: 0 0 auto; margin-bottom: 4px; font-size: 0.88rem; font-weight: 720; color: var(--ink); line-height: 1.35; }
+
+.recs-scroll { flex: 1 1 auto; overflow-y: auto; min-height: 5.5em; padding-right: 4px; }
+.recs-text { margin: 0; font-size: 0.85rem; line-height: 1.55; color: #3d4f45; }
+.recs-empty { padding: 8px 2px 2px; font-size: 0.82rem; color: #5d6f65; }
 
 .items-card { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
 .item-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin: 0 -6px; padding: 0 6px; }
@@ -2819,7 +3001,7 @@ onUnmounted(function () {
   .side-column { flex: 0 0 auto; width: auto; min-height: auto; }
   .stat-value { font-size: 2rem; }
   .recs-card { max-height: none; }
-  .recs-scroll { max-height: 260px; }
+  .recs-scroll { max-height: 240px; flex: 0 1 auto; }
   .items-card { flex: 0 0 auto; }
   .item-list, .breakdown-list { flex: 0 0 auto; overflow: visible; }
 
