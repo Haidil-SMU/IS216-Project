@@ -1,5 +1,5 @@
 // One shared MongoDB connection for the whole server.
-const { MongoClient } = require('mongodb');
+const { MongoClient, ObjectId } = require('mongodb');
 
 const DB_NAME = 'ecohome';
 let client;
@@ -54,6 +54,69 @@ async function migrateUserIds(db) {
   if (total) console.log('Migrated records to userId (ObjectId):', changed);
 }
 
+async function migrateHouseholdIds(db, { dryRun = false } = {}) {
+  const done = { householdsGivenId: 0, plans: 0, planLayouts: 0, rooms: 0, planNameClashes: 0, unmatchedPlans: 0 };
+
+  // 1. Every household needs a public id. Keep what the browser already sees (the _id as text).
+  const households = await db.collection('households').find({}).toArray();
+  for (const household of households) {
+    if (typeof household.id === 'string' && household.id) continue;
+    done.householdsGivenId++;
+    household.id = String(household._id);
+    if (!dryRun) await db.collection('households').updateOne({ _id: household._id }, { $set: { id: household.id } });
+  }
+  // Plans find their household inside one account; rooms have no owner, so their ids must be unique anyway.
+  const byOwner = new Map();
+  const byRef = new Map();
+  for (const household of households) {
+    for (const ref of [household.id, String(household._id)]) {
+      byOwner.set(`${household.userId}:${ref}`, household);
+      byRef.set(ref, household);
+    }
+  }
+
+  // 2. Plans: householdId and every room of the saved layout.
+  const plans = await db.collection('plans').find({}, { projection: { userId: 1, householdId: 1, name: 1, nameKey: 1, 'layout.householdId': 1 } }).toArray();
+  for (const plan of plans) {
+    const household = byOwner.get(`${plan.userId}:${plan.householdId}`);
+    if (!household) {
+      if (!(plan.householdId instanceof ObjectId)) done.unmatchedPlans++;
+      continue;
+    }
+    const layoutOutOfDate = Array.isArray(plan.layout) && plan.layout.every((room) => room && typeof room === 'object') && plan.layout.some((room) => !(room?.householdId instanceof ObjectId) || !room.householdId.equals(household._id));
+    const idOutOfDate = !(plan.householdId instanceof ObjectId) || !plan.householdId.equals(household._id);
+    if (!idOutOfDate && !layoutOutOfDate) continue;
+    if (idOutOfDate) done.plans++;
+    if (layoutOutOfDate) done.planLayouts++;
+    if (dryRun) continue;
+    const set = { householdId: household._id };
+    if (layoutOutOfDate && plan.layout.length) set['layout.$[].householdId'] = household._id;
+    try {
+      await db.collection('plans').updateOne({ _id: plan._id }, { $set: set });
+    } catch (error) {
+      if (error.code !== 11000) throw error;
+      // Two plans with the same name were saved under different forms of the same household.
+      // Keep both, and make the second name different instead of losing a plan.
+      const name = `${plan.name} (2)`;
+      await db.collection('plans').updateOne({ _id: plan._id }, { $set: { ...set, name, nameKey: name.trim().toLowerCase() } });
+      done.planNameClashes++;
+    }
+  }
+
+  // 3. Rooms that were saved with a text householdId.
+  const rooms = await db.collection('rooms').find({ householdId: { $type: 'string' } }, { projection: { householdId: 1 } }).toArray();
+  for (const room of rooms) {
+    const household = byRef.get(room.householdId);
+    if (!household) continue;
+    done.rooms++;
+    if (!dryRun) await db.collection('rooms').updateOne({ _id: room._id }, { $set: { householdId: household._id } });
+  }
+
+  const total = Object.values(done).reduce((sum, count) => sum + count, 0);
+  if (total) console.log(dryRun ? 'Household ids that would change:' : 'Moved household references to the household _id:', done);
+  return done;
+}
+
 async function connectDb() {
   if (!process.env.DB) {
     throw new Error('Missing DB connection string in server/.env');
@@ -90,6 +153,7 @@ async function connectDb() {
     { unique: true, partialFilterExpression: { 'corppass.uen': { $type: 'string' } } },
   );
   await migrateUserIds(db);
+  await migrateHouseholdIds(db);
   await db.collection('households').createIndex({ userId: 1, id: 1 });
   await db.collection('plans').createIndex(
     { userId: 1, householdId: 1, nameKey: 1 },
@@ -144,4 +208,4 @@ function getClient() {
   return client;
 }
 
-module.exports = { connectDb, getDb, getClient, DB_NAME };
+module.exports = { connectDb, getDb, getClient, migrateHouseholdIds, DB_NAME };

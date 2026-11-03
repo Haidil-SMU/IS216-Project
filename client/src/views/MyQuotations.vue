@@ -1,7 +1,8 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, nextTick, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
+import ContractorProfile from '@/components/ContractorProfile.vue'
 
 const router = useRouter()
 
@@ -17,6 +18,47 @@ const contractors = ref([])
 const loading = ref(true)
 const errorMessage = ref('')
 const removingRequestId = ref('')
+const decisionRequestId = ref('')
+const profileContractor = ref(null)
+let profileOpener = null
+
+function openProfile(request, event) {
+  const contractor = getContractor(request)
+  if (!contractor) return
+  profileOpener = event.currentTarget
+  profileContractor.value = contractor
+}
+
+async function closeProfile() {
+  profileContractor.value = null
+  await nextTick()
+  if (profileOpener?.isConnected) profileOpener.focus()
+  profileOpener = null
+}
+
+async function decideQuotation(request, status) {
+  if (decisionRequestId.value || request.status !== 'quoted') return
+  const verb = status === 'accepted' ? 'accept' : 'decline'
+  if (!confirm(`Are you sure you want to ${verb} this quotation? This decision cannot be changed here.`)) return
+  decisionRequestId.value = getRequestId(request)
+  errorMessage.value = ''
+  try {
+    await axios.patch(`${API}/quotation-requests/${encodeURIComponent(getRequestId(request))}/decision`, { status })
+    request.status = status
+    selectedQuotationIds.value = selectedQuotationIds.value.filter(id => id !== getRequestId(request))
+  } catch (error) {
+    const message = error.response?.data?.error || 'Unable to save your decision.'
+    if (error.response?.status === 409) await getData()
+    errorMessage.value = message
+  } finally {
+    decisionRequestId.value = ''
+  }
+}
+
+function hasQuotation(request) {
+  return ['quoted', 'accepted', 'declined'].includes(request.status) && Boolean(request.quotation)
+}
+
 
 // New: quotation breakdown and comparison
 const expandedQuotations = ref([])
@@ -137,6 +179,10 @@ function getStatusClass(status) {
     case 'accepted':
       return 'bg-info-subtle text-info-emphasis'
 
+    case 'declined':
+    case 'cancelled':
+      return 'bg-secondary-subtle text-secondary-emphasis'
+
     case 'rejected':
       return 'bg-danger-subtle text-danger-emphasis'
 
@@ -154,10 +200,14 @@ function getStatusText(status) {
       return 'Pending Response'
 
     case 'accepted':
-      return 'Accepted'
+      return 'Accepted by You'
 
+    case 'declined':
+      return 'Declined by You'
+    case 'cancelled':
+      return 'Cancelled by You'
     case 'rejected':
-      return 'Rejected'
+      return 'Rejected by Contractor'
 
     case 'quoted':
       return 'Quotation Received'
@@ -309,7 +359,7 @@ function updateQuotation(request) {
 async function removeQuotation(request) {
   const requestId = getRequestId(request)
 
-  if (!confirm('Are you sure you want to remove this quotation request?')) {
+  if (!confirm('Cancel this pending request? The contractor will see that you cancelled it, and it will remain in your history.')) {
     return
   }
 
@@ -321,9 +371,7 @@ async function removeQuotation(request) {
       `${API}/quotation-requests/${encodeURIComponent(requestId)}`
     )
 
-    quotationRequests.value = quotationRequests.value.filter(
-      item => getRequestId(item) !== requestId
-    )
+    request.status = 'cancelled'
 
     selectedQuotationIds.value = selectedQuotationIds.value.filter(
       id => id !== requestId
@@ -338,7 +386,13 @@ async function removeQuotation(request) {
 
     errorMessage.value =
       error.response?.data?.error ||
-      'Unable to remove quotation request.'
+      'Unable to cancel quotation request.'
+
+    if (error.response?.status === 409) {
+      const message = errorMessage.value
+      await getData()
+      errorMessage.value = message
+    }
 
   } finally {
     removingRequestId.value = ''
@@ -656,6 +710,23 @@ onMounted(() => {
                 {{ getContractorLocation(request) }}
               </p>
 
+              <button
+                v-if="getContractor(request)"
+                type="button"
+                class="portfolio-button"
+                aria-haspopup="dialog"
+                :aria-label="`View portfolio and photos for ${getContractorName(request)}`"
+                @click="openProfile(request, $event)"
+              >
+                <span class="portfolio-icon" aria-hidden="true">▧</span>
+                <span class="portfolio-copy">
+                  <strong>View Portfolio &amp; Photos</strong>
+                  <small>Explore their past renovation projects</small>
+                </span>
+                <span aria-hidden="true">↗</span>
+              </button>
+              <p v-else class="small text-muted">Contractor portfolio is currently unavailable.</p>
+
               <hr />
 
               <!-- HOUSEHOLD -->
@@ -700,6 +771,22 @@ onMounted(() => {
 
               </div>
 
+              <section class="border rounded-3 p-3 mb-3">
+                <h6 class="fw-bold">Items requested for quotation</h6>
+                <ul v-if="request.selectedLayoutItems?.length" class="small mb-0">
+                  <li v-for="item in request.selectedLayoutItems" :key="item.id">{{ item.room }} — {{ String(item.item).replace(/[_-]/g, ' ') }} × {{ item.quantity }}</li>
+                </ul>
+                <p v-else-if="request.scopeVersion === 1" class="small text-muted mb-0">No layout items selected. See additional work below.</p>
+                <p v-else class="small text-muted mb-0">This older request has no explicit item selection. The homeowner must update it before a new AI draft can be generated.</p>
+              </section>
+              <div v-if="request.workDetails?.length" class="bg-light rounded-3 p-3 mb-3">
+                <h6 class="fw-bold small">Additional renovation work</h6>
+                <p v-for="work in request.workDetails" :key="work.service" class="small mb-2">
+                  <strong>{{ work.service }}</strong> — {{ work.scope === 'whole' ? 'Whole flat' : work.scope === 'rooms' ? work.rooms.join(', ') : 'Contractor to assess' }}
+                  <span v-if="work.quantity"> · {{ work.quantity }} {{ work.unit }}</span>
+                  <span v-if="work.notes" class="d-block text-muted">{{ work.notes }}</span>
+                </p>
+              </div>
               <!-- DESCRIPTION -->
               <template v-if="request.description">
 
@@ -733,7 +820,7 @@ onMounted(() => {
 
               <!-- QUOTATION RECEIVED -->
               <div
-                v-if="request.status === 'quoted' && request.quotation"
+                v-if="hasQuotation(request)"
                 class="bg-success-subtle rounded-3 p-3 mt-4"
               >
 
@@ -907,7 +994,7 @@ onMounted(() => {
                 </p>
 
                 <!-- NEW: SELECT FOR COMPARISON -->
-                <div class="comparison-checkbox rounded-3 p-3">
+                <div v-if="request.status === 'quoted'" class="comparison-checkbox rounded-3 p-3">
 
                   <label
                     class="d-flex align-items-center gap-2 mb-0"
@@ -927,6 +1014,18 @@ onMounted(() => {
                 </div>
 
               </div>
+
+              <div v-if="request.status === 'quoted' && request.quotation" class="mt-3">
+                <p class="small text-muted">Reviewed the price and scope? Let the contractor know your decision.</p>
+                <div class="d-flex gap-2">
+                  <button type="button" class="btn btn-success flex-fill" :disabled="Boolean(decisionRequestId)" @click="decideQuotation(request, 'accepted')">Accept Quotation</button>
+                  <button type="button" class="btn btn-outline-secondary flex-fill" :disabled="Boolean(decisionRequestId)" @click="decideQuotation(request, 'declined')">Decline</button>
+                </div>
+                <p v-if="decisionRequestId === getRequestId(request)" class="small text-muted mt-2" role="status">Saving your decision...</p>
+              </div>
+              <div v-if="request.status === 'accepted'" class="alert alert-success mt-3 mb-0">You accepted this quotation. Contact the contractor to arrange the next steps.</div>
+              <div v-if="request.status === 'declined'" class="alert alert-secondary mt-3 mb-0">You declined this quotation. It remains here for your records.</div>
+              <div v-if="request.status === 'cancelled'" class="alert alert-secondary mt-3 mb-0">You cancelled this request. The contractor can no longer respond.</div>
 
               <!-- REJECTED -->
               <div
@@ -969,8 +1068,8 @@ onMounted(() => {
                 >
                   {{
                     removingRequestId === getRequestId(request)
-                      ? 'Removing...'
-                      : 'Remove Request'
+                      ? 'Cancelling...'
+                      : 'Cancel Request'
                   }}
                 </button>
 
@@ -1021,10 +1120,26 @@ onMounted(() => {
 
     </template>
 
+    <Teleport to="body">
+      <ContractorProfile
+        v-if="profileContractor"
+        :key="getId(profileContractor._id)"
+        :contractor="profileContractor"
+        @close="closeProfile"
+      />
+    </Teleport>
   </div>
 </template>
 
 <style scoped>
+.portfolio-button { display:flex; align-items:center; gap:12px; width:100%; padding:14px; border:1px solid #d5e9dc; border-radius:14px; background:linear-gradient(135deg,#f0faf4,#fafdfb); color:#146c43; text-align:left; cursor:pointer; }
+.portfolio-button:hover { background:#e9f6ee; border-color:#198754; }
+.portfolio-button:focus-visible { outline:3px solid #198754; outline-offset:3px; }
+.portfolio-icon { display:grid; place-items:center; flex-shrink:0; width:42px; height:42px; border-radius:12px; background:white; font-size:24px; }
+.portfolio-copy { display:flex; flex:1; flex-direction:column; gap:3px; }
+.portfolio-copy strong { font-size:.86rem; }
+.portfolio-copy small { color:#62796b; font-size:.74rem; }
+
 .quotation-card {
   transition:
     transform 0.2s ease,

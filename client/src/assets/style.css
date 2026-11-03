@@ -697,3 +697,67 @@ fieldset {
 .energy-home .planner-notice-body h2 { font-size: 24px; font-weight: 750; margin-bottom: 12px; }
 .energy-home #planner-notice-message { color: #566960; font-size: 15px; line-height: 1.6; margin-bottom: 22px; }
 .energy-home .planner-notice-body .btn { padding: 11px 20px; font-weight: 650; }
+
+/* Saved-household card shown only when a flat type change */
+.floor-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid #bfe3cd;
+  border-radius: 14px;
+  background: #eaf7ee;
+  color: #116a42;
+  text-align: left;
+}
+.floor-card-head { display: flex; align-items: center; gap: 12px; }
+.floor-card-tick {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #168b59;
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+.floor-card-title { margin: 0; font-size: 0.95rem; font-weight: 700; color: #19352a; }
+.floor-card-sub { margin: 0; font-size: 0.8rem; color: #35604d; }
+.floor-card-rows { display: flex; flex-direction: column; gap: 8px; }
+.floor-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 10px; }
+.floor-row-label {
+  flex: 0 0 64px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #5d6f65;
+}
+.floor-row-note { margin: 0; font-size: 0.8rem; color: #35604d; }
+.floor-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.floor-chip {
+  padding: 3px 10px;
+  border: 1px solid;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.floor-chip-added { border-color: #bfe3cd; background: #fff; color: #116a42; }
+.floor-chip-removed { border-color: #f3dd9a; background: #fff8e1; color: #7a5a00; }
+.floor-card-btn {
+  align-self: center;
+  display: inline-block;
+  padding: 9px 22px;
+  border-radius: 999px;
+  background: #168b59;
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 650;
+  text-decoration: none;
+  box-shadow: 0 6px 14px -6px rgba(22, 139, 89, 0.7);
+  transition: background-color 0.15s ease, transform 0.15s ease;
+}
+.floor-card-btn:hover { background: #116a42; color: #fff; transform: translateY(-1px); }
+.floor-card-btn:focus-visible { outline: 3px solid rgba(25, 135, 84, 0.45); outline-offset: 3px; }
