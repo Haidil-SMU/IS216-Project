@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 
 // Set up a new account and saved room through the real API for each test.
-// Uses the local test backend/MongoDB configured in playwright.config.js.
+// Uses the running website and backend through playwright.e2e.config.js.
 test.beforeEach(async ({ page }) => {
   const signup = await page.request.post('/api/auth/signup', {
     data: {
