@@ -18,7 +18,8 @@ server/   Express 5 API, MongoDB, sessions, Singpass / Corppass login
 
 | Server file | What it does |
 |---|---|
-| `server.js` | App entry point: sessions, quotation, planner and AI routes |
+| `server.js` | App entry point: sessions, contractor search, planner and simulator routes. In production it also serves `client/dist` |
+| `contractors.js` | Quotation requests (create, edit, cancel, quote or reject, accept or decline), contractor price lists, and the Gemini routes for drafting and comparing quotations |
 | `db.js` | MongoDB connection (database `ecohome`), indexes, startup migrations |
 | `auth.js` | Email + password accounts, sessions, role guards |
 | `oidc.js` | Shared OpenID Connect set-up and this app's keys |
@@ -27,6 +28,7 @@ server/   Express 5 API, MongoDB, sessions, Singpass / Corppass login
 | `profile.js` | Profile pictures (stored in MongoDB, one per account) |
 | `portfolio.js` | Contractor portfolios: past projects and their photos (stored in MongoDB) |
 | `spatialRoutes.js` | 3D Spatial API: rooms, floor plan edits and appliance placements |
+| `layoutWrite.js` | Saves rooms with the fewest writes needed, all or nothing when MongoDB supports transactions |
 | `floorplan.js` / `layout.js` / `roomSync.js` | Room layouts per flat type, floor plan edit rules, and updating rooms when the flat type changes |
 | `energyplanner-model.js` | MongoDB queries for households, rooms and plans |
 | `appliances.json`, `gameScenarios.json` | Static data served by `GET /api`. The planner, simulator and 3D Spatial read flat types and the appliance catalogue from MongoDB instead |
@@ -139,8 +141,8 @@ In `client/`:
 ```bash
 pnpm build       # production build into client/dist
 pnpm preview     # serve the production build
-pnpm test:unit   # Vitest, in watch mode
-pnpm test:e2e    # Playwright (see End-to-end tests below)
+pnpm test:unit   # Vitest, in watch mode (also runs e2e/*.unit.spec.js and e2e/*.component.spec.js)
+pnpm test:e2e    # Playwright, default config only (see End-to-end tests below)
 pnpm lint        # oxlint + ESLint, and applies their automatic fixes to your files
 pnpm format      # Prettier, rewrites files in src/
 ```
@@ -155,9 +157,25 @@ pnpm test        # Node test runner, no database needed
 
 Install the browser once with `pnpm exec playwright install chromium` in `client/`.
 
-`pnpm test:e2e` starts its own API server on port 8011 and Vite on port 5174, so it can run alongside your dev servers. The API server uses `E2E_DB` if it is set, otherwise a local `mongod` at `mongodb://127.0.0.1:27017`, so one of them must be available.
+The Playwright tests don't start any servers. Start MockPass, the API server and the client first (see [Running the app](#running-the-app)), then run the tests from `client/`. There are three configs:
 
-> The database name is always `ecohome`, and the tests create real accounts. Never point `E2E_DB` at the shared Atlas database.
+| Command | Config | What it runs |
+|---|---|---|
+| `pnpm test:e2e` | `playwright.config.js` | `tests/`, in Chromium, Firefox and WebKit, logged in with the storage state in `auth.json` |
+| `pnpm exec playwright test -c playwright.e2e.config.js` | `playwright.e2e.config.js` | `e2e/3d-*.spec.js` and `e2e/energyplanner.e2e.spec.js`, in Chromium |
+| `pnpm exec playwright test -c playwright.quotations.config.js` | `playwright.quotations.config.js` | `e2e/quotation-journey.spec.js`, in Chromium |
+
+The quotations config logs in with `client/playwright/.auth/homeowner.json`, which is not in the repository. To create it, log in as a homeowner with a saved household in the browser that opens:
+
+```bash
+pnpm exec playwright codegen --save-storage=playwright/.auth/homeowner.json http://localhost:5173/login
+```
+
+That test also needs a contractor offering painting that this homeowner has no pending request with.
+
+`e2e/auth.spec.js` and `e2e/authorisation.spec.js` aren't matched by any config, so none of the commands above runs them. To run them, add them to `testMatch` in `playwright.e2e.config.js`.
+
+> The tests run against whatever database your API server's `DB` points at, and they sign up real accounts and create real plans and quotation requests. Run them against a local or throwaway database, not the shared Atlas database. Storage-state files (`auth.json`, `playwright/.auth/`) hold live session cookies, so don't commit them.
 
 ---
 
@@ -194,10 +212,10 @@ An email account can also link Singpass later: on **My Profile**, click **Retrie
 1. **Log in** with email or a Singpass persona. A new Singpass user lands on My Profile with the Myinfo household filled in. New accounts must save a household there first; until then, the planner, My HDB, Find Contractors and 3D Spatial send them back to My Profile.
 2. **My Profile** (click your name in the navbar): check and save the household on the *My Household* tab (each account has one household).
 3. **3D Spatial:** place appliances in a room. The first visit creates the household's rooms, which My HDB needs, and the Energy Planner reads the appliances placed here.
-4. **Energy Planner:** your household and its placed appliances load automatically. Save, edit and delete a plan.
+4. **Energy Planner:** your household and its placed appliances load automatically. Pick an electricity retailer plan to set the tariff, then save, edit and delete a plan. The retailer rates are static data in `client/src/data/electricity-retailers.json` (GST included), so update them by hand when tariffs change.
 5. **My HDB:** try the energy scenarios.
-6. **Find Contractors:** browse website-registered contractors and BCA-registered contractors from data.gov.sg, open **View Portfolio** on a website-registered contractor, then request a quotation from them (pick services, add a description and budget). At least one contractor must have finished their profile first (see [Contractors](#contractors)).
-7. **My Profile → My quotations** (click your name in the navbar): edit a request while it is still *pending*, then see the contractor's quote or rejection once they reply. You can select quotations to compare, but the AI comparison is not connected in the client yet.
+6. **Find Contractors:** browse website-registered contractors and BCA-registered contractors from data.gov.sg, open **View Portfolio** on a website-registered contractor, then request a quotation from them (pick services, add a description and budget). At least one contractor must have finished their profile first (see [Contractors](#contractors)). You can only have one active request (*pending*, *quoted* or *accepted*) with each contractor at a time, so a second request to the same contractor is blocked.
+7. **My Profile → My quotations** (click your name in the navbar): while a request is still *pending* you can edit it or cancel it. A cancelled request stays in both your history and the contractor's, and the contractor can no longer reply. Once the contractor replies, see their rejection, or **Accept** or **Decline** their quote. If the contractor replies first, your edit or cancel is refused, and the other way round. You can select quotations to compare, but the AI comparison is not connected in the client yet (the server route `POST /api/analyze-quotations` exists).
 
 ### Contractors
 
@@ -218,10 +236,10 @@ The BCA lookup calls data.gov.sg live (5-second timeout, results cached for an h
 2. **Set up the business profile.** Only complete profiles appear in the homeowners' Find Contractors.
 3. **Open a quotation request** after a homeowner has sent you one (homeowner step 6). If they attached their saved household, you can view its 3D layout read-only.
 4. **AI draft (optional):** on the *Price List* tab, upload and save your own PDF price list (max 5 MB). It is required before drafting and is reused for later drafts until you replace it. Gemini then drafts a quotation for you to review. Needs `GEMINI_API_KEY`.
-5. **Respond** with *quoted* (with a total) or *rejected*. The homeowner sees the result under **My Profile → My quotations**.
+5. **Respond** with *quoted* (with a total) or *rejected*. The homeowner sees the result under **My Profile → My quotations**, and once they accept or decline a quote, the request shows *Accepted by Homeowner* or *Declined by Homeowner*. Cancelled requests stay listed but can't be answered.
 6. **Portfolio (optional):** on the *Portfolio* tab, add up to 10 past projects with photos (max 2 MB each). Homeowners see them through **View Portfolio** in Find Contractors.
 
-> `server/users.json` and `server/plans.json` are leftover sample data from the earlier file-based version. Households and plans are now stored in MongoDB per account. `server/App.vue` and `server/main.js` are also leftovers: the server does not use them, and the client has its own versions in `client/src/`.
+> `server/users.json` and `server/plans.json` are leftover sample data from the earlier file-based version. Households and plans are now stored in MongoDB per account. `server/App.vue` and `server/main.js` are also leftovers: the server does not use them, and the client has its own versions in `client/src/`. In `client/`, `client/src/stores/counter.js` and `client/src/data/dummyHousehold.json` are unused, `tests/example.spec.js` and the `test-*.spec.ts` files in `tests/` and `e2e/` are empty Playwright scaffolds, and `client/src/tests/package.json` (with its lockfile) is a stray package that the client's scripts don't use.
 
 ---
 
@@ -238,11 +256,3 @@ The BCA lookup calls data.gov.sg live (5-second timeout, results cached for an h
 | My Profile shows no household form | The database has no `flat_types` data. See [Reference data](#reference-data) |
 | `No household with rooms found.` on My HDB | Open 3D Spatial once to create the rooms |
 | `No electrical appliances were found in this household's saved rooms.` on the Energy Planner | Place at least one appliance in 3D Spatial |
-
----
-
-## Going live with Singpass / Corppass
-
-Set the `SINGPASS_*` and `CORPPASS_*` variables to the values from the Singpass and Corppass developer portals. Register `https://<your-site>/api/auth/singpass/jwks` as the app's JWKS URL. With `NODE_ENV=production`, the server requires `SESSION_SECRET` and sends secure cookies.
-
-The server only listens on `127.0.0.1` and does not serve the client, so production needs a reverse proxy in front of it. On one HTTPS site, have the proxy forward `/api` to the server and serve `client/dist` for everything else, falling back to `index.html` so page addresses like `/MyProfile` still load.
