@@ -1116,7 +1116,6 @@ button.rc-event:focus-visible{outline:3px solid #75b99a;outline-offset:3px}.rc-e
 .my-quotations-page .card-footer { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:10px; border-radius:0 0 16px 16px; }
 .my-quotations-page .card-footer > .w-100 { width:auto !important; }
 .my-quotations-page .card-footer > .d-flex { margin-bottom:0 !important; }
-.my-quotations-page 
 @media(max-width:767px) { .quote-facts { grid-template-columns:repeat(2,minmax(0,1fr)); padding:14px; } .quote-card-heading { align-items:flex-start; flex-wrap:wrap; } .scope-content { padding:14px; } .my-quotations-page .card-footer { justify-content:flex-start; } }
 @media(max-width:420px) {  .my-quotations-page .card-footer > .d-flex { width:100%; flex-wrap:wrap; } }
 
