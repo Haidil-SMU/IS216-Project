@@ -185,6 +185,7 @@ function getStatusClass(status) {
       return 'bg-info-subtle text-info-emphasis'
 
     case 'declined':
+    case 'withdrawn':
     case 'cancelled':
       return 'bg-secondary-subtle text-secondary-emphasis'
 
@@ -209,6 +210,8 @@ function getStatusText(status) {
 
     case 'declined':
       return 'Declined by You'
+    case 'withdrawn':
+      return 'Withdrawn by Contractor'
     case 'cancelled':
       return 'Cancelled by You'
     case 'rejected':
@@ -265,6 +268,21 @@ function getQuotationItems(request) {
   return Array.isArray(request.quotation?.items)
     ? request.quotation.items
     : []
+}
+
+function getQuotationClarifications(request) {
+  const warnings = getQuotationWarnings(request)
+    .filter(value => typeof value === 'string')
+    .map(value => value.trim())
+    .filter(Boolean)
+  const notes = typeof request.quotation?.notes === 'string'
+    ? request.quotation.notes.trim() : ''
+  const unique = new Map()
+  for (const point of [...warnings, ...(notes ? [notes] : [])]) {
+    const key = point.replace(/\s+/g, ' ').toLowerCase()
+    if (!unique.has(key)) unique.set(key, point)
+  }
+  return [...unique.values()]
 }
 
 function getQuotationWarnings(request) {
@@ -360,6 +378,12 @@ async function removeQuotation(request) {
 onMounted(() => {
   getData()
 })
+
+const animatedFilterStyle = computed(() => {
+  const index = quotationFilters.value.findIndex(option => option.key === activeFilter.value)
+  const colours = { total: '#475569', all: '#475569', pending: '#ad620c', received: '#168854', sent: '#168854', accepted: '#2563d9', rejected: '#bf3446' }
+  return { '--pill-index': Math.max(0, index), '--pill-count': quotationFilters.value.length, '--pill-colour': colours[activeFilter.value] || colours.total }
+})
 </script>
 
 <template>
@@ -410,12 +434,14 @@ onMounted(() => {
     <template v-if="!loading">
 
       <!-- SUMMARY FILTERS -->
-      <div class="quotation-filter-bar mb-4" role="group" aria-label="Filter quotation requests">
+      <div class="status-pill-scroll mb-4">
+      <div class="quotation-filter-bar animated-filter-track" :style="animatedFilterStyle" role="group" aria-label="Filter quotation requests">
         <button v-for="filter in quotationFilters" :key="filter.key" type="button"
           class="quotation-filter" :class="['filter-' + filter.key, { 'is-active': activeFilter === filter.key }]"
           :aria-pressed="activeFilter === filter.key" @click="activeFilter = filter.key">
           <span>{{ filter.label }}</span><strong>{{ filter.count }}</strong>
         </button>
+      </div>
       </div>
 
       <!-- SECTION HEADER -->
@@ -717,37 +743,16 @@ onMounted(() => {
                     </strong>
                   </div>
 
-                  <!-- WARNINGS -->
-                  <div
-                    v-if="getQuotationWarnings(request).length > 0"
-                    class="alert alert-warning mt-3 mb-0"
-                  >
-
-                    <strong class="small">
-                      Quotation Warnings
-                    </strong>
-
-                    <ul class="small mt-2 mb-0 ps-3">
-                      <li
-                        v-for="(warning, index) in getQuotationWarnings(request)"
-                        :key="index"
-                      >
-                        {{ warning }}
-                      </li>
-                    </ul>
-
-                  </div>
-
                 </div>
 
-                <!-- NOTES -->
-                <p
-                  v-if="request.quotation.notes"
-                  class="small mb-3"
-                >
-                  <strong>Notes:</strong>
-                  {{ request.quotation.notes }}
-                </p>
+                <!-- One visible section for clarification flags and contractor conditions. -->
+                <section v-if="getQuotationClarifications(request).length" class="clarification-panel mt-3 mb-2" aria-label="Clarifications and conditions">
+                  <h6 class="fw-bold mb-2">Points to confirm with the contractor</h6>
+                  <p class="small mb-2">The contractor may need to confirm these items or add prices manually. Contact them before accepting if scope or pricing is still unclear. After agreement, they should send a revised quotation with updated prices and conditions.</p>
+                  <ul class="small mb-0 ps-3">
+                    <li v-for="(point, index) in getQuotationClarifications(request)" :key="index" class="clarification-point">{{ point }}</li>
+                  </ul>
+                </section>
 
 
 
@@ -761,6 +766,7 @@ onMounted(() => {
                 </div>
                 <p v-if="decisionRequestId === getRequestId(request)" class="small text-muted mt-2" role="status">Saving your decision...</p>
               </div>
+              <div v-if="request.status === 'withdrawn'" class="alert alert-secondary mt-3">The contractor withdrew the previous offer. They need to reopen this request to prepare a replacement; do not accept the old quotation.</div>
               <div v-if="request.status === 'accepted'" class="alert alert-success mt-3 mb-0">You accepted this quotation. Contact the contractor to arrange the next steps.</div>
               <div v-if="request.status === 'declined'" class="alert alert-secondary mt-3 mb-0">You declined this quotation. It remains here for your records.</div>
               <div v-if="request.status === 'cancelled'" class="alert alert-secondary mt-3 mb-0">You cancelled this request. The contractor can no longer respond.</div>
@@ -773,6 +779,7 @@ onMounted(() => {
                 This contractor has rejected your quotation request.
               </div>
 
+              <p v-if="request.status === 'pending' && request.lastWithdrawnAt" class="alert alert-info small mt-3">The contractor withdrew the previous quotation and is preparing an updated offer. This request is Pending again.</p>
               <!-- PENDING -->
               <div
                 v-if="request.status === 'pending'"
@@ -1022,4 +1029,22 @@ onMounted(() => {
 .quotation-filter.filter-accepted { --filter-ink:#1d4ed8; --filter-soft:#eff6ff; --filter-line:#93b4ed; }
 @media(max-width:700px) { .quotation-filter-bar { grid-template-columns:repeat(3,minmax(0,1fr)); } }
 @media(max-width:480px) { .quotation-filter-bar { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+
+/* Animated status pills: one sliding highlight, with a colour for each status. */
+.status-pill-scroll { width:100%; overflow-x:auto; padding:4px 3px 9px; scrollbar-width:thin; -webkit-overflow-scrolling:touch; }
+.quotation-filter-bar.animated-filter-track { position:relative; isolation:isolate; display:grid; grid-template-columns:repeat(var(--pill-count,5),minmax(0,1fr)); gap:0; width:100%; min-width:560px; margin:0; padding:6px; border:1px solid #dce7df; border-radius:999px; background:#fff; box-shadow:0 5px 16px rgba(28,65,43,.055); }
+.quotation-filter-bar.animated-filter-track::before { content:''; position:absolute; z-index:0; top:6px; bottom:6px; left:6px; width:calc((100% - 12px) / var(--pill-count,5)); border-radius:999px; background-color:var(--pill-colour); background-image:linear-gradient(110deg,rgba(255,255,255,.09),rgba(0,0,0,.06)); box-shadow:0 4px 10px rgba(25,50,35,.17); transform:translateX(calc(var(--pill-index,0) * 100%)); transition:transform .34s cubic-bezier(.22,.8,.25,1),background-color .28s ease; pointer-events:none; }
+.animated-filter-track .quotation-filter { position:relative; z-index:1; display:flex; align-items:center; justify-content:center; gap:9px; min-height:52px; padding:12px 10px; border:0; border-radius:999px; background:transparent; box-shadow:none; color:#5b6c61; white-space:nowrap; font-size:.88rem; font-weight:650; transition:color .18s ease; }
+.animated-filter-track .quotation-filter::before { width:6px; height:6px; background:currentColor; opacity:.8; }
+.animated-filter-track .quotation-filter:hover { background:transparent; color:var(--filter-ink,#146c43); box-shadow:none; }
+.animated-filter-track .quotation-filter.is-active,.animated-filter-track .quotation-filter.is-active:hover { background:transparent; border:0; color:#fff; box-shadow:none; }
+.animated-filter-track .quotation-filter strong { min-width:25px; padding:3px 7px; border-radius:999px; background:#eef3f0; color:inherit; font-size:.73rem; }
+.animated-filter-track .quotation-filter.is-active strong { background:rgba(255,255,255,.23); color:white; }
+.animated-filter-track .quotation-filter:focus-visible { outline:3px solid #153c2a; outline-offset:-3px; }
+@media(max-width:600px) { .quotation-filter-bar.animated-filter-track { min-width:530px; } .animated-filter-track .quotation-filter { min-height:48px; font-size:.81rem; gap:7px; } }
+@media(prefers-reduced-motion:reduce) { .quotation-filter-bar.animated-filter-track::before,.animated-filter-track .quotation-filter { transition:none; } }
+
+
+.clarification-panel { padding:17px 18px; background:#fff6dd; border:1px solid #eed491; border-left:4px solid #c18a20; border-radius:12px; color:#705018; }
+.clarification-point { margin-top:8px; white-space:pre-wrap; overflow-wrap:anywhere; }
 </style>

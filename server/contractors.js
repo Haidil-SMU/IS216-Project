@@ -5,6 +5,7 @@ const { getDb } = require('./db');
 const auth = require('./auth');
 const contractor = require('./contractor');
 const spatialRoutes = require('./spatialRoutes');
+const itemServiceMapping = require('./item-service-mapping.json');
 
 module.exports = function createContractorsRouter({ ownContractorProfile, resolveAttachedPlanId }) {
   const router = express.Router();
@@ -51,6 +52,17 @@ router.get('/quotation-requests', async (req, res) => {
     });
   }
 });
+function normalizeQuotationContact(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Provide contact details for this request.');
+  const name = String(value.name || '').trim();
+  const phone = String(value.phone || '').replace(/[\s()-]/g, '');
+  const email = String(value.email || '').trim();
+  if (name.length < 2 || name.length > 100) throw new Error('Contact name must be 2 to 100 characters.');
+  if (!/^\+?[1-9]\d{7,14}$/.test(phone)) throw new Error('Provide a valid contact number (8 to 15 digits, with optional country code).');
+  if (email && (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) throw new Error('Provide a valid email address or leave it blank.');
+  return { name, phone, email };
+}
+
 router.post(
   '/quotation-requests',
   auth.requireClient,
@@ -92,6 +104,9 @@ router.post(
         });
       }
 
+    let contact;
+    try { contact = normalizeQuotationContact(req.body.contact); }
+    catch (error) { return res.status(400).json({ error: error.message }); }
     let workDetails;
     try { workDetails = normalizeQuotationWork(req.body.workDetails, services); }
     catch (error) { return res.status(400).json({ error: error.message }); }
@@ -139,7 +154,7 @@ router.post(
         if (planId && !attachedPlanId) return res.status(409).json({ error: 'The saved plan is unavailable. Choose it again.' });
         const scopeProfile = await db.collection('contractors').findOne({ _id: new ObjectId(contractorId) });
         if (!scopeProfile) return res.status(404).json({ error: 'Contractor not found.' });
-        selectedLayoutItems = await quotationSelectedScope(db, new ObjectId(req.session.userId), householdId, attachedPlanId, scopeProfile, req.body.selectedItemIds, services);
+        selectedLayoutItems = await quotationSelectedScope(db, new ObjectId(req.session.userId), householdId, attachedPlanId, scopeProfile, req.body.selectedItemIds, services, req.body.selectedItemWork || {});
       } catch (error) { return res.status(error.status || 500).json({ error: error.status ? error.message : 'Unable to validate selected items.' }); }
 
 
@@ -159,6 +174,7 @@ router.post(
 
         services,
         workDetails,
+        contact,
         selectedLayoutItems,
         scopeVersion: 1,
         description: String(description).trim(),
@@ -246,6 +262,9 @@ router.put(
         });
       }
 
+    let contact;
+    try { contact = normalizeQuotationContact(req.body.contact); }
+    catch (error) { return res.status(400).json({ error: error.message }); }
     let workDetails;
     try { workDetails = normalizeQuotationWork(req.body.workDetails, services); }
     catch (error) { return res.status(400).json({ error: error.message }); }
@@ -263,7 +282,7 @@ router.put(
         if (planId && !attachedPlanId) return res.status(409).json({ error: 'The saved plan is unavailable. Choose it again.' });
         const scopeProfile = await db.collection('contractors').findOne({ _id: new ObjectId(contractorId) });
         if (!scopeProfile) return res.status(404).json({ error: 'Contractor not found.' });
-        selectedLayoutItems = await quotationSelectedScope(db, new ObjectId(req.session.userId), householdId, attachedPlanId, scopeProfile, req.body.selectedItemIds, services);
+        selectedLayoutItems = await quotationSelectedScope(db, new ObjectId(req.session.userId), householdId, attachedPlanId, scopeProfile, req.body.selectedItemIds, services, req.body.selectedItemWork || {});
       } catch (error) { return res.status(error.status || 500).json({ error: error.status ? error.message : 'Unable to validate selected items.' }); }
 
 
@@ -292,6 +311,7 @@ router.put(
 
               services,
         workDetails,
+        contact,
         selectedLayoutItems,
         scopeVersion: 1,
               description: String(description).trim(),
@@ -449,7 +469,8 @@ router.patch(
               status,
               quotation: savedQuotation,
               updatedAt: new Date()
-            }
+            },
+            ...(status === 'quoted' ? { $inc: { quotationVersion: 1 } } : {})
           }
         );
 
@@ -461,9 +482,8 @@ router.patch(
         });
       }
 
-      return res.json({
-        message: 'Quotation response saved successfully'
-      });
+      const latest = await getDb().collection('quotationRequests').findOne({ _id: new ObjectId(requestId), contractorId: new ObjectId(contractorId) });
+      return res.json({ message: 'Quotation response saved successfully', quotation: latest?.quotation, quotationVersion: latest?.quotationVersion || 1, quotationHistory: latest?.quotationHistory || [] });
     } catch (error) {
       console.error('Error responding to quotation:', error);
 
@@ -560,16 +580,6 @@ function quotationOfferedServices(profile) {
     return QUOTATION_SERVICE_CODES[text] || text;
   });
 }
-function quotationItemService(name) {
-  const text = String(name).toLowerCase().replace(/[_-]/g, ' ');
-  if (/window|glaz/.test(text)) return 'Windows';
-  if (/door/.test(text)) return 'Doors';
-  if (/countertop|cabinet|worktop/.test(text)) return 'Interior Design & Renovation';
-  if (/aircon|air conditioner|air conditioning|split system/.test(text)) return 'Air-conditioning';
-  if (/water heater|sink|basin|toilet|tap|shower/.test(text)) return 'Plumbing & Sanitary Works';
-  if (/ceiling fan|light fixture|ceiling light|downlight|socket/.test(text)) return 'Electrical Works';
-  return null;
-}
 function quotationSelectableInventory(layout, profile) {
   const offered = quotationOfferedServices(profile);
   const rooms = layout?.rooms || [];
@@ -579,9 +589,12 @@ function quotationSelectableInventory(layout, profile) {
     for (const p of room.placements || []) {
       const item = String(p.applianceTypeKey || p.name || p.type || 'Unknown item');
       const groupKey = item + ':' + String(p.category || '');
-      const service = quotationItemService(item);
+      const mapping = Object.prototype.hasOwnProperty.call(itemServiceMapping, item) ? itemServiceMapping[item] : null;
+      const serviceCategories = Array.isArray(mapping?.serviceCategories) ? mapping.serviceCategories : [];
+      const matchingServices = serviceCategories.filter(service => offered.includes(service));
+      const service = matchingServices[0] || null;
       const id = require('crypto').createHash('sha256').update(String(room._id || room.id || room.name) + ':' + groupKey).digest('hex').slice(0, 24);
-      const group = groups.get(groupKey) || { id, item, room: String(room.name || room.type || 'Room'), quantity: 0, service, eligible: Boolean(service && offered.includes(service)) };
+      const group = groups.get(groupKey) || { id, item, room: String(room.name || room.type || 'Room'), quantity: 0, service, serviceCategories, matchingServices, displayName: mapping?.name || item.replace(/_/g, ' '), requiresExplicitWorkRequest: Boolean(mapping?.requiresExplicitWorkRequest), scope: String(mapping?.scope || 'No service mapping is configured for this item.'), eligible: matchingServices.length > 0 };
       const quantity = Number(p.quantity ?? 1);
       group.quantity += Number.isFinite(quantity) && quantity > 0 ? quantity : 1;
       groups.set(groupKey, group);
@@ -589,7 +602,7 @@ function quotationSelectableInventory(layout, profile) {
     return { name: String(room.name || room.type || 'Room'), items: [...groups.values()] };
   });
 }
-async function quotationSelectedScope(db, owner, householdId, planId, profile, ids, services) {
+async function quotationSelectedScope(db, owner, householdId, planId, profile, ids, services, selectedItemWork = {}) {
   if (!householdId) throw Object.assign(new Error('Choose your saved household.'), { status: 400 });
   if (!Array.isArray(ids) || ids.length > 100 || ids.some(id => typeof id !== 'string') || new Set(ids).size !== ids.length) throw Object.assign(new Error('Invalid item selection.'), { status: 400 });
   const offered = quotationOfferedServices(profile);
@@ -602,7 +615,12 @@ async function quotationSelectedScope(db, owner, householdId, planId, profile, i
   const selected = ids.map(id => items.find(item => item.id === id && item.eligible));
   if (selected.some(item => !item)) throw Object.assign(new Error('A selected item changed or is outside this contractor’s services. Reload and select again.'), { status: 409 });
   if (!selected.length && !services.length) throw Object.assign(new Error('Select at least one layout item or additional renovation requirement.'), { status: 400 });
-  return selected.map(({ id, item, room, quantity, service }) => ({ id, item, room, quantity, service }));
+  if (!selectedItemWork || typeof selectedItemWork !== 'object' || Array.isArray(selectedItemWork)) throw Object.assign(new Error('Invalid item work details.'), { status: 400 });
+  return selected.map(({ id, item, room, quantity, service, matchingServices, requiresExplicitWorkRequest, scope }) => {
+    const workDescription = String(Object.prototype.hasOwnProperty.call(selectedItemWork, id) ? selectedItemWork[id] : '').trim();
+    if (workDescription.length > 600 || (requiresExplicitWorkRequest && workDescription.length < 5)) throw Object.assign(new Error('Describe the specific installation or associated work for each selected appliance or furniture item (5 to 600 characters).'), { status: 400 });
+    return { id, item, room, quantity, service, services: matchingServices, workDescription, allowedScope: scope };
+  });
 }
 
 // Helpers used by quotation requests and draft generation.
@@ -818,7 +836,7 @@ if (!contractorProfile) {
 if (request.scopeVersion !== 1) return res.status(409).json({ error: 'Ask the homeowner to update this request and explicitly select items before generating a new draft.' });
 let selectedItems;
 try {
-  selectedItems = await quotationSelectedScope(db, request.userId, request.householdId, request.planId, contractorProfile, (request.selectedLayoutItems || []).map(item => item.id), request.services || []);
+  selectedItems = await quotationSelectedScope(db, request.userId, request.householdId, request.planId, contractorProfile, (request.selectedLayoutItems || []).map(item => item.id), request.services || [], Object.fromEntries((request.selectedLayoutItems || []).map(item => [item.id, item.workDescription || ''])));
   if (JSON.stringify(selectedItems) !== JSON.stringify(request.selectedLayoutItems || [])) return res.status(409).json({ error: 'The selected layout items changed. Ask the homeowner to review and save the request again.' });
 } catch (error) { return res.status(error.status || 500).json({ error: error.status ? error.message : 'Unable to validate the selected scope.' }); }
 const requirements = {
@@ -832,7 +850,7 @@ const requirements = {
     const context = JSON.stringify(requirements);
     if (context.length > 10000) return res.status(400).json({ error: 'The request is too large for one draft. Please simplify its scope.' });
     const priceInput = compactQuotationPrices(String(prices.extractedText), context);
-    const key = require('crypto').createHash('sha256').update('explicit-scope-v1' + String(prices._id) + context + priceInput.text).digest('hex');
+    const key = require('crypto').createHash('sha256').update('mapped-explicit-scope-v2' + String(prices._id) + context + priceInput.text).digest('hex');
     if (request.aiDraftCache?.key === key) return res.json({ draft: request.aiDraftCache.draft, cached: true });
     if (!process.env.GEMINI_API_KEY) return res.status(500).json({ error: 'GEMINI_API_KEY is not configured.' });
     const { GoogleGenAI } = await import('@google/genai');
@@ -845,6 +863,7 @@ DATA: ${context}
 PRICES: ${JSON.stringify(priceInput.text)}
 Rules:
 - Quote ONLY selectedItems and explicit additionalWork/additionalCategories, within contractorServices. Never add an unselected layout item or an unselected service because the description mentions it. Description only clarifies the selected scope.
+- Each selected item includes services, allowedScope and workDescription. Quote only the requested work within allowedScope. Mapping to multiple categories does not authorise charging for all of them. For consumer appliances/furniture, quote only explicitly requested associated installation, mounting, connection or fitting work; never assume purchase, repair, or replacement of the appliance/furniture itself.
 - selectedItems are the homeowner’s chosen objects. Use their room names and quantities. Additional work covers services such as painting/waterproofing; do not create vague automatic category charges.
 - Merge overlapping work into one row and do not double count package inclusions. Do not add consumer appliances or other objects outside the selected scope.
 - Existing layout objects do not prove replacement is wanted. Describe layout-derived work as proposed and mark needsReview true. Do not double count shared doors/windows across rooms or package inclusions.
@@ -1006,6 +1025,34 @@ router.patch('/quotation-requests/:requestId/revise', auth.requireContractor, ow
   } catch (error) {
     console.error('Quotation revision:', error);
     return res.status(error.message?.startsWith('Every item') ? 400 : 500).json({ error: error.message?.startsWith('Every item') ? error.message : 'Unable to revise quotation.' });
+  }
+});
+
+// Withdraw the sent offer and reopen the same request for a replacement.
+// Also supports reopening records withdrawn using the previous behaviour.
+router.patch('/quotation-requests/:requestId/withdraw', auth.requireContractor, ownContractorProfile, async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const { contractorId, expectedVersion } = req.body;
+    if (!ObjectId.isValid(requestId) || !ObjectId.isValid(contractorId) || !Number.isInteger(expectedVersion) || expectedVersion < 1) return res.status(400).json({ error: 'Invalid quotation information.' });
+    const collection = getDb().collection('quotationRequests');
+    const current = await collection.findOne({ _id: new ObjectId(requestId), contractorId: new ObjectId(contractorId), status: { $in: ['quoted', 'withdrawn'] } });
+    if (!current) return res.status(409).json({ error: 'The quotation changed or the homeowner already decided. Refresh the dashboard.' });
+    const version = current.quotationVersion || 1;
+    if (version !== expectedVersion) return res.status(409).json({ error: 'A newer quotation exists. Refresh first.' });
+    const now = new Date();
+    const archive = current.quotation ? { version, quotation: current.quotation, replacedAt: now, reason: 'Withdrawn for replacement' } : null;
+    const history = [...(current.quotationHistory || []), ...(archive ? [archive] : [])];
+    const result = await collection.updateOne(
+      { _id: current._id, contractorId: current.contractorId, status: current.status, updatedAt: current.updatedAt },
+      { $set: { status: 'pending', quotation: null, quotationVersion: version, lastWithdrawnAt: now, updatedAt: now },
+        $unset: { aiDraftCache: '', withdrawnAt: '' }, ...(archive ? { $push: { quotationHistory: archive } } : {}) }
+    );
+    if (!result.matchedCount) return res.status(409).json({ error: 'The quotation changed during withdrawal. Refresh before continuing.' });
+    return res.json({ status: 'pending', quotation: null, quotationVersion: version, quotationHistory: history, lastWithdrawnAt: now });
+  } catch (error) {
+    console.error('Quotation withdrawal:', error);
+    return res.status(error.code === 11000 ? 409 : 500).json({ error: error.code === 11000 ? 'Another active request already exists with this homeowner. Resolve it before reopening this request.' : 'Unable to withdraw quotation.' });
   }
 });
 

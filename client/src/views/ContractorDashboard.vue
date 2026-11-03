@@ -171,6 +171,9 @@ const visibleRequests = computed(() => {
       if (!query) return true
 
       const searchable = [
+        request.contact?.name,
+        request.contact?.phone,
+        request.contact?.email,
         request.household?.name,
         request.household?.flatType,
         request.description,
@@ -621,6 +624,146 @@ async function removeProjectPhoto(project, photo) {
   }
 }
 
+const emailPreview = ref(null)
+const emailPreviewDialog = ref(null)
+const emailCopyBusy = ref(false)
+const emailCopyMessage = ref('')
+function escapeEmailContent(value) {
+  return String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]))
+}
+function closeEmailPreview() {
+  emailPreviewDialog.value?.close()
+  emailPreview.value = null
+  emailCopyMessage.value = ''
+}
+async function copyFormattedEmailAndOpen() {
+  if (!emailPreview.value || emailCopyBusy.value) return
+  emailCopyBusy.value = true
+  emailCopyMessage.value = ''
+  const preview = emailPreview.value
+  try {
+    let rich = false
+    if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+      try {
+        await navigator.clipboard.write([new ClipboardItem({
+          'text/html': new Blob([preview.html], { type: 'text/html' }),
+          'text/plain': new Blob([preview.text], { type: 'text/plain' })
+        })])
+        rich = true
+      } catch { /* Try the plain-text fallback below. */ }
+    }
+    if (!rich) await navigator.clipboard.writeText(preview.text)
+    emailCopyMessage.value = rich
+      ? 'Formatted email copied. In your mail app, click the message body and press Cmd+V (or Ctrl+V).'
+      : 'Your browser only allowed plain-text copying. Paste with Cmd+V (or Ctrl+V), or copy from the preview manually for formatting.'
+    // No body parameter: paste the formatted clipboard into the blank compose body.
+    window.location.href = `mailto:${encodeURIComponent(preview.recipient)}?subject=${encodeURIComponent(preview.subject)}`
+  } catch {
+    emailCopyMessage.value = 'Copy was blocked. Select and copy the preview below manually, then use Open mail app.'
+  } finally { emailCopyBusy.value = false }
+}
+function openEmailAppOnly() {
+  const preview = emailPreview.value
+  if (preview) window.location.href = `mailto:${encodeURIComponent(preview.recipient)}?subject=${encodeURIComponent(preview.subject)}`
+}
+
+// mailto opens the configured mail app with a plain-text draft.
+async function emailHomeowner(request, useDraft = false) {
+  const recipient = String(request.contact?.email || '').trim()
+  if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(recipient) || /[\r\n]/.test(recipient)) {
+    notify('A valid homeowner email address is required.')
+    return
+  }
+  const isDraft = useDraft && Boolean(request.aiDraft)
+  const quotation = isDraft ? {
+    ...request.aiDraft,
+    items: request.aiDraft.items.map(item => ({ ...item, amount: getItemAmount(item) })),
+    total: getDraftTotal(request)
+  } : request.quotation
+  const incompleteDraft = isDraft && hasMissingPrices(request)
+  const company = profile.value?.companyName || 'Your renovation contractor'
+  const lines = [
+    `Dear ${request.contact?.name || 'Homeowner'},`, '',
+    isDraft
+      ? 'We have prepared a provisional renovation draft and need your clarification on the points listed below. This is not a final quotation. Prices, quantities and scope remain subject to verification.'
+      : request.status === 'accepted'
+      ? 'Thank you for accepting our renovation quotation. Please let us know a convenient time to discuss the next steps and confirm the schedule.'
+      : quotation
+        ? 'Please find a summary of our renovation quotation below. Let us know if you would like to discuss any items or arrange a site visit.'
+        : 'Thank you for your renovation enquiry. Below is a summary of your request for our discussion.',
+    '', 'RENOVATION SUMMARY',
+    `Household: ${request.household?.name || 'Not specified'}`,
+    `Property: ${flatTypeLabel(request.household?.flatType)}`,
+    `Budget: ${formatMoney(request.budget)}`,
+    `Preferred start (not confirmed): ${formatDate(request.preferredStartDate)}`
+  ]
+  if (request.selectedLayoutItems?.length) {
+    lines.push('', 'REQUESTED ITEMS')
+    request.selectedLayoutItems.forEach(item => lines.push(`- ${item.room}: ${String(item.item).replace(/[_-]/g, ' ')} x ${item.quantity}`))
+  }
+  if (request.workDetails?.length) {
+    lines.push('', 'ADDITIONAL WORK')
+    request.workDetails.forEach(work => {
+      const area = work.scope === 'whole' ? 'Whole flat' : work.scope === 'rooms' ? (work.rooms || []).join(', ') : 'Contractor to assess'
+      lines.push(`- ${work.service}: ${area}${work.quantity ? `; ${work.quantity} ${work.unit || ''}` : ''}${work.notes ? `; ${work.notes}` : ''}`)
+    })
+  }
+  if (request.description) lines.push('', 'YOUR REQUIREMENTS', request.description)
+  if (quotation) {
+    lines.push('', isDraft ? 'PROVISIONAL DRAFT - FOR CLARIFICATION ONLY' : `QUOTATION - VERSION ${request.quotationVersion || 1}`)
+    ;(quotation.items || []).forEach((item, index) => {
+      lines.push(`${index + 1}. ${item.service}`, `   ${item.description || ''}`,
+        `   Quantity: ${item.quantity ?? '-'} | Unit price: ${item.unitPrice == null ? 'To confirm' : formatMoney(item.unitPrice)} | Amount: ${item.amount == null ? 'To confirm' : formatMoney(item.amount)}`)
+    })
+    lines.push('', incompleteDraft ? `PRICED ITEMS SUBTOTAL: ${formatMoney(quotation.total)} (incomplete; unpriced items are excluded)` : `${isDraft ? 'PROVISIONAL TOTAL' : 'TOTAL'}: ${formatMoney(quotation.total)}`)
+    if (quotation.notes) lines.push('', 'NOTES', quotation.notes)
+    if (quotation.warnings?.length) lines.push('', isDraft ? 'REVIEW NOTES - PLEASE CLARIFY' : 'ITEMS TO CLARIFY', ...quotation.warnings.map(warning => '- ' + warning))
+  } else {
+    lines.push('', 'A quotation has not yet been issued; the above is the requested scope only.')
+  }
+  lines.push('', 'The preferred start date is subject to mutual confirmation.', '', 'Kind regards,', company)
+  if (profile.value?.contactNumber) lines.push(profile.value.contactNumber)
+  if (isDraft) lines.push('', 'Please reply with any clarifications or corrections so we can finalise the quotation. This email does not submit or approve a quotation in HDB EcoHome.')
+  const subject = `${isDraft ? 'Renovation draft - clarification needed' : quotation ? 'Renovation quotation' : 'Renovation enquiry'} - ${request.household?.name || 'Your home'}`.replace(/[\r\n]/g, ' ')
+  const esc = escapeEmailContent
+  const heading = isDraft ? 'Renovation draft' : quotation ? 'Renovation quotation' : 'Renovation enquiry'
+  const tableRows = (quotation?.items || []).map((item, index) => {
+    const amount = item.amount == null ? 'To confirm' : formatMoney(item.amount)
+    return `<tr><td style="padding:12px 10px;border-bottom:1px solid #e2e9e5;vertical-align:top">${index + 1}</td><td style="padding:12px 10px;border-bottom:1px solid #e2e9e5"><strong>${esc(item.service)}</strong><br><span style="color:#617469">${esc(item.description || '')}</span></td><td style="padding:12px 10px;border-bottom:1px solid #e2e9e5;vertical-align:top">${esc(item.quantity ?? '-')}</td><td style="padding:12px 10px;border-bottom:1px solid #e2e9e5;vertical-align:top;white-space:nowrap">${esc(item.unitPrice == null ? 'To confirm' : formatMoney(item.unitPrice))}</td><td style="padding:12px 10px;border-bottom:1px solid #e2e9e5;vertical-align:top;white-space:nowrap;color:${item.amount == null ? '#b42338' : '#16643e'}"><strong>${esc(amount)}</strong></td></tr>`
+  }).join('')
+  const table = `<table style="border-collapse:collapse;width:100%;font-size:13px;margin:14px 0 24px" cellpadding="0" cellspacing="0"><thead><tr>${['#','Item / work','Qty','Unit price','Amount'].map(label => `<th align="left" style="padding:11px 10px;background:#eaf4ed;border-bottom:2px solid #caddd0;color:#185c39">${label}</th>`).join('')}</tr></thead><tbody>${tableRows}</tbody></table>`
+  let inQuotation = false
+  let content = ''
+  for (const line of lines) {
+    if (line.startsWith('QUOTATION - VERSION') || line === 'PROVISIONAL DRAFT - FOR CLARIFICATION ONLY') {
+      content += `<h3 style="margin:24px 0 8px;font-size:16px;color:#195f3c">${esc(line)}</h3>${table}`
+      inQuotation = true
+      continue
+    }
+    if (inQuotation && !line.startsWith('TOTAL:') && !line.startsWith('PROVISIONAL TOTAL:') && !line.startsWith('PRICED ITEMS SUBTOTAL:')) continue
+    if (inQuotation) {
+      inQuotation = false
+      content += `<div style="background:${incompleteDraft ? '#fff2e8' : '#edf7f0'};border:1px solid ${incompleteDraft ? '#eed3bd' : '#d4e6da'};padding:14px 16px;margin-bottom:20px;border-radius:10px;font-size:16px;color:#185c39"><strong>${esc(line)}</strong></div>`
+      continue
+    }
+    if (!line) continue
+    if (/^[A-Z][A-Z /-]+$/.test(line)) {
+      content += `<h3 style="font-size:14px;margin:24px 0 8px;color:#195f3c">${esc(line)}</h3>`
+    } else if (line.startsWith('- ')) {
+      content += `<p style="margin:6px 0;padding-left:12px">&#8226; ${esc(line.slice(2))}</p>`
+    } else {
+      const colon = line.indexOf(':')
+      content += `<p style="margin:8px 0;white-space:pre-wrap">${colon > 0 && colon < 35 ? '<strong>' + esc(line.slice(0,colon + 1)) + '</strong>' + esc(line.slice(colon + 1)) : esc(line)}</p>`
+    }
+  }
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;color:#283e30;font-size:14px;line-height:1.65;max-width:760px;margin:0 auto;background:#fff"><div style="padding:20px 24px;background:#176b43;border-radius:12px 12px 0 0;color:white"><p style="font-size:12px;margin:0 0 5px;letter-spacing:1px">${esc(company)}</p><h2 style="font-size:23px;margin:0;color:white">${heading}</h2></div><div style="padding:20px 24px;border:1px solid #e0e9e3;border-top:0;border-radius:0 0 12px 12px">${isDraft ? '<div style="background:#fff4d9;color:#805a0c;padding:12px 15px;border:1px solid #ebd59a;border-radius:8px;margin-bottom:18px"><strong>Provisional draft - clarification required</strong><br>Unconfirmed prices and review notes must be resolved before a final quotation.</div>' : ''}${content}</div></div>`
+  emailCopyMessage.value = ''
+  emailPreview.value = { recipient, subject, html, text: lines.join('\r\n'), isDraft }
+  await nextTick()
+  emailPreviewDialog.value?.showModal()
+
+}
+
 // FORMATTERS
 
 function formatDate(date) {
@@ -656,6 +799,7 @@ function statusLabel(status) {
     quoted: 'Quotation Sent',
     rejected: 'Rejected',
     accepted: 'Accepted by Homeowner',
+    withdrawn: 'Withdrawn by Contractor',
     declined: 'Declined by Homeowner',
     cancelled: 'Cancelled by Homeowner'
   }[status] || status
@@ -1095,6 +1239,27 @@ async function syncConflictedRequest(request, error) {
   }
 }
 
+async function withdrawSentQuotation(request) {
+  if (dashboardBusy.value || !['quoted', 'withdrawn'].includes(request.status)) return
+  if (!confirm('Withdraw this quotation and return the request to Pending? The sent offer will move to history and cannot be accepted. You can prepare and send a replacement.')) return
+  savingId.value = getId(request)
+  request.actionError = ''
+  try {
+    const { data } = await axios.patch(`${API}/quotation-requests/${getId(request)}/withdraw`, {
+      contractorId: getCurrentContractorId(), expectedVersion: request.quotationVersion || 1
+    })
+    Object.assign(request, data)
+    request.status = 'pending'
+    request.quotation = null
+    request.revising = false
+    request.aiDraft = null
+    notify('Quotation withdrawn. The request is Pending again; prepare and send a replacement.')
+  } catch (error) {
+    request.actionError = error.response?.data?.error || 'Unable to withdraw quotation.'
+    await syncConflictedRequest(request, error)
+  } finally { savingId.value = '' }
+}
+
 function startQuotationRevision(request) {
   if (dashboardBusy.value || request.status !== 'quoted' || !request.quotation) return
   request.revising = true
@@ -1237,6 +1402,12 @@ onMounted(loadData)
 onUnmounted(() => {
   clearTimeout(messageTimer)
   clearTimeout(uploadHighlightTimer)
+})
+
+const animatedFilterStyle = computed(() => {
+  const index = requestFilterOptions.value.findIndex(option => option.key === statusFilter.value)
+  const colours = { total: '#475569', all: '#475569', pending: '#ad620c', received: '#168854', sent: '#168854', accepted: '#2563d9', rejected: '#bf3446' }
+  return { '--pill-index': Math.max(0, index), '--pill-count': requestFilterOptions.value.length, '--pill-colour': colours[statusFilter.value] || colours.total }
 })
 </script>
 
@@ -1568,13 +1739,15 @@ onUnmounted(() => {
           >Refresh</button>
         </div>
 
-        <div class="dashboard-status-filters mb-4" role="group" aria-label="Filter quotation requests">
+        <div class="status-pill-scroll mb-4">
+      <div class="dashboard-status-filters animated-filter-track" :style="animatedFilterStyle" role="group" aria-label="Filter quotation requests">
           <button v-for="filter in requestFilterOptions" :key="filter.key" type="button"
             class="dashboard-status-filter" :class="['status-' + filter.colour, { 'is-active': statusFilter === filter.key }]"
             :aria-pressed="statusFilter === filter.key" @click="statusFilter = filter.key">
             <span>{{ filter.label }}</span><strong>{{ filter.count }}</strong>
           </button>
         </div>
+      </div>
 
         <!-- SEARCH, FILTER AND SORT -->
         <div class="requests-toolbar mb-4">
@@ -1589,7 +1762,7 @@ onUnmounted(() => {
                   v-model="requestSearch"
                   type="search"
                   class="form-control"
-                  placeholder="Search household, service or description"
+                  placeholder="Search homeowner, household, phone or service"
                 />
               </div>
               <div class="col-lg-4">
@@ -1644,8 +1817,9 @@ onUnmounted(() => {
             <div class="d-flex justify-content-between flex-wrap gap-3 mb-4">
               <div>
                 <h3 class="h5 fw-bold mb-1">
-                  {{ request.household?.name || 'Unnamed Household' }}
+                  {{ request.contact?.name || 'Homeowner' }}
                 </h3>
+                <p class="small text-muted mb-1">Household: {{ request.household?.name || 'Not specified' }}</p>
                 <small class="text-muted">
                   Requested {{ formatDate(request.createdAt) }}
                 </small>
@@ -1653,6 +1827,15 @@ onUnmounted(() => {
               <span class="badge align-self-start" :class="statusClass(request.status)">
                 {{ statusLabel(request.status) }}
               </span>
+            </div>
+
+            <div class="homeowner-contact-strip mb-3">
+              <div v-if="request.contact?.phone" class="contact-text"><span class="contact-caption">Homeowner contact</span><strong>{{ request.contact.name }}</strong><span>{{ request.contact.phone }}</span><span v-if="request.contact.email">{{ request.contact.email }}</span></div>
+              <p v-else class="small text-muted mb-0">Contact details not provided for this older request.</p>
+              <div class="d-flex flex-wrap gap-2">
+                <a v-if="request.contact?.phone" :href="'tel:' + request.contact.phone" class="btn btn-success btn-sm">Call homeowner</a>
+                <button v-if="request.contact?.email" type="button" class="btn btn-outline-success btn-sm" @click="emailHomeowner(request)">Preview email</button>
+              </div>
             </div>
 
             <div class="request-facts">
@@ -1804,6 +1987,22 @@ onUnmounted(() => {
                   Verify prices, quantities and conditions against your price list.
                 </p>
 
+                <div class="draft-email-action mb-3">
+                  <div><strong class="small">Need the homeowner to clarify something?</strong><p class="small text-muted mb-0">Email this provisional draft together with its review notes. Missing prices will be marked as unconfirmed. Ask the homeowner to confirm scope and measurements before agreeing prices and sending a revision.</p></div>
+                  <button type="button" class="btn btn-outline-success btn-sm text-nowrap" :disabled="!request.contact?.email || dashboardBusy" @click="emailHomeowner(request, true)">Preview clarification email</button>
+                  <p v-if="!request.contact?.email" class="small text-muted mb-0">No homeowner email is available for this request.</p>
+                </div>
+
+                <div class="alert alert-warning small">
+                  <strong>Confirm first, then revise.</strong> Contact the homeowner to agree on unclear scope, measurements or missing prices before sending a revised quotation. Update the review points below once they are resolved; they are not cleared automatically.
+                </div>
+                <details class="request-disclosure mb-3">
+                  <summary><span><strong>Edit clarification points</strong><small>Remove resolved points or write the remaining conditions clearly</small></span><span class="standard-expand">View / Hide</span></summary>
+                  <div class="disclosure-content">
+                    <p class="small text-muted">One point per line. These points appear to the homeowner and in clarification emails. Keep unresolved points; remove only those you have confirmed.</p>
+                    <textarea class="form-control" rows="4" :value="request.aiDraft.warnings.join('\n')" @input="request.aiDraft.warnings = $event.target.value.split('\n').map(point => point.trim()).filter(Boolean)" aria-label="Clarification points"></textarea>
+                  </div>
+                </details>
                 <details v-if="request.aiDraft.warnings.length" class="alert alert-warning draft-warnings">
                   <summary class="fw-semibold">Review notes ({{ request.aiDraft.warnings.length }})<span class="standard-expand"><span class="standard-expand-label" aria-hidden="true"></span><svg class="standard-chevron" width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 7 5 5 5-5" /></svg></span></summary>
                   <ul class="mb-0 mt-2">
@@ -1817,6 +2016,7 @@ onUnmounted(() => {
                   v-for="(item, index) in request.aiDraft.items"
                   :key="index"
                   class="request-disclosure draft-item mb-3"
+                  :class="{ 'draft-item-needs-price': getItemAmount(item) === null }"
                 >
                   <summary>
                     <span class="draft-item-caption"><small>Item {{ index + 1 }}</small><strong>{{ item.service || 'New quotation item' }}</strong><small>{{ item.description || 'Open to edit scope, quantity and price' }}</small></span>
@@ -1824,6 +2024,7 @@ onUnmounted(() => {
                   <span class="standard-expand"><span class="standard-expand-label" aria-hidden="true"></span><svg class="standard-chevron" width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 7 5 5 5-5" /></svg></span></summary>
                   <div class="disclosure-content">
                     <div class="d-flex justify-content-end mb-3"><button type="button" class="btn btn-sm btn-outline-danger" @click="removeQuotationItem(request, index)">Remove item</button></div>
+                  <p class="quantity-help small mb-3"><strong>Quantity × price per unit = item total.</strong> A pricing unit can be one item, one point, one m², one metre or one agreed job/package. State the unit in the description, for example “20 m² of ceiling painting” or “1 ceiling-painting job”. Confirm the basis with the homeowner; do not assume quantity 1 means 1 m².</p>
                   <div class="row g-3">
                     <div class="col-md-6">
                       <label class="form-label small d-block">
@@ -1839,7 +2040,7 @@ onUnmounted(() => {
                     </div>
                     <div class="col-md-4">
                       <label class="form-label small d-block">
-                        Quantity
+                        Quantity (pricing units)
                         <input
                           v-model.number="item.quantity"
                           type="number"
@@ -1851,7 +2052,7 @@ onUnmounted(() => {
                     </div>
                     <div class="col-md-4">
                       <label class="form-label small d-block">
-                        Unit Price (S$)
+                        Unit price (S$ per unit)
                         <input
                           v-model.number="item.unitPrice"
                           type="number"
@@ -1940,11 +2141,16 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <div v-if="request.status === 'quoted' && !request.revising" class="d-flex flex-wrap justify-content-between align-items-center gap-3 mt-3">
+            <div v-if="request.status === 'quoted' && !request.revising" class="sent-quotation-actions mt-3">
               <p class="small text-muted mb-0">Awaiting homeowner decision · Version {{ request.quotationVersion || 1 }}</p>
-              <button type="button" class="btn btn-outline-success" :disabled="dashboardBusy" @click="startQuotationRevision(request)">Revise quotation</button>
+              <div class="sent-action-buttons">
+              <button type="button" class="quote-action quote-action-revise" :disabled="dashboardBusy" @click="startQuotationRevision(request)">✎ Revise quotation</button>
+              <button type="button" class="quote-action quote-action-delete" :disabled="dashboardBusy" @click="withdrawSentQuotation(request)">Withdraw quotation</button>
+              </div>
             </div>
             <p v-if="request.actionError && request.status !== 'pending' && !request.revising" class="alert alert-danger mt-3" role="alert">{{ request.actionError }}</p>
+            <div v-if="request.status === 'withdrawn'" class="alert alert-warning mt-3"><p>This quotation was withdrawn using the previous workflow. Reopen the same request to prepare a replacement.</p><button type="button" class="quote-action quote-action-revise" :disabled="dashboardBusy" @click="withdrawSentQuotation(request)">Return to Pending</button></div>
+            <p v-if="request.status === 'pending' && request.lastWithdrawnAt" class="alert alert-info small mt-3">The previous offer was withdrawn and saved in history. Prepare a replacement quotation below.</p>
             <!-- SENT QUOTATION -->
             <div
               v-if="request.quotation && isSent(request)"
@@ -2438,6 +2644,20 @@ onUnmounted(() => {
         </div>
       </div>
     </Teleport>
+    <dialog v-if="emailPreview" ref="emailPreviewDialog" class="homeowner-email-dialog" aria-labelledby="email-preview-title" @cancel.prevent="closeEmailPreview" @close="emailPreview = null">
+      <div class="email-preview-header">
+        <div><h2 id="email-preview-title" class="h5 fw-bold mb-1">Preview homeowner email</h2><p class="small text-muted mb-0">To: {{ emailPreview.recipient }}</p><p class="small text-muted mb-0">Subject: {{ emailPreview.subject }}</p></div>
+        <button type="button" class="btn-close" aria-label="Close email preview" @click="closeEmailPreview"></button>
+      </div>
+      <div class="email-preview-instructions"><strong>1.</strong> Copy and open mail. <strong>2.</strong> Click the blank message body. <strong>3.</strong> Press ⌘V / Ctrl+V to paste the formatted email.</div>
+      <p v-if="emailCopyMessage" class="email-copy-status" role="status">{{ emailCopyMessage }}</p>
+      <div class="email-preview-content" tabindex="0" aria-label="Formatted email preview" v-html="emailPreview.html"></div>
+      <div class="email-preview-footer">
+        <button type="button" class="btn btn-outline-secondary" @click="closeEmailPreview">Close</button>
+        <button type="button" class="btn btn-outline-success" @click="openEmailAppOnly">Open mail app</button>
+        <button type="button" class="btn btn-success" :disabled="emailCopyBusy" @click="copyFormattedEmailAndOpen">{{ emailCopyBusy ? 'Copying…' : 'Copy formatted email & open mail' }}</button>
+      </div>
+    </dialog>
   </div>
 </template>
 
@@ -3130,4 +3350,60 @@ fieldset {
 .dashboard-status-filter.status-accepted { --status-ink:#1d4ed8; --status-soft:#eff6ff; --status-line:#93b4ed; }
 @media(max-width:700px) { .dashboard-status-filters { grid-template-columns:repeat(3,minmax(0,1fr)); } }
 @media(max-width:480px) { .dashboard-status-filters { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+
+.homeowner-contact-strip { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:14px; padding:15px 18px; border:1px solid #d7e7dd; border-radius:12px; background:#f5faf7; }
+.contact-text { display:flex; align-items:center; flex-wrap:wrap; gap:8px 16px; font-size:.86rem; overflow-wrap:anywhere; }
+.contact-caption { width:100%; color:#61776a; font-size:.72rem; }
+
+/* Animated status pills: one sliding highlight, with a colour for each status. */
+.status-pill-scroll { width:100%; overflow-x:auto; padding:4px 3px 9px; scrollbar-width:thin; -webkit-overflow-scrolling:touch; }
+.dashboard-status-filters.animated-filter-track { position:relative; isolation:isolate; display:grid; grid-template-columns:repeat(var(--pill-count,5),minmax(0,1fr)); gap:0; width:100%; min-width:560px; margin:0; padding:6px; border:1px solid #dce7df; border-radius:999px; background:#fff; box-shadow:0 5px 16px rgba(28,65,43,.055); }
+.dashboard-status-filters.animated-filter-track::before { content:''; position:absolute; z-index:0; top:6px; bottom:6px; left:6px; width:calc((100% - 12px) / var(--pill-count,5)); border-radius:999px; background-color:var(--pill-colour); background-image:linear-gradient(110deg,rgba(255,255,255,.09),rgba(0,0,0,.06)); box-shadow:0 4px 10px rgba(25,50,35,.17); transform:translateX(calc(var(--pill-index,0) * 100%)); transition:transform .34s cubic-bezier(.22,.8,.25,1),background-color .28s ease; pointer-events:none; }
+.animated-filter-track .dashboard-status-filter { position:relative; z-index:1; display:flex; align-items:center; justify-content:center; gap:9px; min-height:52px; padding:12px 10px; border:0; border-radius:999px; background:transparent; box-shadow:none; color:#5b6c61; white-space:nowrap; font-size:.88rem; font-weight:650; transition:color .18s ease; }
+.animated-filter-track .dashboard-status-filter::before { width:6px; height:6px; background:currentColor; opacity:.8; }
+.animated-filter-track .dashboard-status-filter:hover { background:transparent; color:var(--status-ink,#146c43); box-shadow:none; }
+.animated-filter-track .dashboard-status-filter.is-active,.animated-filter-track .dashboard-status-filter.is-active:hover { background:transparent; border:0; color:#fff; box-shadow:none; }
+.animated-filter-track .dashboard-status-filter strong { min-width:25px; padding:3px 7px; border-radius:999px; background:#eef3f0; color:inherit; font-size:.73rem; }
+.animated-filter-track .dashboard-status-filter.is-active strong { background:rgba(255,255,255,.23); color:white; }
+.animated-filter-track .dashboard-status-filter:focus-visible { outline:3px solid #153c2a; outline-offset:-3px; }
+@media(max-width:600px) { .dashboard-status-filters.animated-filter-track { min-width:530px; } .animated-filter-track .dashboard-status-filter { min-height:48px; font-size:.81rem; gap:7px; } }
+@media(prefers-reduced-motion:reduce) { .dashboard-status-filters.animated-filter-track::before,.animated-filter-track .dashboard-status-filter { transition:none; } }
+
+
+/* Missing prices must not look like completed, priced rows. */
+.request-entry .draft-item.draft-item-needs-price { border-color:#e9a5ac; }
+.request-entry .draft-item.draft-item-needs-price > summary { background:#fff0f1; color:#a51f32; }
+.request-entry .draft-item.draft-item-needs-price > summary:hover { background:#ffe5e8; }
+.request-entry .draft-item.draft-item-needs-price > summary .draft-item-price { color:#b42338; }
+.request-entry .draft-item.draft-item-needs-price > summary small { color:#97535d; }
+.request-entry .draft-item.draft-item-needs-price > summary .standard-expand { color:#a51f32; border-color:#e5adb4; }
+.draft-email-action { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; padding:15px 16px; border:1px solid #dce7df; border-radius:12px; background:#fafcfb; }
+.draft-email-action > div { flex:1; min-width:220px; }
+
+.homeowner-email-dialog { width:min(960px,94vw); max-height:92vh; padding:0; border:1px solid #d5e4d9; border-radius:18px; color:#26392e; box-shadow:0 20px 90px rgba(14,40,25,.28); }
+.homeowner-email-dialog[open] { display:flex; flex-direction:column; }
+.homeowner-email-dialog::backdrop { background:rgba(13,31,23,.5); }
+.email-preview-header { display:flex; justify-content:space-between; align-items:flex-start; gap:20px; padding:20px 24px; border-bottom:1px solid #e3ece6; flex-shrink:0; }
+.email-preview-header p { overflow-wrap:anywhere; }
+.email-preview-instructions { padding:12px 24px; font-size:.8rem; background:#eff7f2; flex-shrink:0; }
+.email-copy-status { margin:0; padding:10px 24px; background:#fff5db; font-size:.82rem; flex-shrink:0; }
+.email-preview-content { padding:24px; overflow:auto; background:#f5f7f6; min-height:100px; }
+.email-preview-footer { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:10px; padding:16px 24px; border-top:1px solid #e3ece6; background:white; flex-shrink:0; }
+@media(max-width:600px) { .email-preview-content { padding:12px; } .email-preview-header,.email-preview-footer { padding:16px; } }
+
+.quote-action { border:1px solid; border-radius:999px; padding:10px 17px; font-size:.83rem; font-weight:650; transition:transform .18s ease,box-shadow .18s ease,background .18s ease; }
+.quote-action-revise { color:#89540a; border-color:#e8c26a; background:#fff4d8; }
+.quote-action-delete { color:#b42338; border-color:#e5a2ad; background:#fff0f2; }
+.quote-action:hover:not(:disabled) { transform:translateY(-2px); box-shadow:0 5px 12px rgba(30,40,30,.1); }
+.quote-action:disabled { opacity:.55; cursor:wait; }
+.quote-action:focus-visible { outline:3px solid currentColor; outline-offset:3px; }
+@media(prefers-reduced-motion:reduce) { .quote-action { transition:none; } .quote-action:hover:not(:disabled) { transform:none; } }
+
+.sent-quotation-actions { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:14px; padding:16px 0; }
+.sent-quotation-actions > p { flex:1; min-width:220px; }
+.sent-action-buttons { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:10px; margin-left:auto; }
+.sent-action-buttons .quote-action { display:inline-flex; align-items:center; justify-content:center; min-height:42px; white-space:nowrap; }
+@media(max-width:600px) { .sent-quotation-actions { align-items:flex-start; } .sent-action-buttons { width:100%; margin-left:0; justify-content:flex-start; } }
+@media(max-width:420px) { .sent-action-buttons .quote-action { flex:1; white-space:normal; text-align:center; } }
+.quantity-help { padding:12px 14px; border:1px solid #dce7df; border-radius:10px; background:#f6f9f7; color:#52695c; line-height:1.65; }
 </style>

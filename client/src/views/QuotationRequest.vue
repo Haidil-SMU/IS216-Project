@@ -1,4 +1,37 @@
 <script setup>
+// Keep optional project notes separate from a generated scope summary.
+const scopeSummaryPrefix = '[Selected scope summary]\n'
+
+function serviceInstructions(service) {
+  const labels = {
+    'Painting & Redecoration': ['Painting instructions', 'e.g. Paint the living room walls only; keep the ceiling unchanged.'],
+    'Electrical Works': ['Electrical work instructions', 'e.g. Add two power sockets beside the study desk.'],
+    'Plumbing & Sanitary Works': ['Plumbing instructions', 'e.g. Replace the leaking kitchen tap; keep the existing sink.'],
+    'Waterproofing': ['Waterproofing instructions', 'e.g. Waterproof the common bathroom floor.'],
+    'Air-conditioning': ['Air-conditioning instructions', 'e.g. Service the existing bedroom units; no replacement needed.'],
+    'Doors': ['Door work instructions', 'e.g. Replace the bedroom door and retain the existing frame.'],
+    'Windows': ['Window work instructions', 'e.g. Replace the kitchen window and check the existing frame.'],
+    'Tiles & Marble Flooring': ['Flooring instructions', 'e.g. Replace the kitchen floor tiles.'],
+    'Timber & Vinyl Flooring': ['Flooring instructions', 'e.g. Install vinyl flooring in the bedrooms.']
+  }
+  return labels[service] || ['Instructions for this work', 'Describe the work needed, including anything to keep unchanged.']
+}
+
+function requestDescription() {
+  if (form.value.description.trim()) return form.value.description.trim()
+  const items = selectedItems.value.map(item => {
+    const instructions = String(selectedItemWork.value[item.id] || '').trim()
+    return `${item.room} — ${item.displayName || formatLayoutItem(item.item)} × ${item.quantity}${instructions ? ': ' + instructions : ''}`
+  })
+  const work = workDetails.value.map(entry => {
+    const area = entry.scope === 'whole' ? 'Whole flat' : entry.scope === 'rooms' ? entry.rooms.join(', ') : 'Contractor to assess'
+    const quantity = entry.quantity != null && entry.quantity !== '' ? `; ${entry.quantity} ${entry.unit || 'units'}` : ''
+    return `${entry.service} — ${area}${quantity}${String(entry.notes || '').trim() ? ': ' + entry.notes.trim() : ''}`
+  })
+  return scopeSummaryPrefix + [...items, ...work].join('\n')
+}
+
+
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
@@ -29,6 +62,7 @@ const blockedMessage = ref('')
 
 const errorMessage = ref('')
 const successMessage = ref('')
+const contact = ref({ name: '', phone: '', email: '' })
 const workDetails = ref([])
 const layoutRooms = ref([])
 const roomLoading = ref(false)
@@ -58,6 +92,7 @@ const fallbackFlatTypes = [
 
 const layoutPreview = ref([])
 const selectedItemIds = ref([])
+const selectedItemWork = ref({})
 let selectionLayoutKey = ''
 const selectedItems = computed(() => layoutPreview.value.flatMap(room => room.items || []).filter(item => item.eligible && selectedItemIds.value.includes(item.id)))
 const eligibleRooms = computed(() => layoutPreview.value.map(room => ({ ...room, items: (room.items || []).filter(item => item.eligible) })).filter(room => room.items.length))
@@ -197,7 +232,7 @@ const today = [
 async function loadRoomChoices() {
   const version = ++layoutLoadVersion
   const layoutKey = `${selectedHouseholdId.value}:${selectedPlanId.value}`
-  if (selectionLayoutKey && selectionLayoutKey !== layoutKey) selectedItemIds.value = []
+  if (selectionLayoutKey && selectionLayoutKey !== layoutKey) { selectedItemIds.value = []; selectedItemWork.value = {} }
   selectionLayoutKey = layoutKey
   layoutRooms.value = []
   roomNotice.value = ''
@@ -273,6 +308,11 @@ async function getData() {
 
     if (!canUseSavedHousehold.value) throw new Error(householdNotice.value || 'Set up your household in My Profile first.')
 
+    try {
+      const { data } = await axios.get('/api/auth/me')
+      contact.value = { name: String(data.user?.name || ''), phone: '', email: String(data.user?.email || '') }
+    } catch { /* Contact details can be entered directly if account prefill is unavailable. */ }
+
     if (isEditMode) {
       await loadExistingRequest()
     } else {
@@ -327,9 +367,14 @@ async function loadExistingRequest() {
     throw new Error('Only pending quotation requests can be updated.')
   }
 
+  if (existingRequest.contact) {
+    contact.value = { name: String(existingRequest.contact.name || ''), phone: String(existingRequest.contact.phone || ''), email: String(existingRequest.contact.email || '') }
+  }
+
   workDetails.value = Array.isArray(existingRequest.workDetails) ? existingRequest.workDetails.map(work => ({ ...work, rooms: [...(work.rooms || [])] })) : []
 
   selectedItemIds.value = (existingRequest.selectedLayoutItems || []).map(item => item.id)
+  selectedItemWork.value = Object.fromEntries((existingRequest.selectedLayoutItems || []).map(item => [item.id, item.workDescription || '']))
 
   originalHouseholdId.value = getId(existingRequest.householdId)
   const originalPlanId = getId(existingRequest.planId)
@@ -344,7 +389,7 @@ async function loadExistingRequest() {
   form.value = {
     ...originalHouseholdSnapshot.value,
     services: [...(existingRequest.services || [])],
-    description: existingRequest.description || '',
+    description: String(existingRequest.description || '').startsWith(scopeSummaryPrefix) ? '' : (existingRequest.description || ''),
     budget: existingRequest.budget ?? null,
     preferredStartDate: existingRequest.preferredStartDate
       ? String(existingRequest.preferredStartDate).slice(0, 10)
@@ -452,11 +497,6 @@ async function submitRequest() {
     return
   }
 
-  if (!form.value.description.trim()) {
-    errorMessage.value = 'Please describe your renovation requirements.'
-    return
-  }
-
   if (
     form.value.budget === null ||
     form.value.budget === '' ||
@@ -486,7 +526,29 @@ async function submitRequest() {
     errorMessage.value = 'Select at least one layout item or additional renovation requirement.'
     return
   }
+  const contactPhone = contact.value.phone.replace(/[\s()-]/g, '')
+  if (contact.value.name.trim().length < 2 || contact.value.name.trim().length > 100) {
+    errorMessage.value = 'Enter a contact name between 2 and 100 characters.'
+    return
+  }
+  if (!/^\+?[1-9]\d{7,14}$/.test(contactPhone)) {
+    errorMessage.value = 'Enter a valid contact number (8 to 15 digits, with optional + country code).'
+    return
+  }
+  const contactEmail = contact.value.email.trim()
+  if (contactEmail && (contactEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail))) {
+    errorMessage.value = 'Enter a valid email address or leave it blank.'
+    return
+  }
+  for (const item of selectedItems.value) {
+    if (item.requiresExplicitWorkRequest && String(selectedItemWork.value[item.id] || '').trim().length < 5) {
+      errorMessage.value = `Describe the specific work for ${item.displayName || formatLayoutItem(item.item)}. Selecting an appliance does not request its purchase.`
+      return
+    }
+  }
   const requestData = {
+    selectedItemWork: Object.fromEntries(selectedItems.value.map(item => [item.id, String(selectedItemWork.value[item.id] || '').trim()])),
+    contact: { name: contact.value.name.trim(), phone: contactPhone, email: contactEmail },
     selectedItemIds: [...selectedItemIds.value],
     workDetails: workDetails.value.map(work => ({
       service: work.service, scope: work.scope,
@@ -508,7 +570,7 @@ async function submitRequest() {
     },
 
     services: [...form.value.services],
-    description: form.value.description.trim(),
+    description: requestDescription(),
     budget: Number(form.value.budget),
     preferredStartDate: form.value.preferredStartDate || null
   }
@@ -712,11 +774,18 @@ onMounted(getData)
                   <div v-for="(room, index) in eligibleRooms" :key="index" class="col-md-6">
                     <div class="border rounded-3 bg-white p-3 h-100">
                       <h6 class="fw-bold">{{ room.name }}</h6>
-                      <label v-for="item in room.items" :key="item.id" class="d-flex align-items-start gap-2 py-2">
-                        <input v-model="selectedItemIds" type="checkbox" class="form-check-input mt-1" :value="item.id" />
-                        <span class="small flex-grow-1">{{ formatLayoutItem(item.item) }}</span>
-                        <span class="badge bg-success-subtle text-success-emphasis">× {{ item.quantity }}</span>
-                      </label>
+                      <div v-for="item in room.items" :key="item.id" class="mapped-item-row">
+                        <label class="d-flex align-items-start gap-2 py-2">
+                          <input v-model="selectedItemIds" type="checkbox" class="form-check-input mt-1" :value="item.id" />
+                          <span class="small flex-grow-1"><strong>{{ item.displayName || formatLayoutItem(item.item) }}</strong><span class="d-block text-muted mt-1">{{ item.matchingServices?.join(' · ') }}</span></span>
+                          <span class="badge bg-success-subtle text-success-emphasis">× {{ item.quantity }}</span>
+                        </label>
+                        <div v-if="selectedItemIds.includes(item.id)" class="mapped-item-work">
+                          <p class="small text-muted mb-2">{{ item.scope }}</p>
+                          <label :for="'item-work-' + item.id" class="form-label small fw-semibold">Work requested <span class="text-muted">{{ item.requiresExplicitWorkRequest ? '(required)' : '(optional)' }}</span></label>
+                          <textarea :id="'item-work-' + item.id" v-model="selectedItemWork[item.id]" class="form-control form-control-sm" rows="2" maxlength="600" :required="item.requiresExplicitWorkRequest" placeholder="Describe what this contractor should do, e.g. add a power point or install a water connection"></textarea>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -726,7 +795,7 @@ onMounted(getData)
                   <summary class="small text-muted">Other layout items — for reference only</summary>
                   <div v-for="(room, index) in referenceRooms" :key="index" class="small text-muted mt-3">
                     <strong>{{ room.name }}</strong>
-                    <p v-for="item in room.items" :key="item.id" class="mb-1">{{ formatLayoutItem(item.item) }} × {{ item.quantity }} — {{ item.service ? 'Outside this contractor’s services' : 'For reference only' }}</p>
+                    <p v-for="item in room.items" :key="item.id" class="mb-1">{{ item.displayName || formatLayoutItem(item.item) }} × {{ item.quantity }} — {{ item.serviceCategories?.length ? 'Outside this contractor’s services' : 'No service mapping configured' }}</p>
                   </div>
                 </details>
               </template>
@@ -823,6 +892,18 @@ onMounted(getData)
           </div>
         </div>
 
+        <section class="card border-0 shadow-sm rounded-4 mb-4" aria-labelledby="quotation-contact-title">
+          <div class="card-body p-4">
+            <h4 id="quotation-contact-title" class="fw-bold mb-2">Contact details</h4>
+            <p class="small text-muted mb-4">Confirm who the contractor should contact about this request. These details are shared with the contractor you chose. Changing them here does not change your account profile.</p>
+            <div class="row g-3">
+              <div class="col-md-6"><label for="quotation-contact-name" class="form-label fw-semibold">Contact name</label><input id="quotation-contact-name" v-model="contact.name" class="form-control" type="text" autocomplete="name" minlength="2" maxlength="100" required placeholder="Your full name" /></div>
+              <div class="col-md-6"><label for="quotation-contact-phone" class="form-label fw-semibold">Contact number</label><input id="quotation-contact-phone" v-model="contact.phone" class="form-control" type="tel" autocomplete="tel" maxlength="30" required placeholder="e.g. +65 9123 4567" /><p class="small text-muted mt-1 mb-0">Include the country code for overseas numbers.</p></div>
+              <div class="col-12"><label for="quotation-contact-email" class="form-label fw-semibold">Email <span class="text-muted fw-normal">(optional)</span></label><input id="quotation-contact-email" v-model="contact.email" class="form-control" type="email" autocomplete="email" maxlength="254" /></div>
+            </div>
+          </div>
+        </section>
+
         <!-- SECTION 2: RENOVATION REQUIREMENTS -->
         <div class="card border-0 shadow-sm rounded-4 mb-4">
           <div class="card-body p-4">
@@ -884,32 +965,23 @@ onMounted(getData)
                   <input v-else :value="work.rooms.join(', ')" @input="work.rooms = $event.target.value.split(',').map(value => value.trim()).filter(Boolean)" class="form-control" :aria-label="`Areas for ${work.service}`" placeholder="e.g. Kitchen, Bathroom" />
                 </div>
                 <div class="row g-2 mb-3">
-                  <div class="col-6"><label :for="`quantity-${index}`" class="form-label small">Quantity, if known</label><input :id="`quantity-${index}`" v-model.number="work.quantity" type="number" min="0.01" step="any" class="form-control" placeholder="Optional" /></div>
-                  <div class="col-6"><label :for="`unit-${index}`" class="form-label small">Unit</label><select :id="`unit-${index}`" v-model="work.unit" class="form-select"><option value="points">Points</option><option value="units">Units</option><option value="m²">m²</option><option value="m">Metres</option></select></div>
+                  <div class="col-6"><label :for="`quantity-${index}`" class="form-label small">Quantity ({{ work.unit || 'units' }}) <span class="text-muted">— optional</span></label><input :id="`quantity-${index}`" v-model.number="work.quantity" type="number" min="0.01" step="any" class="form-control" placeholder="Optional" /></div>
+                  <div class="col-6"><label :for="`unit-${index}`" class="form-label small">Quantity unit</label><select :id="`unit-${index}`" v-model="work.unit" class="form-select"><option value="points">Points (e.g. sockets)</option><option value="units">Units (individual items)</option><option value="m²">m² (area)</option><option value="m">Metres (length)</option></select></div>
                 </div>
-                <label :for="`work-notes-${index}`" class="form-label small">What needs doing?</label>
-                <textarea :id="`work-notes-${index}`" v-model="work.notes" class="form-control" maxlength="600" rows="2" placeholder="e.g. Paint walls only; keep the ceiling unchanged"></textarea>
+                <p class="small text-muted mb-3">Enter the amount in the selected unit, for example 2 units, 3 points, 20 m² or 4 metres. Leave it blank if unsure. For a whole job or package, describe the work below and let the contractor confirm its pricing basis.</p>
+                <label :for="`work-notes-${index}`" class="form-label small">{{ serviceInstructions(work.service)[0] }}</label>
+                <textarea :id="`work-notes-${index}`" v-model="work.notes" class="form-control" maxlength="600" rows="2" :placeholder="serviceInstructions(work.service)[1]"></textarea>
               </div>
             </div>
 
-            <!-- DESCRIPTION -->
-            <div class="mb-4">
-              <label
-                for="description"
-                class="form-label fw-semibold"
-              >
-                Renovation Description
-              </label>
+          </div>
+        </div>
 
-              <textarea
-                id="description"
-                class="form-control"
-                rows="4"
-                v-model="form.description"
-                placeholder="Describe what you want renovated, including the rooms involved and any specific requirements."
-                required
-              ></textarea>
-            </div>
+        <!-- SECTION 3: PROJECT PREFERENCES -->
+        <section class="card border-0 shadow-sm rounded-4 mb-4" aria-labelledby="project-preferences-heading">
+          <div class="card-body p-4">
+            <h4 id="project-preferences-heading" class="fw-bold mb-2">3. Project Preferences</h4>
+            <p class="small text-muted mb-4">Set your budget and preferred timing. Work instructions belong with the selected items or services above.</p>
 
             <!-- BUDGET -->
             <div class="mb-4">
@@ -953,20 +1025,27 @@ onMounted(getData)
                 :min="today"
               />
             </div>
+            <details class="project-notes border rounded-3 mt-4" :open="Boolean(form.description.trim())">
+              <summary class="fw-semibold p-3">Anything else the contractor should know? <span class="small text-muted fw-normal">(optional)</span></summary>
+              <div class="px-3 pb-3">
+                <label for="description" class="form-label small text-muted">Share overall preferences or constraints. No need to repeat the work listed above.</label>
+                <textarea id="description" class="form-control" rows="3" v-model="form.description" placeholder="e.g. Prefer a minimalist style. Please arrange noisy work on weekdays only."></textarea>
+              </div>
+            </details>
           </div>
-        </div>
+        </section>
 
-        <!-- SECTION 3: SUBMIT -->
+        <!-- SECTION 4: SUBMIT -->
         <div class="card border-0 shadow-sm rounded-4">
           <div class="card-body p-4">
             <h4 class="fw-bold mb-3">
-              3. {{ isEditMode ? 'Save Changes' : 'Submit Request' }}
+              4. {{ isEditMode ? 'Save Changes' : 'Submit Request' }}
             </h4>
 
             <div class="border rounded-3 p-3 mb-4">
-              <h5 class="fw-bold">Your selected scope</h5>
+              <h5 class="fw-bold">Your selected scope</h5><p class="small text-muted">Contact: {{ contact.name || 'Not provided' }} · {{ contact.phone || 'Number not provided' }}</p>
               <p v-if="!selectedItems.length && !form.services.length" class="small text-muted">Select an item or additional work before submitting.</p>
-              <ul v-if="selectedItems.length" class="small mb-2"><li v-for="item in selectedItems" :key="item.id">{{ item.room }} — {{ formatLayoutItem(item.item) }} × {{ item.quantity }}</li></ul>
+              <ul v-if="selectedItems.length" class="small mb-2"><li v-for="item in selectedItems" :key="item.id">{{ item.room }} — {{ item.displayName || formatLayoutItem(item.item) }} × {{ item.quantity }}</li></ul>
               <p v-for="work in workDetails" :key="work.service" class="small mb-1"><strong>{{ work.service }}</strong> — {{ work.scope === 'whole' ? 'Whole flat' : work.scope === 'rooms' ? work.rooms.join(', ') : 'Contractor to assess' }}</p>
               <p class="small text-muted mt-2 mb-0">Unselected layout items are for reference and will not be included automatically.</p>
             </div>
@@ -1035,4 +1114,7 @@ onMounted(getData)
   border-color: #198754 !important;
   background-color: #f0faf4;
 }
+
+.mapped-item-row + .mapped-item-row { border-top:1px solid #edf1ee; margin-top:6px; padding-top:6px; }
+.mapped-item-work { margin:0 0 12px 22px; padding:12px; border-radius:10px; background:#f5f9f6; }
 </style>
