@@ -38,8 +38,9 @@ async function closeProfile() {
 
 async function decideQuotation(request, status) {
   if (decisionRequestId.value || request.status !== 'quoted') return
+  if (status === 'accepted' && (!request.quotation?.startDate || request.quotation.startDate < calendarToday)) { errorMessage.value = 'Ask the contractor to propose an upcoming start date before accepting.'; return }
   const verb = status === 'accepted' ? 'accept' : 'decline'
-  if (!confirm(`Are you sure you want to ${verb} this quotation? This decision cannot be changed here.`)) return
+  if (!confirm(`Are you sure you want to ${verb} this quotation? ${status === 'accepted' ? `You accept the price, scope and start date of ${formatDate(request.quotation.startDate)}. ` : ''}This decision cannot be changed here.`)) return
   decisionRequestId.value = getRequestId(request)
   errorMessage.value = ''
   try {
@@ -384,6 +385,49 @@ const animatedFilterStyle = computed(() => {
   const colours = { total: '#475569', all: '#475569', pending: '#ad620c', received: '#168854', sent: '#168854', accepted: '#2563d9', rejected: '#bf3446' }
   return { '--pill-index': Math.max(0, index), '--pill-count': quotationFilters.value.length, '--pill-colour': colours[activeFilter.value] || colours.total }
 })
+
+// Accepted dates come from the agreed quotation, never the homeowner's preference.
+const calendarToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Singapore', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+const calendarDay = ref(calendarToday)
+const calendarMonth = ref(calendarToday.slice(0, 7))
+function calendarDate(value) { return new Date(value + 'T12:00:00') }
+function calendarKey(date) { return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}` }
+const calendarTitle = computed(() => calendarDate(calendarMonth.value + '-01').toLocaleDateString('en-SG', { month: 'long', year: 'numeric' }))
+const calendarCells = computed(() => {
+  const first = calendarDate(calendarMonth.value + '-01')
+  const offset = (first.getDay() + 6) % 7
+  const count = new Date(first.getFullYear(), first.getMonth()+1, 0).getDate()
+  return Array.from({ length: Math.ceil((offset + count)/7)*7 }, (_, i) => {
+    const date = new Date(first.getFullYear(), first.getMonth(), i-offset+1, 12)
+    const key = calendarKey(date)
+    return { key, number: date.getDate(), current: key.startsWith(calendarMonth.value), count: calendarEvents.value.filter(event => event.date === key).length }
+  })
+})
+const calendarSelectedEvents = computed(() => calendarEvents.value.filter(event => event.date === calendarDay.value))
+const calendarUndated = computed(() => quotationRequests.value.filter(request => request.status === 'accepted' && !request.quotation?.startDate).length)
+function moveCalendarMonth(step) {
+  const date = calendarDate(calendarMonth.value + '-01')
+  date.setMonth(date.getMonth() + step)
+  calendarMonth.value = calendarKey(date).slice(0,7)
+  calendarDay.value = calendarKey(date)
+}
+function resetCalendar() { calendarMonth.value = calendarToday.slice(0,7); calendarDay.value = calendarToday }
+const calendarEvents = computed(() => quotationRequests.value.filter(request => request.status === 'accepted' && /^\d{4}-\d{2}-\d{2}$/.test(request.quotation?.startDate || '')).map(request => ({
+  id: getRequestId(request), date: request.quotation.startDate,
+  name: getContractor(request)?.companyName || 'Contractor', household: request.household?.name || 'Household', total: request.quotation.total
+})))
+
+
+async function openCalendarQuotation(event) {
+  activeFilter.value = 'accepted'
+  if (!expandedQuotations.value.includes(event.id)) expandedQuotations.value.push(event.id)
+  await nextTick()
+  const target = document.getElementById(`calendar-quotation-${event.id}`)
+  if (!target) return
+  target.focus({ preventScroll: true })
+  target.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' })
+}
+
 </script>
 
 <template>
@@ -444,10 +488,27 @@ const animatedFilterStyle = computed(() => {
       </div>
       </div>
 
+        <section class="renovation-calendar mb-4" aria-label="Accepted renovation calendar">
+          <div class="rc-heading"><div><span class="rc-eyebrow">YOUR AGREED DATES</span><h3>Renovation calendar</h3><p>Accepted quotations only · start dates, not project durations</p></div><button type="button" class="rc-today" @click="resetCalendar">Today</button></div>
+          <div class="rc-layout">
+            <div class="rc-month"><div class="rc-navigation"><button type="button" aria-label="Previous month" @click="moveCalendarMonth(-1)">‹</button><strong aria-live="polite">{{ calendarTitle }}</strong><button type="button" aria-label="Next month" @click="moveCalendarMonth(1)">›</button></div>
+              <div class="rc-weekdays"><span v-for="day in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']" :key="day">{{ day }}</span></div>
+              <Transition name="calendar-slide" mode="out-in"><div :key="calendarMonth" class="rc-grid"><button v-for="day in calendarCells" :key="day.key" type="button" class="rc-day" :class="{ selected: calendarDay === day.key, muted: !day.current, 'has-events': day.count > 0, today: day.key === calendarToday }" :aria-pressed="calendarDay === day.key" :aria-label="`${day.key}: ${day.count} renovation starts`" @click="calendarDay = day.key"><span>{{ day.number }}</span><small v-if="day.count" class="rc-event-badge">{{ day.count }}<span class="visually-hidden"> renovation starts</span><span aria-hidden="true"> booked</span></small></button></div></Transition>
+              <p class="rc-legend"><span class="rc-legend-dot" aria-hidden="true"></span>Blue dates have accepted renovation starts</p>
+            </div>
+            <div class="rc-agenda"><span class="rc-eyebrow">RENOVATION STARTS</span><h4>{{ calendarDate(calendarDay).toLocaleDateString('en-SG', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) }}</h4>
+              <Transition name="calendar-slide" mode="out-in"><div :key="calendarDay" aria-live="polite"><button v-for="event in calendarSelectedEvents" :key="event.id" type="button" class="rc-event" @click="openCalendarQuotation(event)" :aria-label="`View quotation for ${event.name}, ${event.household}`"><span class="rc-confirmed">Accepted · agreed start</span><h5>{{ event.name }}</h5><p>{{ event.household }}</p><strong>{{ formatMoney(event.total) }}</strong><span class="rc-event-link">View quotation <span aria-hidden="true">↗</span></span></button><p v-if="!calendarSelectedEvents.length" class="rc-empty">No accepted renovations start on this day.</p></div></Transition>
+              <p v-if="calendarUndated" class="small text-muted mt-3">{{ calendarUndated }} older accepted quotation(s) have no agreed date and cannot appear on this calendar.</p>
+            </div>
+          </div>
+        </section>
+
       <!-- SECTION HEADER -->
       <div
         class="d-flex justify-content-between align-items-center flex-wrap gap-3 mb-4"
       >
+
+
 
         <div>
           <h3 class="fw-bold mb-1">
@@ -508,7 +569,8 @@ const animatedFilterStyle = computed(() => {
         <div
           v-for="request in filteredRequests"
           :key="getRequestId(request)"
-          class="col-12"
+          :id="`calendar-quotation-${getRequestId(request)}`" tabindex="-1"
+          class="col-12 calendar-quotation-target"
         >
 
           <div
@@ -758,10 +820,11 @@ const animatedFilterStyle = computed(() => {
 
               </div>
 
+              <div v-if="request.quotation && ['quoted','accepted'].includes(request.status)" class="alert alert-info mt-3"><strong>{{ request.status === 'accepted' ? 'Agreed' : 'Proposed' }} renovation start:</strong> {{ request.quotation.startDate ? formatDate(request.quotation.startDate) : 'Not set — ask the contractor to revise the quotation with a start date.' }}</div>
               <div v-if="request.status === 'quoted' && request.quotation" class="mt-3">
-                <p class="small text-muted">Reviewed the price and scope? Let the contractor know your decision.</p>
+                <p class="small text-muted">Accepting confirms this quotation’s price, scope and proposed start date. Discuss any changes with the contractor before accepting.</p>
                 <div class="d-flex gap-2">
-                  <button type="button" class="btn btn-success flex-fill" :disabled="Boolean(decisionRequestId)" @click="decideQuotation(request, 'accepted')">Accept Quotation</button>
+                  <button type="button" class="btn btn-success flex-fill" :disabled="Boolean(decisionRequestId) || !request.quotation.startDate || request.quotation.startDate < calendarToday" @click="decideQuotation(request, 'accepted')">Accept Quotation</button>
                   <button type="button" class="btn btn-outline-secondary flex-fill" :disabled="Boolean(decisionRequestId)" @click="decideQuotation(request, 'declined')">Decline</button>
                 </div>
                 <p v-if="decisionRequestId === getRequestId(request)" class="small text-muted mt-2" role="status">Saving your decision...</p>
@@ -877,6 +940,26 @@ const animatedFilterStyle = computed(() => {
 </template>
 
 <style scoped>
+
+/* Booked dates stay distinct from the currently selected day. */
+.rc-day.has-events:not(.selected){background:linear-gradient(140deg,#edf3ff,#dce9ff);color:#244b92;box-shadow:inset 0 0 0 1px #b8cff3,0 3px 8px #244b9210;font-weight:800}
+.rc-day.has-events:not(.selected):hover{background:#d1e2ff;box-shadow:inset 0 0 0 1px #86ade6,0 5px 12px #244b9220}
+.rc-day.has-events.today:not(.selected){box-shadow:inset 0 0 0 2px #20a66a}
+.rc-day .rc-event-badge{display:table;margin:3px auto 0;padding:2px 7px;border-radius:20px;background:#315da5;color:white;font-size:.58rem;line-height:1.25;letter-spacing:.01em;font-weight:800;white-space:nowrap}
+.rc-day.selected .rc-event-badge{background:#ffffffed;color:#147547}
+.rc-legend{display:flex;align-items:center;gap:7px;font-size:.73rem;color:#617487;margin:12px 0 0}.rc-legend-dot{height:9px;width:9px;border-radius:50%;background:#4471b5;box-shadow:0 0 0 3px #e1ebfd;margin:0 3px}
+button.rc-event{display:block;width:100%;text-align:left;color:inherit;cursor:pointer;transition:transform .2s,box-shadow .2s,border-color .2s}
+button.rc-event:hover{transform:translateY(-3px);border-color:#6bb891;box-shadow:0 8px 20px #1a70451a}
+button.rc-event:focus-visible{outline:3px solid #75b99a;outline-offset:3px}.rc-event-link{display:flex;align-items:center;justify-content:space-between;margin-top:14px;padding-top:10px;border-top:1px solid #e4eee8;color:#168453;font-size:.8rem;font-weight:750}
+.calendar-quotation-target{scroll-margin-top:110px}.calendar-quotation-target:focus{outline:3px solid #77bc98;outline-offset:5px}
+@media(prefers-reduced-motion:reduce){button.rc-event{transition:none}button.rc-event:hover{transform:none}}
+
+
+.renovation-calendar{border:1px solid #d7e7df;border-radius:26px;padding:24px;background:linear-gradient(135deg,#fff,#f3faf6);margin-top:24px;color:#203d30}
+.rc-heading,.rc-navigation{display:flex;align-items:center;justify-content:space-between;gap:16px}.rc-heading h3{font-size:1.3rem;font-weight:750;margin:5px 0}.rc-heading p,.rc-agenda p{color:#67796f;font-size:.9rem}.rc-eyebrow{font-size:.68rem;letter-spacing:.13em;font-weight:800;color:#38805a}.rc-layout{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:28px;margin-top:20px}.rc-navigation{margin-bottom:16px}.rc-navigation button,.rc-today{border:1px solid #d3e5d9;border-radius:24px;background:white;color:#197348;padding:7px 16px;transition:background .2s,transform .2s}.rc-navigation button:hover,.rc-today:hover{background:#e3f4e9;transform:translateY(-2px)}.rc-weekdays,.rc-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px}.rc-weekdays{text-align:center;font-size:.72rem;color:#78887e;margin-bottom:8px}.rc-day{position:relative;border:0;border-radius:16px;min-height:48px;background:transparent;color:#284c39;transition:background .25s,box-shadow .25s,transform .25s;color-scheme:light}.rc-day:hover{background:#e4f4e9;transform:translateY(-2px)}.rc-day.selected{background:linear-gradient(120deg,#168553,#27bc70);color:white;box-shadow:0 5px 12px #18865330;transform:translateY(-2px)}.rc-day.muted:not(.selected){color:#adbab2}.rc-day.today:not(.selected){box-shadow:inset 0 0 0 1px #24a76a}.rc-day small{display:block;font-size:.6rem;font-weight:800}.rc-agenda{border-left:1px solid #dce9e0;padding-left:26px}.rc-agenda h4{font-size:1.05rem;font-weight:700;margin:10px 0 20px}.rc-event{padding:16px;background:white;border:1px solid #d8e9df;border-left:4px solid #23a86a;border-radius:16px;margin-bottom:12px}.rc-event h5{font-size:1rem;font-weight:750;margin:10px 0 5px}.rc-event p{margin-bottom:8px}.rc-confirmed{font-size:.7rem;color:#147c4e;font-weight:750}.rc-empty{padding:24px 12px;border:1px dashed #cbded2;border-radius:16px}.calendar-slide-enter-active,.calendar-slide-leave-active{transition:opacity .16s ease,transform .16s ease}.calendar-slide-enter-from{opacity:0;transform:translateX(10px)}.calendar-slide-leave-to{opacity:0;transform:translateX(-10px)}.rc-day:focus-visible,.rc-navigation button:focus-visible,.rc-today:focus-visible{outline:3px solid #75b99a;outline-offset:3px}
+@media(max-width:650px){.rc-layout{grid-template-columns:1fr}.rc-agenda{border-left:0;border-top:1px solid #dce9e0;padding:20px 0 0}.renovation-calendar{padding:16px}.rc-day{min-height:42px}}
+@media(prefers-reduced-motion:reduce){.calendar-slide-enter-active,.calendar-slide-leave-active,.rc-day,.rc-navigation button,.rc-today{transition:none!important;transform:none!important}}
+
 .portfolio-button { display:flex; align-items:center; gap:12px; width:100%; padding:14px; border:1px solid #d5e9dc; border-radius:14px; background:linear-gradient(135deg,#f0faf4,#fafdfb); color:#146c43; text-align:left; cursor:pointer; }
 .portfolio-button:hover { background:#e9f6ee; border-color:#198754; }
 .portfolio-button:focus-visible { outline:3px solid #198754; outline-offset:3px; }

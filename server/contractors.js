@@ -1,3 +1,12 @@
+function scheduleToday() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Singapore', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+}
+function validStartDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(value + 'T00:00:00Z');
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value && value >= scheduleToday();
+}
+
 // Quotation feature only. Shared contractor/profile/portfolio and 3D routes stay in server.js.
 const express = require('express');
 const { ObjectId } = require('mongodb');
@@ -441,8 +450,11 @@ router.patch(
         });
       }
 
+      if (status === 'quoted' && !validStartDate(quotation.startDate)) return res.status(400).json({ error: 'Choose a valid proposed start date today or later.' });
+
       const savedQuotation = status === 'quoted'
         ? {
+            startDate: quotation.startDate,
             total: quotation.total,
             notes: String(quotation.notes || ''),
             items: Array.isArray(quotation.items)
@@ -515,6 +527,10 @@ router.patch(
         });
       }
 
+      if (status === 'accepted') {
+        const offer = await getDb().collection('quotationRequests').findOne({ _id: new ObjectId(requestId), userId: new ObjectId(req.session.userId), status: 'quoted' });
+        if (!validStartDate(offer?.quotation?.startDate)) return res.status(409).json({ error: 'Ask the contractor to send a quotation with a valid upcoming start date before accepting.' });
+      }
       const viewedVersion = req.session.quotationViewedVersions?.[requestId] || 1;
 
       // Only the owner can decide, and only while the quotation
@@ -526,6 +542,7 @@ router.patch(
             _id: new ObjectId(requestId),
             userId: new ObjectId(req.session.userId),
             status: 'quoted',
+            ...(status === 'accepted' ? { 'quotation.startDate': { $gte: scheduleToday() } } : {}),
             $or: viewedVersion === 1
               ? [{ quotationVersion: 1 }, { quotationVersion: { $exists: false } }]
               : [{ quotationVersion: viewedVersion }],
@@ -991,6 +1008,7 @@ router.patch('/quotation-requests/:requestId/revise', auth.requireContractor, ow
     const { requestId } = req.params;
     const { contractorId, expectedVersion, quotation } = req.body;
     if (!ObjectId.isValid(requestId) || !ObjectId.isValid(contractorId) || !Number.isInteger(expectedVersion) || expectedVersion < 1) return res.status(400).json({ error: 'Invalid quotation revision.' });
+    if (!validStartDate(quotation?.startDate)) return res.status(400).json({ error: 'Choose a valid proposed start date today or later.' });
     if (!Array.isArray(quotation?.items) || !quotation.items.length || quotation.items.length > 100) return res.status(400).json({ error: 'Include 1 to 100 quotation items.' });
     const items = quotation.items.map(item => {
       const quantity = Number(item.quantity), unitPrice = Number(item.unitPrice);
@@ -1013,8 +1031,9 @@ router.patch('/quotation-requests/:requestId/revise', auth.requireContractor, ow
         ? `${item.service}: ${item.description}; ${item.quantity} x S$${item.unitPrice.toFixed(2)}` : null;
     }).filter(Boolean);
     if ((previous.items || []).length > items.length) changes.push(`${previous.items.length - items.length} previous line item(s) removed; review the current breakdown.`);
+    if (previous.startDate !== quotation.startDate) changes.push(`Proposed start date: ${previous.startDate || 'not previously set'} → ${quotation.startDate}`);
     const revisionSummary = `Quotation revised to version ${version + 1}. Previous total: S$${Number(previous.total).toFixed(2)}. New total: S$${total.toFixed(2)}.\n` + (changes.length ? 'Changed lines: ' + changes.join('; ') : 'Line items unchanged; notes updated.');
-    const savedQuotation = { total, items, contractorNotes, notes: [contractorNotes, revisionSummary].filter(Boolean).join('\n\n'), warnings: Array.isArray(quotation.warnings) ? quotation.warnings.map(String).slice(0, 20) : [], revisedAt: now };
+    const savedQuotation = { startDate: quotation.startDate, total, items, contractorNotes, notes: [contractorNotes, revisionSummary].filter(Boolean).join('\n\n'), warnings: Array.isArray(quotation.warnings) ? quotation.warnings.map(String).slice(0, 20) : [], revisedAt: now };
     const versionFilter = current.quotationVersion == null ? { quotationVersion: { $exists: false } } : { quotationVersion: version };
     const result = await collection.updateOne(
       { _id: current._id, contractorId: current.contractorId, status: 'quoted', updatedAt: current.updatedAt, ...versionFilter },

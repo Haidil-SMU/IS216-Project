@@ -989,7 +989,7 @@ onMounted(getData)
                 for="budget"
                 class="form-label fw-semibold"
               >
-                Estimated Budget (S$)
+                Your renovation budget (S$)
               </label>
 
               <div class="input-group">
