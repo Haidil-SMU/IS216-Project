@@ -1206,6 +1206,31 @@ async function generateAIQuotation(request) {
   }
 }
 
+// Manual drafts use the same editor, totals and sending validation as AI drafts.
+async function createManualQuotation(request) {
+  if (dashboardBusy.value || request.status !== 'pending') return
+  if (request.aiDraft && !await requestConfirmation(
+    'Starting a manual quotation will replace this unsent draft. Continue?'
+  )) return
+  if (dashboardBusy.value || request.status !== 'pending') return
+  request.actionError = ''
+  request.aiDraft = {
+    manual: true,
+    startDate: '',
+    items: [{
+      service: '', description: '', quantity: 1, unitPrice: null,
+      source: 'Manually entered by contractor', needsReview: true
+    }],
+    notes: '',
+    warnings: []
+  }
+  await nextTick()
+  const editor = document.getElementById(`quotation-editor-${getId(request)}`)
+  editor?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' })
+  editor?.querySelector('details.draft-item')?.setAttribute('open', '')
+  editor?.querySelector('input[type="text"]')?.focus({ preventScroll: true })
+}
+
 // QUOTATION CALCULATIONS
 
 function addQuotationItem(request) {
@@ -1290,7 +1315,7 @@ async function submitQuotation(request) {
     !(request.status === 'pending' || (request.status === 'quoted' && request.revising))
   ) return
 
-  if (pdfFile.value) {
+  if (pdfFile.value && !request.aiDraft.manual) {
     await goToPriceListUpload(
       'Save or cancel your selected PDF before sending this quotation.'
     )
@@ -2065,8 +2090,8 @@ onUnmounted(() => {
             >
               <h4 class="h6 fw-bold mb-2">{{ request.revising ? 'Revise quotation' : 'Prepare quotation' }}</h4>
               <p class="small text-muted">
-                Generate a draft from your latest saved price list,
-                then review it before sending.
+                Generate an AI draft from your saved price list, or create a quotation manually.
+                Review the selected work, prices and proposed start date before sending.
               </p>
 
               <button
@@ -2085,17 +2110,27 @@ onUnmounted(() => {
                 }}
               </button>
 
+              <button
+                v-if="!request.revising"
+                type="button"
+                class="btn btn-outline-success mb-3 ms-sm-2"
+                :disabled="dashboardBusy"
+                @click="createManualQuotation(request)"
+              >Create Quotation Manually</button>
+              <p v-if="!request.revising" class="small text-muted mb-3">Manual entry does not require AI or a PDF. Enter your own verified prices for the homeowner’s selected scope.</p>
+
               <p v-if="request.revising" class="small text-muted">Edit the existing quotation below. Changes are sent only when you approve the revision; the previous version stays in history.</p>
               <button v-if="request.revising" type="button" class="btn btn-sm btn-outline-secondary mb-3" :disabled="dashboardBusy" @click="cancelQuotationRevision(request)">Cancel revision</button>
               <fieldset
                 v-if="request.aiDraft"
+                :id="`quotation-editor-${getId(request)}`"
                 class="bg-white border rounded-3 p-3 p-md-4 mt-2"
                 :disabled="dashboardBusy"
               >
-                <legend class="visually-hidden">Review AI quotation</legend>
-                <h4 class="h5 fw-bold text-success mb-2">Review AI Quotation</h4>
+                <legend class="visually-hidden">Review quotation</legend>
+                <h4 class="h5 fw-bold text-success mb-2">{{ request.aiDraft.manual ? 'Review Manual Quotation' : 'Review Quotation' }}</h4>
                 <p class="small text-muted mb-4">
-                  Verify prices, quantities and conditions against your price list.
+                  {{ request.aiDraft.manual ? 'Enter verified prices and quantities for the selected work. No prices are filled automatically. Add any conditions and choose a proposed start date.' : 'Verify prices, quantities and conditions against your price list.' }}
                 </p>
 
                 <div class="draft-email-action mb-3">
