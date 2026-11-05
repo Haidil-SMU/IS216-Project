@@ -1,18 +1,3 @@
-// placement.js
-// The maths for putting things into a room: where walls are, snapping an item
-// to a wall, and checking whether two items overlap.
-// Used by FloorPlan3D.vue, ThreeDSpatial.vue and energy.js.
-//
-// HOW A ROOM IS DESCRIBED
-//   room = { w, d, h }   width (x direction), depth (z direction), height, in metres
-//
-// THE 4 WALLS (seen from above), numbered 0 to 3:
-//   wall 0 = back  (z = 0)        wall 1 = right (x = w)
-//   wall 2 = front (z = d)        wall 3 = left  (x = 0)
-//
-// "t" means how far along a wall we are (in metres), counted from that wall's start corner.
-// "rotY" is the turn of an item around the vertical axis, in radians.
-
 import { sinkSpan, resolveSpec } from './applianceModels.js'
 
 export const WALL_THICKNESS = 0.1
@@ -32,7 +17,6 @@ function clamp(value, low, high) {
   return Math.max(low, Math.min(high, value))
 }
 
-// Is this value missing (undefined or null)?
 function isMissing(value) {
   return value === undefined || value === null
 }
@@ -52,8 +36,7 @@ export function wallPoint(room, i, t) {
   return [start[0] + TANGENT[i][0] * t, start[1] + TANGENT[i][1] * t]
 }
 
-// Which wall is closest to the point p = [x, z]?
-// Gives { i: wall number, d: distance to that wall, t: position along that wall }
+// Which wall is closest to the point
 export function nearestWall(room, p) {
   const x = p[0]
   const z = p[1]
@@ -82,7 +65,6 @@ function candidateAt(spec, pos) {
 // ============================================================
 
 // Put an item flat against wall i, t metres along it.
-// Gives { x, z, rotY, wall, t } or null if the item is too wide for the wall.
 export function onWall(room, spec, i, t) {
   const half = spec.w / 2 + 0.05
   const length = wallLength(room, i)
@@ -169,7 +151,7 @@ function onCounter(counter, spec, cu) {
   return counterPose(counter, spec, newCu)
 }
 
-// Which counter is the point p = [x, z] over? Gives { c: the counter, dx, dn } or null.
+// Which counter is the point p = [x, z] over?
 function counterAt(items, p) {
   let best = null
   for (const c of items) {
@@ -196,7 +178,6 @@ function counterAt(items, p) {
 
 // Work out where an item goes when the user points at p = [x, z].
 // "current" is the item being moved (so we can keep its rotation), "items" are the others.
-// Gives a position, or null if it cannot go there.
 export function placeAt(room, spec, p, current, items = []) {
   // things that stand on a counter
   if (spec.mode === 'top') {
@@ -231,13 +212,12 @@ export function placeAt(room, spec, p, current, items = []) {
 // CHECKING FOR CLASHES
 // ============================================================
 
-// Does this item stand on the floor (not hanging from the ceiling)?
+// Check if item stand on the floor (not hanging from the ceiling)
 function isGround(spec) {
   return spec.y === 0 && spec.mode !== 'ceiling'
 }
 
 // The floor area an item needs: a centre (x, z) and half sizes (hx, hz).
-// A door also needs room in front of it, for the door to swing open.
 function footprint(item) {
   const spec = item.spec
 
@@ -251,7 +231,7 @@ function footprint(item) {
   return { x: item.x, z: item.z, hx: half[0], hz: half[1] }
 }
 
-// Do items a and b overlap? (true = yes)
+// Check item overlap
 function clash(a, b) {
   // a stretch of wall that has been knocked out: nothing can hang on it
   if (a.spec.kind === 'gap' || b.spec.kind === 'gap') {
@@ -312,7 +292,7 @@ export function gapsOf(room) {
   return gaps
 }
 
-// Does the candidate clash with any of the other items?
+// Check clash
 export function isBlocked(candidate, others) {
   for (const other of others) {
     if (other !== candidate && clash(candidate, other)) {
@@ -409,8 +389,6 @@ export function findSpot(room, spec, others) {
 // ============================================================
 
 // Cut each wall into rectangular pieces, leaving holes where doors and windows are.
-// Gives a list of { wall, t0, t1, y0, y1 } (start/end along the wall, bottom/top height).
-// "trimStart" says, per wall, if the start of that wall should not stick out past the corner.
 export function wallPieces(room, items, trimStart = []) {
   const pieces = []
 
@@ -438,12 +416,12 @@ export function wallPieces(room, items, trimStart = []) {
     for (const opening of openings) {
       const t0 = opening.t - opening.spec.w / 2
       const t1 = opening.t + opening.spec.w / 2
-      addPiece(i, t, t0, 0, room.h)                                              // wall before the opening
-      addPiece(i, t0, t1, 0, opening.spec.y)                                     // wall under the opening
-      addPiece(i, t0, t1, opening.spec.y + opening.spec.h, room.h)               // wall above the opening
+      addPiece(i, t, t0, 0, room.h)
+      addPiece(i, t0, t1, 0, opening.spec.y)
+      addPiece(i, t0, t1, opening.spec.y + opening.spec.h, room.h)
       t = t1
     }
-    addPiece(i, t, wallLength(room, i), 0, room.h)                               // wall after the last opening
+    addPiece(i, t, wallLength(room, i), 0, room.h)
   }
 
   return pieces
@@ -451,7 +429,6 @@ export function wallPieces(room, items, trimStart = []) {
 
 // ============================================================
 // NEIGHBOURING ROOMS (rooms are laid out on one shared flat floor plan)
-// Here "room" has room.origin = { x, z } and room.dimension = { w, d }.
 // ============================================================
 
 // Where a wall starts, and how long it is, on the shared floor plan.
@@ -517,8 +494,7 @@ function gAlong(r, wall, t) {
 
 const NEAR = 0.02  // walls closer than this (metres) count as touching
 
-// Do rooms A and B share a wall? Gives { wall, length, t } (the wall of A, how long the
-// shared part is, and where its middle is) or null.
+// Check for shared walls
 export function sharedWall(A, B) {
   const a = rectOf(A)
   const b = rectOf(B)
@@ -543,7 +519,7 @@ export function sharedWall(A, B) {
   return null
 }
 
-// Make a copy of a plain object (so we can change the copy without changing the original).
+// Make a copy of a plain object
 function copyOf(object) {
   const copy = {}
   for (const key in object) {
@@ -553,9 +529,6 @@ function copyOf(object) {
 }
 
 // When a room is resized or moved, move its items with it.
-// oldR / newR are the room before and after. If "carry" is true the items keep their
-// distance from the room's corner, otherwise they stay at the same spot on the floor plan.
-// Gives the list of items with their new positions.
 export function refitPlacements(oldR, newR, carry) {
   const od = oldR.dimension
   const nd = newR.dimension
@@ -722,9 +695,6 @@ function idOf(room) {
 }
 
 // A door in room r must also fit in the wall of the room behind it.
-// Gives null if all is fine. Otherwise gives the blocking room, or
-// { name, straddle: true } if the door would sit half in one room and half in another.
-// options (all optional): { ignoreId: an item to ignore, cache: a Map to reuse results }
 export function doorBlockedBeyond(rooms, r, spec, pos, options = {}) {
   if (spec.kind !== 'door' || pos.wall < 0) {
     return null

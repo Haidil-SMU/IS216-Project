@@ -1,22 +1,3 @@
-// ============================================================================
-// layout.js  (server)
-// ----------------------------------------------------------------------------
-// What it is : the rules for the flat's layout. It checks and changes rooms,
-//              doors, windows and wall openings, and checks where appliances
-//              may be placed. The client has a matching copy of some of this
-//              in stores/placement.js (see test/layout-parity.test.js).
-// Receives   : lists of room objects as stored in the "rooms" collection:
-//              { _id, name, type, origin: {x, z}, dimension: {w, d, h},
-//                placements: [...], openWalls: [...] }
-// Sends      : new lists of rooms (the original lists are never changed), or
-//              throws LayoutError / PlacementError with a message the user can read.
-// Used by    : spatialRoutes.js
-//
-// Wall numbers: 0 = top, 1 = right, 2 = bottom, 3 = left.
-// "t" is a distance along one wall. "g" is the same spot measured on the whole
-// floor plan (x for walls 0 and 2, z for walls 1 and 3).
-// ============================================================================
-
 const { ObjectId } = require('mongodb');
 const { opening, wallPoint, NORMAL, isOpeningKey, generateRooms } = require('./floorplan');
 
@@ -404,8 +385,6 @@ function findShift(shifts, id) {
 }
 
 // Moves the placements of oldR so they fit the changed room newR.
-// carry = true means the room only moved (not resized), so items keep their
-// positions relative to the room.
 function refit(oldR, newR, carry) {
   const od = oldR.dimension;
   const nd = newR.dimension;
@@ -481,7 +460,6 @@ function refit(oldR, newR, carry) {
 
 // After rooms moved, rebuild all the doors / wide openings between them, move
 // windows that now face another room, and make sure every room is reachable.
-// Changes the rooms in the list directly.
 function relink(rooms) {
   // 1. Remember which rooms were joined, and how
   const links = [];
@@ -679,7 +657,6 @@ function warnings(rooms) {
 
 // Throws a LayoutError if the box (x, z, w, d) is not allowed for a room of this
 // type: too small, too big, outside the build area, or overlapping another room.
-// exceptId is the room being changed (it may overlap its own old place).
 function checkRect(rooms, box, type, exceptId) {
   const min = MIN[type];
   if (box.w < min - EPS || box.d < min - EPS) {
@@ -1197,10 +1174,6 @@ function samePose(a, b) {
 }
 
 // Throws a PlacementError when something in the room's placements is not allowed.
-// options (optional):
-//   previous : the room as it was saved before (only changed items are checked)
-//   openings : 'keep' (default) = doors/windows must stay as they were,
-//              'any' = doors/windows may change
 function checkRoomPlacements(room, options) {
   let previous = null;
   let openings = 'keep';
@@ -1311,7 +1284,7 @@ function halfWidth(p) {
 }
 
 // Puts a copy of p at x, z in the result. Remembers how far it moved so that
-// items stacked on it can follow. Returns the copy.
+// items stacked on it can follow.
 function placeItem(state, p, x, z) {
   const dx = x - p.x;
   const dz = z - p.z;
@@ -1327,7 +1300,6 @@ function placeItem(state, p, x, z) {
 }
 
 // Moves the appliances (not doors/windows) of oldRoom into the new room newRoom.
-// Returns { placements, adjusted, dropped }.
 function carryOver(oldRoom, newRoom) {
   const W = newRoom.dimension.w;
   const D = newRoom.dimension.d;
@@ -1383,7 +1355,7 @@ function carryOver(oldRoom, newRoom) {
 
 // Builds the rooms of a new flat type. Rooms with the same name keep their id and
 // their appliances; new rooms are added; old rooms that are not in the new flat
-// are removed. Returns { keep, add, remove, adjusted, dropped }.
+// are removed.
 function reconcileRooms(oldRooms, flatTypeId, householdId) {
   const fresh = generateRooms(flatTypeId).rooms;
   const unmatched = [];

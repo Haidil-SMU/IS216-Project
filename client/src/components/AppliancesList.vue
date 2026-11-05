@@ -1,15 +1,3 @@
-<!--
-  AppliancesList.vue
-  The catalogue at the bottom of the 3D page: category tabs and a scrolling row of cards.
-  Hover over (or tap) a card to choose a brand and press "+ Add".
-
-  Events it sends to its parent:
-    tab-changed    { tabId, applianceName }    the user picked another category tab
-    add-appliance  { applianceTypeKey, category, name, brand, model, kwhYear }
-                   the user pressed "+ Add"
-
-  The list of things to show comes from stores/catalog.js
--->
 <template>
   <div class="catalogue d-flex flex-column h-100 w-100">
     <!-- CATEGORY TABS -->
@@ -111,15 +99,15 @@ const emit = defineEmits(['tab-changed', 'add-appliance'])
 // ------------------------------------------------------------
 // DATA
 // ------------------------------------------------------------
-const activeTab = ref('kitchen')    // the category tab that is open
-const selectedBrands = ref({})      // the brand picked for each type, e.g. { fridge: 'Samsung' }
-const openKey = ref(null)           // the card that is flipped open (touch screens only)
+const activeTab = ref('kitchen')
+const selectedBrands = ref({})
+const openKey = ref(null)
 
-const row = ref(null)               // the scrolling row of cards (an HTML element)
+const row = ref(null)
 const canScrollLeft = ref(false)
 const canScrollRight = ref(false)
 
-const HOVER_NAME_MAX = 22           // longest name shown on the back of a card
+const HOVER_NAME_MAX = 22
 
 // ------------------------------------------------------------
 // TABS AND CARDS
@@ -135,7 +123,6 @@ const tabs = computed(() => {
 })
 
 // The cards of the open tab, split into groups.
-// Looks like: [ { name: 'Kitchen', items: [ { categoryKey, typeKey, typeData }, ... ] } ]
 const visibleGroups = computed(() => {
   const groups = []
   const category = catalogue.categories[activeTab.value]
@@ -168,7 +155,7 @@ const visibleGroups = computed(() => {
 function selectTab(tabId) {
   activeTab.value = tabId
   if (row.value) {
-    row.value.scrollLeft = 0   // go back to the start of the row
+    row.value.scrollLeft = 0
   }
 
   const category = catalogue.categories[tabId]
@@ -183,7 +170,7 @@ function selectTab(tabId) {
 // PRODUCT, BRAND, ENERGY
 // ------------------------------------------------------------
 
-// The product (brand + model) chosen for a card. The first product is the default.
+// The product (brand + model) chosen for a card.
 function productOf(item) {
   const list = item.typeData.products
   if (!list || list.length === 0) {
@@ -282,7 +269,6 @@ function handleAddAppliance(item) {
 // ------------------------------------------------------------
 
 // On a touch screen there is no hover, so a tap flips the card open or closed.
-// (With a mouse, the CSS :hover rule flips it.)
 function toggleOpen(key) {
   const hasHover = window.matchMedia('(hover: hover)').matches
   if (hasHover) {

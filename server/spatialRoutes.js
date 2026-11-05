@@ -1,19 +1,3 @@
-// ============================================================================
-// spatialRoutes.js  (server)
-// ----------------------------------------------------------------------------
-// What it is : the Express router for the 3D floor plan, mounted at /api/spatial.
-//              It loads and saves a household's rooms, doors/windows, wide wall
-//              openings and appliance placements, and does the same for the
-//              copy of the layout stored inside a saved plan.
-// Receives   : HTTP requests from the 3D page (ThreeDSpatial.vue) with JSON bodies.
-// Sends      : JSON such as { household, rooms, footprint, warnings }.
-//              Rule problems (LayoutError / PlacementError) answer 409.
-// Used by    : server.js. The router is the main export; the extra exports at the
-//              bottom are used by server.js and the tests:
-//                floorplanOf, planFloorplanOf, sanitizePlacements, syncRoomsToFlatType
-// The layout rules themselves live in layout.js; the database writes in layoutWrite.js.
-// ============================================================================
-
 const express = require('express');
 const { ObjectId } = require('mongodb');
 const { getDb } = require('./db');
@@ -58,8 +42,6 @@ function finite(v, d) {
 }
 
 // Used inside catch blocks: answers with the right status for the kind of error.
-//   409 = a layout/placement rule was broken, 400/404 = a problem we raised ourselves,
-//   anything else is passed on to Express (a real server error).
 function sendError(e, res, next) {
   if (e instanceof L.LayoutError || e instanceof PlacementError) {
     return bad(res, e.message, 409);
@@ -173,7 +155,6 @@ function idFor(idTable, raw) {
 
 // Cleans a list of placements from the browser: checks the required fields,
 // trims texts, turns numbers into real numbers and gives every placement a real ObjectId.
-// Throws a 400 error when a placement is not valid.
 function sanitizePlacements(list) {
   const idTable = [];
   const out = [];
@@ -294,7 +275,6 @@ function finiteOr0(v) {
 }
 
 // The parts of a room that can change when it is edited, with bad numbers replaced by 0.
-// Computed energyInfo is left out (it is added when the Energy Planner reads rooms).
 function geometryOf(r) {
   const placements = [];
   for (const old of r.placements) {
@@ -492,7 +472,7 @@ function ignoreError() {
 
 // Two requests that change the same flat at the same time could overwrite each
 // other. Each flat (the "key") has a queue: a new job starts only after the
-// previous job for that key has finished. Returns the result of job.
+// previous job for that key has finished.
 const locks = {};
 function withLock(key, job) {
   let previous = locks[key];
@@ -525,7 +505,7 @@ function ensureRooms(db, household) {
 }
 
 // When the user changes their flat type: rebuilds the rooms, keeping appliances
-// where the room name matches. Returns what was added / removed / dropped.
+// where the room name matches. 
 function syncRoomsToFlatType(db, householdId, flatTypeId) {
   return withLock(String(householdId), async function () {
     if (!LAYOUTS[flatTypeId]) {
@@ -1453,7 +1433,6 @@ router.delete('/plans/:planId/rooms/:rid/placements/:pid', async function (req, 
 // ============================================================================
 
 // The floor plan of the household with this id (the home layout), or null.
-// Used by server.js for the contractor's view of a quotation request.
 async function floorplanOf(db, ref, userId) {
   let idText = '';
   if (!isMissing(ref)) {

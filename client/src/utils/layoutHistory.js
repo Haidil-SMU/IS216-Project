@@ -1,23 +1,6 @@
-// layoutHistory.js
-// Remembers the Undo / Redo lists of the 3D page, so they are still there
-// after the page is reloaded (they are kept in sessionStorage).
-//
-// It is written like a composable (see Week 4): call useLayoutHistory() once
-// and you get an object with three functions:
-//   history.save(id, rooms, undo, redo)   remember the lists of one layout
-//   history.load(id, rooms)               get the lists back -> { undo, redo }
-//   history.flush()                       write to sessionStorage right now
-//
-// "id" is the id of the saved plan ('' means the current home layout).
-// A saved list is only used again if the rooms still look exactly the same
-// as when the list was saved. layoutSig() makes a short text that describes
-// the rooms, and two layouts are the same when their texts are the same.
-//
-// Used by: views/ThreeDSpatial.vue
-
 const STORAGE_KEY = 'ecohome.3d.history'
-const MAX_CHARS = 1500000  // sessionStorage is small, so old steps are dropped above this size
-const SAVE_DELAY_MS = 400  // wait a little, so quick changes are written only once
+const MAX_CHARS = 1500000
+const SAVE_DELAY_MS = 400
 
 // ============================================================
 // SMALL HELPERS
@@ -107,8 +90,7 @@ export function layoutSig(rooms) {
 // ============================================================
 
 export function useLayoutHistory() {
-  // What we remember while the page is open, one entry per layout id:
-  //   { sig, undo, redo }
+  // What we remember while the page is open, one entry per layout id: { sig, undo, redo }
   const histories = {}
 
   // The ids that still have to be written to sessionStorage.
@@ -141,7 +123,6 @@ export function useLayoutHistory() {
         }
       }
 
-      // too big? drop the oldest undo steps until it fits (keep at least one)
       let text = JSON.stringify(all)
       for (const id of ids) {
         const copy = all[id]
@@ -155,11 +136,11 @@ export function useLayoutHistory() {
         sessionStorage.setItem(STORAGE_KEY, text)
       }
     } catch (error) {
-      // sessionStorage can be full or blocked. The history is a bonus, so ignore it.
+      
     }
   }
 
-  // Remember the lists of one layout. They are written to sessionStorage a moment later.
+  // Remember the lists of one layout
   function save(id, rooms, undo, redo) {
     histories[id] = { sig: layoutSig(rooms), undo: undo.slice(), redo: redo.slice() }
 
@@ -193,7 +174,7 @@ export function useLayoutHistory() {
     return { undo: [], redo: [] }
   }
 
-  // Write to sessionStorage right now (used when the page is closed).
+  // Write to sessionStorage
   function flush() {
     if (!timer) {
       return

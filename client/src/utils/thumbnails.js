@@ -1,10 +1,3 @@
-// thumbnails.js
-// Helper functions that draw the small 3D pictures (thumbnails) of appliances
-// shown on the catalogue cards. Used by components/Appliance3D.vue.
-//
-// IMPORTANT: every card shares ONE WebGL renderer. Browsers only allow a few
-// WebGL canvases at the same time, so we cannot give each card its own.
-
 import * as THREE from 'three'
 import { createAppliance3DModel } from '../stores/applianceModels.js'
 
@@ -12,21 +5,16 @@ import { createAppliance3DModel } from '../stores/applianceModels.js'
 export const THUMB_W = 280
 export const THUMB_H = 200
 
-// The shared 3D tools. They are null until the first thumbnail is needed.
 let renderer = null
 let scene = null
 let camera = null
-
-// Pictures we already made, so each one is only drawn once.
-// Looks like: { 'kitchen:fridge': 'data:image/png;base64,....' }
 const stills = {}
 
 // ============================================================
 // SET UP / TEAR DOWN THE SHARED RENDERER
 // ============================================================
 
-// Make the renderer, scene, camera and lights (only the first time).
-// Gives back true if it worked, false if this browser has no WebGL.
+// Make the renderer, scene, camera and lights
 function setupRenderer() {
   if (renderer) {
     return true
@@ -120,7 +108,6 @@ function makeSubject(type, category) {
 // ============================================================
 
 // A still picture (image data URL) of one appliance.
-// Gives back null if WebGL is not available.
 export function getStillPicture(type, category) {
   const key = category + ':' + type
 
@@ -146,10 +133,6 @@ export function getStillPicture(type, category) {
 }
 
 // A spinning version of the appliance.
-// Gives back an object with two functions:
-//   draw(angle, ctx)  - draw one frame, turned by "angle", onto a 2D canvas
-//   dispose()         - stop and clean up
-// Gives back null if WebGL is not available.
 export function createSpinner(type, category) {
   if (!setupRenderer()) {
     return null

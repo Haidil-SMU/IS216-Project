@@ -1,15 +1,3 @@
-// applianceModels.js
-// Builds the 3D models (three.js) for everything we can put in a room:
-// appliances, furniture, doors, windows and counters.
-//
-// Receives: the type key (for example 'sofa_3_seater') and the category ('build', 'kitchen', ...)
-// Gives back:
-//   createAppliance3DModel(type, category) -> a three.js Group (the model)
-//   resolveSpec(type, category)            -> the size and kind of the thing
-//   sinkSpan(counter)                      -> where the sink is on a counter
-//
-// Used by: placement.js, FloorPlan3D.vue, ThreeDSpatial.vue, EnergyPlanner.vue, utils/thumbnails.js
-
 import * as THREE from 'three'
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
 import { WINDOW_KEYS, DOOR_KEYS, FURNITURE_KEYS } from './catalog.js'
@@ -724,8 +712,6 @@ function buildCook(spec, b) {
     b.cyl(w * 0.5, h * 0.22, 0x1c1f24, [0, h * 0.78, 0])
     b.box(w * 0.5, 0.05, 0.03, 0x4b5563, [0, h * 0.32, front + 0.01], METAL)
     b.box(0.04, 0.025, 0.01, 0x10b981, [0, h * 0.62, front], { emissive: 0x10b981, emissiveIntensity: 0.6 })
-    // NOTE: the original code also draws these rice-cooker style shapes on top of the air fryer.
-    // They are kept so the model looks exactly the same as before.
     b.cyl(w * 0.45, h * 0.75, 0xeceff3, [0, 0, 0])
     b.cyl(w * 0.47, h * 0.12, 0xcfd6dd, [0, h * 0.75, 0])
     b.ball(0.025, 0x64748b, [0, h * 0.9, 0])

@@ -1,16 +1,3 @@
-// ============================================================================
-// layoutWrite.js  (server)
-// ----------------------------------------------------------------------------
-// What it is : helpers for saving rooms to the database safely.
-//   layoutOps       - works out the smallest list of writes needed to turn the
-//                     rooms stored in the database into the rooms the user sent.
-//   bulkWriteSafely - runs a list of writes together (all or nothing) when the
-//                     database supports transactions, otherwise one after another.
-// Receives   : the rooms collection, a list of write operations, stored rooms,
-//              incoming rooms and the household id.
-// Used by    : spatialRoutes.js
-// ============================================================================
-
 const { getClient } = require('./db');
 
 // ============================================================================
@@ -18,7 +5,6 @@ const { getClient } = require('./db');
 // ============================================================================
 
 // True when the error just means "this database cannot do transactions"
-// (for example a plain local MongoDB that is not a replica set).
 function noTransactions(e) {
   if (!e) {
     return false;
@@ -43,8 +29,6 @@ function noTransactions(e) {
 }
 
 // Runs the writes in ops on the collection.
-// Tries a transaction first; if the database cannot do that, writes normally.
-// "client" is optional (only tests pass it).
 async function bulkWriteSafely(collection, ops, client) {
   if (!ops.length) {
     return;
@@ -83,7 +67,7 @@ async function bulkWriteSafely(collection, ops, client) {
 // ============================================================================
 
 // Makes a copy of a value in a fixed form, so two equal rooms always give the
-// same text: ObjectIds and Dates become strings, object keys are sorted.
+// same text
 function canon(v) {
   if (v && typeof v.toHexString === 'function') {
     return String(v);
@@ -140,9 +124,7 @@ function findRoom(rooms, id) {
   return null;
 }
 
-// Compares the stored rooms with the incoming rooms and returns the writes needed:
-//   - a replaceOne (upsert) for every new or changed room
-//   - one deleteMany for the rooms that are no longer there
+// Compares the stored rooms with the incoming rooms and returns the writes needed
 function layoutOps(stored, incoming, householdId) {
   const ops = [];
 

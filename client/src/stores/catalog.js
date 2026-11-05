@@ -1,16 +1,8 @@
-// catalog.js
-// The list of things a user can put into the 3D room
-// (appliances, furniture, doors, windows, counters).
-// The list is loaded ONCE from the server and then shared by every component.
-
 import { reactive } from 'vue'
 import axios from 'axios'
 
-// Shared data. Components read it with: catalogue.categories
-// Shape:  categories = { kitchen: { name: 'Kitchen', types: { fridge: {...}, ... } }, ... }
 export const catalogue = reactive({ categories: {} })
 
-// The categories we show, in this order. (key = id used by the server, value = label on screen)
 const CATEGORY_NAMES = {
   build: 'Build',
   kitchen: 'Kitchen',
@@ -70,7 +62,6 @@ export function typeOf(category, typeKey) {
 }
 
 // A shorter name to fit in small cards, e.g. "Fridge (2-door, 300L)" becomes "Fridge".
-// Anything longer than "max" letters is cut at a space and ends with "…".
 export function shortNameOf(type, max = 36) {
   let name = ''
   if (type) {
@@ -131,7 +122,6 @@ export function kwhOfPlacement(placement) {
 // ============================================================
 // KEYS THAT DESCRIBE WHAT KIND OF THING SOMETHING IS
 // ============================================================
-// A Set is like an array, but "set.has(x)" quickly tells us if x is inside it.
 
 export const OPENING_KEYS = new Set(['single_glazed_window', 'double_glazed_window', 'timber_flush_door', 'glass_sliding_door'])
 export const WINDOW_KEYS = new Set(['single_glazed_window', 'double_glazed_window'])

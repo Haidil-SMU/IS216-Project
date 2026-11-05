@@ -1,27 +1,3 @@
-<!--
-  ThreeDSpatial.vue
-  The 3D page of the app: the 3D picture of the flat in the middle, the room list and
-  energy figures on the right, and the appliance catalogue at the bottom.
-
-  What this page does:
-    - loads the household's rooms from the server (/api/spatial) and shows them in FloorPlan3D
-    - lets the user add, move and remove appliances, doors and windows
-    - lets the user resize rooms, knock out walls (hammer) and lock the room sizes
-    - works out the yearly energy (stores/energy.js) and shows tips
-    - Undo / Redo (Ctrl+Z, Ctrl+Shift+Z) for every change
-    - can edit the current home layout or a layout saved in an energy plan (?plan=... in the address)
-
-  Child components it uses:
-    FloorPlan3D       the 3D scene (it sends events when the user drags something)
-    AppliancesList    the catalogue (it sends "add-appliance")
-    AppDialog         pop-up messages and "Are you sure?" questions
-
-  Other files it uses:
-    stores/catalog.js, stores/placement.js, stores/energy.js, stores/applianceModels.js
-    utils/layoutHistory.js   keeps the Undo / Redo lists when the page is reloaded
-
-  Registered in router/index.js.
--->
 <template>
   <div class="spatial-page" :style="{ '--nav-h': navH + 'px' }">
     <div class="spatial-sky" aria-hidden="true">
@@ -544,10 +520,8 @@ function reasonOf(error) {
 }
 
 // ============================================================
-// TALKING TO THE SERVER (axios)
+// AXIOS
 // ============================================================
-// planId is '' or undefined for the current home layout,
-// or the id of a saved plan when a plan is being edited.
 
 const API_URL = '/api/spatial'
 
@@ -675,7 +649,7 @@ const dialog = ref(null)
 const selectedRoomId = ref(null)
 const selectedItemId = ref(null)
 
-// While an item is being dragged, FloorPlan3D tells us where it is: { roomId, poses }
+// While an item is being dragged
 const preview = ref(null)
 
 // Which pictures are drawn on the floors
@@ -693,7 +667,6 @@ const dockOpen = ref(window.innerHeight >= 860)
 const navH = ref(72)
 
 // Changes are sent to the server one after another, never at the same time.
-// Every change is put in this queue with enqueue().
 let taskQueue = Promise.resolve()
 
 function enqueue(task) {
@@ -753,8 +726,8 @@ const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').match
 
 const loadError = ref('')
 const needsHousehold = ref(false)
-const dataReady = ref(false)   // the data came from the server
-const sceneReady = ref(false)  // the 3D scene is drawn
+const dataReady = ref(false)
+const sceneReady = ref(false)
 const loaderGone = ref(false)
 const loaderLeaving = ref(false)
 let sceneTimer = null
@@ -848,7 +821,6 @@ async function loadAll() {
 }
 
 // Use a layout that came from the server.
-// keepHistory = true keeps the Undo / Redo lists as they are.
 function applyLoaded(loaded, keepHistory = false) {
   plan.value = loaded
   if (isMissing(loaded.warnings)) {
@@ -866,11 +838,11 @@ function applyLoaded(loaded, keepHistory = false) {
 // ============================================================
 
 const SCOPE_KEY = 'ecohome.3d.layout'
-const scopeId = ref('')       // '' = the current home layout, otherwise the id of a plan
-const energyPlans = ref([])   // the saved plans of the household
-let scopeReady = false        // false until the first load is finished
+const scopeId = ref('')
+const energyPlans = ref([])
+let scopeReady = false
 
-// The id to send to the server (undefined for the current home layout)
+// The id to send to the server
 function planScope() {
   if (scopeId.value) {
     return scopeId.value
@@ -878,7 +850,7 @@ function planScope() {
   return undefined
 }
 
-// The plan being edited (null for the current home layout)
+// The plan being edited
 const scopePlan = computed(function () {
   const found = energyPlans.value.find(function (p) {
     return p.id === scopeId.value
@@ -970,7 +942,6 @@ async function switchScope(event) {
 }
 
 // Copy the current home layout into a plan.
-// reset = true replaces a layout the plan already has.
 async function useHomeLayout(target, reset) {
   if (!target) {
     return
@@ -1154,7 +1125,6 @@ function nameOf(placement) {
   return type.name
 }
 
-// The things in a room in the form that energy.js and FloorPlan3D need.
 // While an item is being dragged, its preview position is used instead.
 function placedOf(room) {
   const list = []
@@ -1211,7 +1181,6 @@ function placedOf(room) {
 }
 
 // The list on the right: the appliances and furniture of the selected room
-// (doors and windows are not in the list).
 const roomItems = computed(function () {
   const room = selectedRoom.value
   if (!room) {
@@ -1832,7 +1801,7 @@ async function onEditRect(payload) {
   })
 
   if (saved) {
-    // new neighbours? then remind the user that they can add a door
+    // remind the user that they can add a door
     const moved = roomOf(roomId)
     const newNames = []
     if (moved) {
@@ -1919,7 +1888,7 @@ function hangingOnSharedWall(a, b) {
   return names
 }
 
-// The user clicked a wall with the hammer. payload = { roomId, otherId, open }
+// The user clicked a wall with the hammer.
 async function onHammerWall(payload) {
   const roomId = payload.roomId
   const otherId = payload.otherId
@@ -1972,9 +1941,6 @@ function candidateAt(spec, pos) {
 }
 
 // Find every spot on the walls of a room where a door or window fits.
-// Gives { spots, skipped }:
-//   spots    a list of [wall, t]
-//   skipped  names of rooms where a door would not fit because something blocks the other side
 function openingSpots(room, appliance) {
   const spec = resolveSpec(appliance.applianceTypeKey, appliance.category)
   const dim = room.dimension
@@ -2136,7 +2102,6 @@ async function handleAddAppliance(appliance) {
 }
 
 // Items were moved or turned in the 3D view. payload = { roomId, updates }
-// Each update is { id, x, z, rotY, wall, t, cu }.
 function onMoveItems(payload) {
   const roomId = payload.roomId
   const updates = payload.updates
@@ -2235,7 +2200,6 @@ function removeItem(id) {
 }
 
 // Remove every appliance and piece of furniture from the selected room.
-// Countertops, doors and windows stay.
 async function clearRoomItems() {
   const room = selectedRoom.value
   if (!room) {
@@ -2374,8 +2338,6 @@ onUnmounted(function () {
 </script>
 
 <style>
-/* Big screens: the page fits the window and never scrolls. Phones and tablets
-   (narrower than 992px, or shorter than 521px) scroll like a normal page instead. */
 @media (min-width: 992px) and (min-height: 521px) {
   html.no-page-scroll,
   html.no-page-scroll body {
@@ -2981,8 +2943,7 @@ onUnmounted(function () {
 
 /* Tablets, phones and short (landscape) screens: the page scrolls.
    The 3D view keeps a fixed height, then the energy card, recommendations, room
-   breakdown and catalogue stack underneath it. Keep this query the exact opposite
-   of the one in the unscoped <style> above (min-width: 992px and min-height: 521px). */
+   breakdown and catalogue stack underneath it. */
 @media (max-width: 991px), (max-height: 520px) {
   .spatial-page {
     height: auto;
@@ -3047,7 +3008,7 @@ onUnmounted(function () {
   .panel-card { padding: 12px; }
 }
 
-/* Phone held sideways: the canvas takes (nearly) the whole screen height */
+/* Phone held sideways */
 @media (max-height: 520px) {
   .canvas-card { height: max(260px, calc(100dvh - var(--nav-h, 72px) - 24px)); }
   .canvas-messages { bottom: 12px; }

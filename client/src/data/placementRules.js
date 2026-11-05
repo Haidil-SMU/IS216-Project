@@ -1,24 +1,5 @@
-// placementRules.js
-// Every placement rule (the NEA rules and the general tips), in one table, plus the helpers that write the advice text.
-//
-// Each rule has:
-//   id           a short unique name
-//   group        'Kitchen', 'Cooling and air', 'Laundry', 'Bathroom', 'Lighting', 'Entertainment and computing' or 'Furniture'
-//   appliesTo    a list of { kind, variants? } (or the word 'any'). A rule applies to an item when its kind (and variant, if listed) match
-//   title        the start of the tip
-//   instruction  what to do (one sentence, starts with a capital letter)
-//   reason       why it matters (one sentence, starts with a capital letter)
-//   source       'NEA' or 'Tips'
-//   factor       the key in energy.js factors() that measures the rule, or null when the rule is advice only
-//   detect       the name of a check in energy.js that decides when the tip is shown, or null to always show it
-//
-// Rules with a factor are measured from the item's position. They also show up as "Move the ..." recommendations.
-// Rules with no factor are shown as a tip once for each room that has a matching item.
-
 const NEA = 'NEA'
 const GUIDE = 'Tips'
-
-// The kinds and variants (see applianceModels.js) the rules talk about.
 const FRIDGE = [{ kind: 'fridge' }]
 const HEAT_PRODUCERS = [{ kind: 'cook', variants: ['induction_cooker', 'rice_cooker', 'air_fryer', 'electric_kettle', 'toaster'] }, { kind: 'dishwasher' }]
 const VENTED_DRYERS = [{ kind: 'dryer', variants: ['vented', 'standard'] }]
@@ -207,7 +188,7 @@ export function ruleById(id) {
 // WRITING THE TEXT
 // ============================================================
 
-// The text with its first letter in capitals: "keep it cool" -> "Keep it cool".
+// Capitalize first letter
 export function capital(text) {
   const clean = String(text).trim()
   if (!clean) {
@@ -216,7 +197,7 @@ export function capital(text) {
   return clean.charAt(0).toUpperCase() + clean.slice(1)
 }
 
-// One sentence: capital letter first, a single full stop last: "keep it cool." -> "Keep it cool."
+// Capitalize first letter in sentence
 export function sentence(text) {
   let clean = capital(text)
   while (clean.endsWith('.') || clean.endsWith('!') || clean.endsWith('?')) {
@@ -228,7 +209,7 @@ export function sentence(text) {
   return clean + '.'
 }
 
-// A tip in the standard form:  {Title}: {Instruction}. {Reason}. ({Source})
+// A tip
 export function tipText(parts) {
   let text = capital(parts.title) + ': ' + sentence(parts.instruction)
   if (parts.reason) {
@@ -241,8 +222,6 @@ export function tipText(parts) {
 }
 
 // Splits a tip written by tipText() back into its parts, so the sidebar can show the title on its own.
-//   splitTip('Fridge sunlight: Keep it in shade. Sun warms it. (NEA)')
-//     -> { title: 'Fridge sunlight', body: 'Keep it in shade. Sun warms it.', source: 'NEA' }
 export function splitTip(text) {
   let body = String(text)
   let source = ''
@@ -260,7 +239,7 @@ export function splitTip(text) {
   return { title: title, body: body, source: source }
 }
 
-// The tip for a rule. {name} in the text is replaced by the name of the item.
+// The tip for a rule.
 export function ruleTip(rule, name) {
   function fill(text) {
     return text.split('{name}').join(name)
@@ -269,8 +248,6 @@ export function ruleTip(rule, name) {
 }
 
 // A recommendation in the standard form:
-//   Move the {name} {distance} {direction}. {Reason}. Expected saving: about {pct}% (around {kWh} a year).
-// parts = { name, distance, direction, reason, saving }  (saving is the text after "Expected saving: ")
 export function recText(parts) {
   return 'Move the ' + parts.name + ' ' + parts.distance + ' ' + parts.direction + '. ' + sentence(parts.reason) + ' Expected saving: ' + parts.saving + '.'
 }

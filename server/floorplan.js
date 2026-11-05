@@ -1,15 +1,3 @@
-// ============================================================================
-// floorplan.js  (server)
-// ----------------------------------------------------------------------------
-// What it is : the "blueprints" of the flats. It knows the room sizes for each
-//              flat type (2-room, 3-room, ...) and builds the starting list of
-//              rooms, each with its doors and windows.
-// Receives   : a flat type id such as '4-room' (generateRooms) or the database
-//              (loadLayouts).
-// Sends      : { footprint, rooms } from generateRooms.
-// Used by    : layout.js, spatialRoutes.js and server.js.
-// ============================================================================
-
 const { ObjectId } = require('mongodb');
 
 // ============================================================================
@@ -69,7 +57,6 @@ const LAYOUTS = {
 };
 
 // The four walls of a room are numbered 0, 1, 2, 3:
-//   0 = top (small z), 1 = right (big x), 2 = bottom (big z), 3 = left (small x)
 // NORMAL[wall]  is the direction pointing INTO the room from that wall.
 // TANGENT[wall] is the direction you walk along that wall (t grows this way).
 const NORMAL  = [[0, 1], [-1, 0], [0, -1], [1, 0]];
@@ -141,7 +128,6 @@ function isExterior(r, i, W, D) {
 
 // Looks at wall i of room rects[roomIndex] and finds every neighbouring room
 // that shares a stretch of that wall long enough to fit a door.
-// Returns a list of { roomIndex, lo, hi } where lo..hi is the shared stretch.
 function sharedSegments(rects, roomIndex, i) {
   const r = rects[roomIndex];
   const found = [];
@@ -258,7 +244,6 @@ function generateRooms(flatTypeId) {
       room.placements.push(opening({ w: r.w, d: r.d }, 'timber_flush_door', 2, r.w * 0.33, 'outside'));
     } else {
       // Every other room gets a door into a neighbour.
-      // Prefer the living room, then the longest shared stretch of wall.
       let pick = null;
       for (let i = 0; i < 4; i++) {
         const segments = sharedSegments(rects, k, i);
@@ -304,10 +289,10 @@ function generateRooms(flatTypeId) {
           }
         }
 
-        // The door on this room's side...
+        // The door on this room's side
         room.placements.push(opening({ w: r.w, d: r.d }, 'timber_flush_door', i, tFor(r, i, gx, gz), o.name));
 
-        // ...and the matching door on the neighbour's side (the opposite wall).
+        // and the matching door on the the opposite wall.
         const j = (i + 2) % 4;
         rooms[otherIndex].placements.push(opening({ w: o.w, d: o.d }, 'timber_flush_door', j, tFor(o, j, gx, gz), r.name));
       }

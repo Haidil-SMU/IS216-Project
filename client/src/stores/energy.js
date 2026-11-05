@@ -1,18 +1,3 @@
-// energy.js
-// The maths behind the energy overlays and the "energy planner" advice.
-// It answers questions like: where does the sun fall? how hot is this spot?
-// which way does the aircon blow? how much extra electricity does a bad spot cost?
-//
-// Receives: a room ({ w, d }), a list of items in the room (each has x, z, wall, t, rotY, kwh, spec ...)
-// Gives back: numbers (0 to 1), lists of tips, and "move it here" recommendations
-//
-// Exports:
-//   sunAt, heatAt, airDirection, throwOf  -> used by FloorPlan3D.vue (the overlays)
-//   factors                               -> used by EnergyPlanner.vue
-//   analyse                               -> used by ThreeDSpatial.vue
-// The placement rules and the way advice is written are in ../data/placementRules.js.
-// It uses the wall helpers from placement.js.
-
 import { NORMAL, TANGENT, wallPoint, nearestWall, wallLength, onWall, placeAt, isBlocked } from './placement.js'
 import { RULES, ruleApplies, ruleTip, tipText, recText } from '../data/placementRules.js'
 
@@ -75,8 +60,7 @@ const LABELS = {
   outdoor: 'Beside a window',
 }
 
-// The reason in a recommendation. Each one finishes the sentence "This ...", for example
-// "This keeps it out of the sunlight from the window." Several reasons are joined with commas and "and".
+// The reason in a recommendation. 
 const REASONS = {
   sun: 'keeps it out of the sunlight from the window',
   heat: 'keeps it away from heat sources (cooker, dryer, dishwasher, computer)',
@@ -197,7 +181,7 @@ function halfSize(item) {
   return (item.spec.w + item.spec.d) / 4
 }
 
-// Adds up all the values inside an object, e.g. { sun: 0.1, heat: 0.2 } -> 0.3 (approximately)
+// Adds up all the values inside an object
 function sumOf(factorObject) {
   let total = 0
   for (const key of Object.keys(factorObject)) {
@@ -206,7 +190,7 @@ function sumOf(factorObject) {
   return total
 }
 
-// The total of the problems in the object (e.g. { sun: 0.1, good: -0.02 } gives 0.1). Credits (negative numbers) do not count.
+// The total of the problems in the object. Negative numbers do not count.
 function penaltyOf(factorObject) {
   let total = 0
   for (const key of Object.keys(factorObject)) {
@@ -226,8 +210,7 @@ function isMissing(value) {
 // SUN, HEAT AND AIR
 // ============================================================
 
-// How strong the sunlight is at the point p = [x, z]: 0 (none) to 1 (full sun).
-// The sun comes in through windows and makes a patch on the floor.
+// How strong the sunlight is at the point
 export function sunAt(room, items, p) {
   let best = 0
   for (const w of items) {
@@ -272,7 +255,6 @@ export function airDirection(item) {
   return [Math.sin(item.rotY), Math.cos(item.rotY)]
 }
 
-// From a point, walking in direction d, how far is it to the room's wall?
 function distanceToWall(room, origin, d) {
   let t = Infinity
   if (d[0] > 1e-9) {
@@ -291,7 +273,6 @@ function distanceToWall(room, origin, d) {
 }
 
 // How far an aircon's air travels before it hits a wall or a tall piece of furniture.
-// options.ignoreFans = true means stand fans do not count as something in the way.
 export function throwOf(room, items, ac, options = {}) {
   let ignoreFans = false
   if (options.ignoreFans) {
@@ -401,7 +382,6 @@ function squeezed(room, others, a) {
 }
 
 // How much the door of a fridge is blocked: 0 (clear) to 1 (something right in front of it).
-// Anything standing on the floor, and counters, count as being in the way.
 function doorBlocked(others, a) {
   const dir = airDirection(a)
   let worst = 0
@@ -530,7 +510,6 @@ function crossesAnyGap(from, q, gaps) {
 }
 
 // What share (0 to 1) of this room plus the open rooms next door the aircon can reach.
-// We test a grid of points and count how many are close enough.
 function reachShare(room, ac, link) {
   const from = [ac.x, ac.z]
   let covered = 0
@@ -636,7 +615,6 @@ function withForeign(link) {
 
 // How much of the cool air of aircon a is already given by an earlier aircon: 0 (none) to 1 (the same air).
 // Only an aircon placed BEFORE a counts, so the later one is the one that pays for the overlap.
-// "extra" is one more item to count (or null), so a spot can be tried without copying the list.
 function overlapOf(a, list, extra) {
   let overlap = 0
   for (let i = 0; i <= list.length; i++) {
@@ -648,7 +626,7 @@ function overlapOf(a, list, extra) {
   return overlap
 }
 
-// How much heat from nearby heat sources reaches item a: 0 (none) to 1 (a lot). "extra" is one more item to count (or null).
+// How much heat from nearby heat sources reaches item a: 0 (none) to 1 (a lot).
 function heatOf(a, list, extra) {
   let heat = 0
   for (let i = 0; i <= list.length; i++) {
@@ -661,9 +639,6 @@ function heatOf(a, list, extra) {
 }
 
 // Gives an object like { sun: 0.03, heat: 0.01 } for item a.
-// Each number is the extra share of electricity (0.03 = 3%) caused by that problem.
-// options.ownOnly = true leaves out problems caused by other items (the fan).
-// options.link = the open rooms next door (or null).
 export function factors(room, others, a, options = {}) {
   let ownOnly = false
   if (options.ownOnly) {
@@ -819,7 +794,6 @@ function nearestDistance(others, a, test) {
 }
 
 // How far (0 to 1) a distance d is beyond the "near" distance, reaching 1 after "span" more metres.
-// An Infinity distance (nothing to be near) counts as 0, so a missing sink or exhaust fan is never blamed.
 function farness(d, near, span) {
   if (d === Infinity) {
     return 0
@@ -981,9 +955,6 @@ function candidates(room, a, others, link) {
     }
   }
 
-  // Note: the list does not depend on where the item stands now, so the best spot is the same
-  // before and after the item is moved there (the recommendation disappears once it is applied).
-
   // a grid across the floor (or the ceiling)
   if (mode === 'floor' || mode === 'ceiling') {
     for (let x = 0.3; x < room.w; x += FLOOR_STEP) {
@@ -999,7 +970,7 @@ function candidates(room, a, others, link) {
   return notInFrontOfOpening(out, a, link)
 }
 
-// Leaves out the spots that are in front of an opening between rooms (we do not suggest those).
+// Leaves out the spots that are in front of an opening between rooms
 function notInFrontOfOpening(spots, a, link) {
   const openings = openingsOf(link)
   const allowed = []
@@ -1038,7 +1009,6 @@ function nearbySpots(room, a, others, pos, step) {
 }
 
 // The extra electricity of putting item "test" in its spot.
-// own = the problems with the spot, knock = extra electricity a stand fan causes the aircons.
 function costOf(room, others, test, a, link) {
   const own = factors(room, others, test, { ownOnly: true, link: link })
 
@@ -1058,7 +1028,6 @@ function costOf(room, others, test, a, link) {
 
   // The extra electricity this spot causes the OTHER appliances (an aircon placed before another one makes the later one
   // pay for the overlap; a heat source raises the cost of the aircon, fridge, dryer or computer next to it).
-  // Without this, an item's best spot is only best for itself and the whole flat can still come out higher.
   let other = 0
   const kind = test.spec.kind
   if (kind === 'ac' || HEAT_EMITTERS.includes(kind)) {
@@ -1156,7 +1125,7 @@ function findBestSpot(room, a, others, link) {
     lowest = Math.min(lowest, s.kwh)
   }
 
-  // how much electricity is at stake (a stand fan also affects the aircons)
+  // how much electricity is at stake
   let stake = a.kwh
   if (a.spec.kind === 'standfan') {
     let acKwh = 0
@@ -1195,9 +1164,6 @@ function findBestSpot(room, a, others, link) {
 // ============================================================
 // REMEMBERING SEARCH RESULTS
 // ============================================================
-// Looking for the best spot is the slowest part, and analyse() runs again for every room after every edit.
-// When nothing that matters has changed (the room, the item, the other items, the open rooms), the answer is the same,
-// so we keep it and give it back instead of searching again. Editing one room then only searches that room again.
 const spotCache = new Map()
 const CACHE_LIMIT = 400
 
@@ -1285,7 +1251,6 @@ function howFar(m) {
 
 // ============================================================
 // TIPS (general advice that is not about one exact spot)
-// Every tip is written as:  {Title}: {Instruction}. {Reason}. ({Source})
 // ============================================================
 
 // The first item standing in the way of the aircon's air (a tall thing in its path), or null.
@@ -1331,8 +1296,7 @@ function blocksWindow(room, items, o) {
   return false
 }
 
-// The checks that decide whether a rule's tip is shown (the "detect" name in placementRules.js).
-// Each one gives the list of items the tip is about.
+// The checks that decide whether a rule's tip is shown
 const DETECTORS = {
   // things in the way of an aircon's air
   acBlocked: function (room, items) {
@@ -1406,9 +1370,6 @@ const DETECTORS = {
 export const DETECTOR_NAMES = Object.keys(DETECTORS)
 
 // The tips that come from the rule table.
-// A rule with a "detect" check gives one tip for each item the check finds.
-// A rule with neither a factor nor a check is plain advice: it gives one tip for the room, when an item it applies to is there.
-// A rule with a factor (and no check) is measured from the position, so it shows up as a recommendation instead.
 function ruleTips(room, items) {
   const tips = []
   const seen = {}
@@ -1599,11 +1560,7 @@ function openSpaceTips(roomName, area, acs, link) {
 // analyse - THE MAIN FUNCTION
 // ============================================================
 
-// Looks at every item in a room and works out:
-//   rows  - for each item: its normal kWh, its kWh with its current problems, and how much could be avoided
-//   recs  - "move it here" recommendations, biggest saving first
-//   tips  - general advice
-// roomName is only used in the advice text. openLink describes rooms joined by an open wall (or null).
+// Looks at every item in a room and works out rows, recs and tips
 export function analyse(room, items, roomName = 'room', openLink = null) {
   const link = withForeign(openLink)
   const rows = []
@@ -1654,8 +1611,7 @@ export function analyse(room, items, roomName = 'room', openLink = null) {
       otherSaved = Math.max(0, now.other - best.other)
     }
 
-    // A move too small to be worth recommending is not shown as a loss either
-    // (so once every recommendation is applied, no "+% from placement" is left).
+    // A move too small to be worth recommending is not shown as a loss
     if (best) {
       const small = Math.hypot(best.pos.x - a.x, best.pos.z - a.z) < 0.02
       if (small || a.kwh * avoidFraction + knockSaved + otherSaved < MIN_SAVING_KWH) {
