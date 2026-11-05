@@ -65,7 +65,7 @@ function changePlan() {
   // Recalculate existing simulated cost at the newly selected plan's rate.
   cost.value = energy.value * electricityRate.value
 }
-const gameSpeed = 2800 // Wait 1.8 real seconds between 10-minute game ticks
+const gameSpeed = 2800 // Wait 2.8 real seconds between 10-minute game ticks
 
 // Each situation lasts 3 game hours, from 8 AM until 11 PM.
 const currentSituation = ref(null)
@@ -1105,7 +1105,7 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
           <div class="clock">{{ timeText }}</div>
           <div class="time-track"><div :style="{ width: progress + '%' }"></div></div>
           <div class="stat-foot"><span>8:00 AM</span><span>11:00 PM</span></div>
-          <div class="time-speed-note">10 game minutes every 1.8 real seconds · 3 game hours per situation</div>
+          <div class="time-speed-note">10 game minutes every 2.8 real seconds · 3 game hours per situation</div>
         </div>
         <SimulatorEnergy :energy="energy" :currentPower="currentPower"
 />
