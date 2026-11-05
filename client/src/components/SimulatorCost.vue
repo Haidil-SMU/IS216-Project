@@ -12,7 +12,7 @@ defineProps({
       S${{ cost.toFixed(2) }}
     </div>
     <div class="stat-foot">
-      ESTIMATED ELECTRICITY RATE · S${{ electricityRate.toFixed(2) }}/kWh
+      ELECTRICITY RATE · S${{ electricityRate.toFixed(2) }}/kWh
     </div>
   </div>
 </template>
