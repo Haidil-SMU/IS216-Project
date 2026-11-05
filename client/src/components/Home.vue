@@ -142,7 +142,7 @@ function previousSlide() {
           <div class="col-md-6 col-xl-3">
             <RouterLink :to="spatialPage" class="feature-card">
               <div class="feature-photo"><img src="https://unsplash.com/photos/9lB0cUTt9IQ/download?force=true&w=1600" alt="Contemporary residential living room" loading="lazy"><span class="photo-tag">01 / VISUALISE</span></div>
-              <div class="feature-body"><div class="feature-icon">▣</div><h3>3D Spatial</h3><p>Build your virtual room, adjust its dimensions and explore different appliance arrangements in 3D.</p><span class="feature-link">Explore your space <span>↗</span></span></div>
+              <div class="feature-body"><div class="feature-icon">▣</div><h3>My HDB</h3><p>Build your virtual room, adjust its dimensions and explore different appliance arrangements in 3D.</p><span class="feature-link">Explore your space <span>↗</span></span></div>
             </RouterLink>
           </div>
           <div class="col-md-6 col-xl-3">
@@ -200,7 +200,7 @@ function previousSlide() {
     <!-- FINAL CTA -->
     <section class="final-cta"><div class="container text-center"><span class="eyebrow">GET STARTED TODAY</span><h2>Your smarter home journey starts here.</h2><p>Explore the tools, discover new possibilities and make your next home decision with confidence.</p><a href="#explore" class="btn btn-success btn-lg">Explore all services →</a></div></section>
 
-    <footer class="eco-footer"><div class="container"><div class="row g-4"><div class="col-lg-5"><h3>⌂ HDB <span>EcoHome</span></h3><p>Helping Singapore households explore smarter spaces, energy habits and home improvement choices.</p></div><div class="col-6 col-lg-3"><h4>Explore</h4><RouterLink :to="spatialPage">3D Spatial</RouterLink><RouterLink :to="plannerPage">Energy Planner</RouterLink><RouterLink :to="simulatorPage">Energy Simulation</RouterLink></div><div class="col-6 col-lg-4"><h4>Home services</h4><RouterLink :to="contractorPage">Find Contractors</RouterLink><a href="#how-it-works">How it works</a><a href="#explore">All features</a></div></div><div class="footer-bottom">© 2026 HDB EcoHome. Educational project. Not an official HDB website.</div></div></footer>
+    <footer class="eco-footer"><div class="container"><div class="row g-4"><div class="col-lg-5"><h3>⌂ HDB <span>EcoHome</span></h3><p>Helping Singapore households explore smarter spaces, energy habits and home improvement choices.</p></div><div class="col-6 col-lg-3"><h4>Explore</h4><RouterLink :to="spatialPage">My HDB</RouterLink><RouterLink :to="plannerPage">Energy Planner</RouterLink><RouterLink :to="simulatorPage">Energy Simulation</RouterLink></div><div class="col-6 col-lg-4"><h4>Home services</h4><RouterLink :to="contractorPage">Find Contractors</RouterLink><a href="#how-it-works">How it works</a><a href="#explore">All features</a></div></div><div class="footer-bottom">© 2026 HDB EcoHome. Educational project. Not an official HDB website.</div></div></footer>
   </div>
 </template>
 
