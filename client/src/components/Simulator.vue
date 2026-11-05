@@ -19,7 +19,52 @@ const finished = ref(false)
 const minute = ref(480)
 const energy = ref(0)
 const cost = ref(0)
-const electricityRate = ref(0.32) // Demonstration tariff (SGD per kWh)
+// Only show electricity plans saved for the current household.
+const savedPlans = ref([])
+const selectedPlanId = ref('')
+const plansError = ref('')
+
+const selectedPlan = computed(() => {
+  return savedPlans.value.find(saved => saved.id === selectedPlanId.value)
+})
+
+const electricityRate = computed(() => {
+  if (!selectedPlan.value) return 0
+  return Number(selectedPlan.value.retailer?.rate ?? selectedPlan.value.tariff)
+})
+
+async function loadSavedPlans() {
+  savedPlans.value = []
+  selectedPlanId.value = ''
+  plansError.value = ''
+
+  try {
+    const response = await axios.get('/api/planner')
+    const plans = response.data.plans || []
+    const households = response.data.users || []
+
+    // EnergyPlanner uses the household's id (UUID) for its saved plans.
+    // Simulator may receive the MongoDB _id instead, so find the same household.
+    const household = households.find(user =>
+      user.id === householdId.value ||
+      String(user._id?.$oid || user._id) === String(householdId.value)
+    ) || households[0]
+
+    const plannerHouseholdId = household?.id || householdId.value
+    savedPlans.value = plans.filter(saved => saved.householdId === plannerHouseholdId)
+
+    // Automatically use the first saved plan, but allow the user to change it.
+    selectedPlanId.value = savedPlans.value[0]?.id || ''
+    changePlan()
+  } catch {
+    plansError.value = 'Unable to load your saved plans. Please retry.'
+  }
+}
+
+function changePlan() {
+  // Recalculate existing simulated cost at the newly selected plan's rate.
+  cost.value = energy.value * electricityRate.value
+}
 const gameSpeed = 2800 // Wait 1.8 real seconds between 10-minute game ticks
 
 // Each situation lasts 3 game hours, from 8 AM until 11 PM.
@@ -357,10 +402,10 @@ async function loadRooms() {
     const response = await axios.get('/api/simulator')
 
     householdId.value = response.data.householdId
+    await loadSavedPlans()
 
     const records = response.data.rooms
     const items = response.data.items
-    electricityRate.value = response.data.electricityRate
 
     if (!Array.isArray(records) || !Array.isArray(items)) {
       throw new Error('Invalid rooms or catalogue response')
@@ -996,7 +1041,7 @@ function gameTick() {
   }
 }
 function startGame() {
-  if (finished.value || playing.value || !rooms.value.length) return
+  if (finished.value || playing.value || !rooms.value.length || !selectedPlan.value) return
   playing.value = true
   clearInterval(timer)
   timer = setInterval(gameTick, gameSpeed)
@@ -1046,7 +1091,7 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
           <span class="sky-caption">{{ skyLabel }}</span>
           <span class="live-dot"></span>
           <span>{{ playing ? 'DAY IN PROGRESS' : finished ? 'DAY COMPLETE' : 'READY' }}</span>
-          <button v-if="!playing && !finished" class="game-button primary" @click="startGame" :disabled="!rooms.length">▶ {{ minute === 480 ? 'START DAY' : 'RESUME' }}</button>
+          <button v-if="!playing && !finished" class="game-button primary" @click="startGame" :disabled="!rooms.length || !selectedPlanId">▶ {{ minute === 480 ? 'START DAY' : 'RESUME' }}</button>
           <button v-if="playing" class="game-button" @click="pauseGame">Ⅱ PAUSE</button>
           <button class="game-button" @click="resetGame" :disabled="!rooms.length">↻ RESTART</button>
         </div>
@@ -1065,8 +1110,20 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
         </div>
         <SimulatorEnergy :energy="energy" :currentPower="currentPower"
 />
-        <SimulatorCost :cost="cost" :electricityRate="electricityRate"
-/>
+        <div class="stat-card cost-plan-card">
+          <SimulatorCost :cost="cost" :electricityRate="electricityRate" />
+          <div class="cost-plan-picker">
+            <label for="sim-retailer">YOUR SAVED ELECTRICITY PLAN</label>
+            <select id="sim-retailer" v-model="selectedPlanId" @change="changePlan" :disabled="playing || !savedPlans.length">
+              <option v-if="!savedPlans.length" value="">No saved plans</option>
+              <option v-for="saved in savedPlans" :key="saved.id" :value="saved.id">
+                {{ saved.name }} — {{ saved.retailer?.name || 'Saved tariff' }} (S${{ Number(saved.retailer?.rate ?? saved.tariff).toFixed(4) }}/kWh)
+              </option>
+            </select>
+            <small v-if="plansError">{{ plansError }} <button type="button" class="game-button" @click="loadSavedPlans">Retry</button></small>
+            <small v-else-if="!savedPlans.length">No saved plans found. Save one in EnergyPlanner first.</small>
+          </div>
+        </div>
         <div class="stat-card mission-stat">
           <div class="stat-label">✅ MISSIONS COMPLETED</div>
           <div class="stat-number green">{{ completedGoals.length + doneNow }}</div>
@@ -2167,6 +2224,63 @@ button:focus-visible, .device-tile:focus-visible { outline: 3px solid #ffbb64; o
 
   box-shadow: 0 0 0 3px #2563eb;
 
+}
+
+
+/* Keep all four statistic cards at their original height. Place the dropdown
+   inside Electricity Cost without making the grid row taller. */
+.top-stats > .stat-card.cost-plan-card {
+  position: relative;
+  padding: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.cost-plan-card :deep(.stat-card) {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+  padding: 12px 14px 48px;
+}
+.cost-plan-card :deep(.stat-number) { margin: 8px 0 3px; }
+.cost-plan-card :deep(.stat-foot) { margin-top: 4px; }
+.cost-plan-picker {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 9px;
+  min-width: 0;
+}
+.cost-plan-picker label {
+  display: block;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .2px;
+  color: var(--muted);
+  margin-bottom: 3px;
+}
+.cost-plan-picker select {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 5px 6px;
+  border: 1px solid #b7dec9;
+  border-radius: 7px;
+  background: #fff;
+  color: #23483c;
+  font-size: 11px;
+}
+.cost-plan-picker small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.2;
 }
 
 </style>
