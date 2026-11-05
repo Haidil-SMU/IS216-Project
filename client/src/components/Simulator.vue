@@ -525,7 +525,6 @@ const allAppliances = computed(() => {
   return list
 })
 const activeAppliances = computed(() => allAppliances.value.filter(item => item.on))
-const settingAppliances = computed(() => allAppliances.value.filter(item => item.id === settingsApplianceId.value && item.controlType))
 const currentPower = computed(() => {
   let total = 0
   for (const item of allAppliances.value) {
@@ -1169,7 +1168,8 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
               <h3>{{ selectedRoom.name }}</h3>
               <p>Tap an appliance to switch it on or off. Open Settings to adjust supported appliances.</p>
               <div class="room-devices">
-                <div v-for="item in selectedRoom.appliances" :key="item.id" class="device-wrapper">
+                <template v-for="item in selectedRoom.appliances" :key="item.id">
+                <div class="device-wrapper">
                   <button
   type="button" class="device-tile" :class="{powered: item.on,selected: settingsApplianceId === item.id}":disabled="!playing || finished" @click="toggleAppliance(item)"
 >
@@ -1183,7 +1183,7 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
                     ⚙️ {{ settingsApplianceId === item.id ? 'Close settings' : 'Settings' }}
                   </button>
                 </div>
-                <div v-for="item in settingAppliances" :key="'settings-' + item.id" class="appliance-settings">
+                <div v-if="settingsApplianceId === item.id && item.controlType" class="appliance-settings">
                   <div class="settings-heading"><strong>⚙️ {{ item.name }} settings</strong><button type="button" @click="settingsApplianceId = ''">✕</button></div>
                   <p class="setting-summary">{{ settingsDescription(item) }} · {{ item.on ? 'ON' : 'OFF' }} · Simulated {{ effectivePower(item).toFixed(3) }} kW when on</p>
                   <div v-if="item.controlType === 'aircon' || item.controlType === 'heater' || item.controlType === 'fridge' || item.controlType === 'airfryer' || item.controlType === 'oven'" class="setting-row">
@@ -1210,6 +1210,7 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
                   <div v-if="item.controlType === 'ricecooker'" class="setting-row"><label>Cooking state</label><select @change="checkSettingGoals(item)" v-model="item.setting.mode"><option>Cook</option><option>Keep Warm</option></select></div>
                   <small class="settings-note">Power is estimated from catalogue annual kWh and assumed typical operating hours, not a measured wattage. Setting multipliers are illustrative. Oscillation does not change this estimate.</small>
                 </div>
+                </template>
                 <div v-if="!selectedRoom.appliances.length" class="empty-devices">No electrical appliances placed in this room yet.</div>
               </div>
             </div>
@@ -1244,7 +1245,7 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
           </section>
         </aside>
       </div>
-      <p class="calculation-note">⚡ Simulation estimate: energy (kWh) = estimated operating power (kW) × time ON (hours). The updated catalogue provides annual kWh, not rated power, so operating kW is inferred from typical usage hours. These are not measured electricity readings.
+      <p class="calculation-note">⚡ Note: Electricity consumption and costs are estimates based on appliance catalogue data and simulated usage. Actual consumption may vary.
         <span v-if="genericEstimateCount"> {{ genericEstimateCount }} appliance(s) use unverified or general catalogue estimates.</span>
         <span v-if="unknownAnnualCount"> ⚠ {{ unknownAnnualCount }} appliance(s) have no usable energy data and cannot be counted.</span>
         <span v-if="missingCatalogueKeys.length"> ⚠ Unmatched 3D appliance types: {{ missingCatalogueKeys.join(', ') }}.</span>
