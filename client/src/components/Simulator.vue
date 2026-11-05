@@ -1245,7 +1245,7 @@ onUnmounted(() => { clearInterval(timer); clearTimeout(toastTimer) })
           </section>
         </aside>
       </div>
-      <p class="calculation-note">⚡ Simulation estimate: energy (kWh) = estimated operating power (kW) × time ON (hours). The updated catalogue provides annual kWh, not rated power, so operating kW is inferred from typical usage hours. These are not measured electricity readings.
+      <p class="calculation-note">⚡ Note: Electricity consumption and costs are estimates based on appliance catalogue data and simulated usage. Actual consumption may vary.
         <span v-if="genericEstimateCount"> {{ genericEstimateCount }} appliance(s) use unverified or general catalogue estimates.</span>
         <span v-if="unknownAnnualCount"> ⚠ {{ unknownAnnualCount }} appliance(s) have no usable energy data and cannot be counted.</span>
         <span v-if="missingCatalogueKeys.length"> ⚠ Unmatched 3D appliance types: {{ missingCatalogueKeys.join(', ') }}.</span>
@@ -2343,4 +2343,4 @@ button:focus-visible, .device-tile:focus-visible { outline: 3px solid #ffbb64; o
   }
 }
 
-</style>
+</style>  
