@@ -42,7 +42,10 @@ test('Test1: saves a plan and displays it again after reloading', async ({ page 
   await expect(page.getByRole('dialog', { name: 'Plan saved!' })).toBeVisible()
   await page.getByRole('button', { name: 'Got it', exact: true }).click()
   await expect(page.getByRole('button', { name: 'View Browser plan' })).toBeVisible()
-  await expect(page.locator('canvas')).toHaveCount(4)
+  await expect(page.locator('canvas')).toHaveCount(5)
+  await expect(page.getByRole('img', {
+    name: 'Vertical bar chart comparing total appliance purchase prices',
+  })).toBeVisible()
 
   // Reload to read the plan back from the server and database.
   await page.reload()

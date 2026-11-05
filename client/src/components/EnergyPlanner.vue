@@ -94,6 +94,7 @@ const totals = computed(() => estimate(plan.value))
 const barChartWidth = computed(() => Math.max(200, 100 + comparison.value.length * 70) + 'px')
 const energyBars = ref(null)
 const costBars = ref(null)
+const purchaseBars = ref(null)
 const energyForecast = ref(null)
 const costForecast = ref(null)
 let charts = []
@@ -111,6 +112,19 @@ for (let i = 0; i < 12; i++) {
     label: month.toLocaleDateString('en-SG', { month: 'short', year: 'numeric' }),
     cumulativeDays,
   })
+}
+function purchaseCost(saved) {
+  if (!saved.items?.length) return null
+  let total = 0
+  for (const item of saved.items) {
+    if (item.price == null || item.price === '') return null
+    const price = Number(item.price)
+    const quantity = Number(item.quantity ?? 1)
+    if (!Number.isFinite(price) || price < 0 || !Number.isFinite(quantity) || quantity < 0)
+      return null
+    total += price * quantity
+  }
+  return total
 }
 function chartData(metric, forecast = false) {
   const labels = []
@@ -139,13 +153,15 @@ function chartData(metric, forecast = false) {
       })
     } else {
       labels.push(saved.name)
-      values.push(saved.estimate[metric])
+      values.push(metric === 'purchase' ? purchaseCost(saved) : saved.estimate[metric])
       colours.push(colour)
     }
   }
   if (!forecast)
     datasets.push({
-      label: metric === 'kwh' ? 'Monthly kWh' : 'Monthly cost (S$)',
+      label: metric === 'purchase'
+        ? 'Total appliance purchase price (S$)'
+        : metric === 'kwh' ? 'Monthly kWh' : 'Monthly cost (S$)',
       data: values,
       backgroundColor: colours,
       borderRadius: 5,
@@ -158,12 +174,38 @@ function destroyCharts() {
   for (const chart of charts) chart.destroy()
   charts = []
 }
+// Chart.js accepts an array of strings as multiple tooltip lines.
+function wrapChartLabel(text, chart, bold = false) {
+  const context = chart.ctx
+  const maxWidth = Math.max(1, chart.width - 48)
+  const lines = []
+  let line = ''
+  context.save()
+  context.font = (bold ? 'bold ' : '') + '12px Arial'
+  for (const character of String(text)) {
+    if (line && context.measureText(line + character).width > maxWidth) {
+      const space = line.lastIndexOf(' ')
+      if (space > 0) {
+        lines.push(line.slice(0, space))
+        line = line.slice(space + 1)
+      } else {
+        lines.push(line)
+        line = ''
+      }
+    }
+    line += character
+  }
+  if (line) lines.push(line.trim())
+  context.restore()
+  return lines
+}
 function renderCharts() {
   destroyCharts()
   if (!comparison.value.length) return
   const definitions = [
     [energyBars.value, 'kwh', false],
     [costBars.value, 'cost', false],
+    [purchaseBars.value, 'purchase', false],
     [energyForecast.value, 'kwh', true],
     [costForecast.value, 'cost', true],
   ]
@@ -181,13 +223,20 @@ function renderCharts() {
           plugins: {
             legend: { display: forecast },
             tooltip: {
+              padding: 10,
+              titleFont: { family: 'Arial', size: 12, weight: 'bold' },
+              bodyFont: { family: 'Arial', size: 12 },
               callbacks: {
-                label: (context) =>
-                  context.dataset.label +
-                  ': ' +
-                  (metric === 'kwh'
+                title: (items) => {
+                  if (!items.length) return ''
+                  return wrapChartLabel(items[0].label, items[0].chart, true)
+                },
+                label: (context) => {
+                  const value = metric === 'kwh'
                     ? context.parsed.y.toFixed(1) + ' kWh'
-                    : money(context.parsed.y)),
+                    : money(context.parsed.y)
+                  return wrapChartLabel(context.dataset.label + ': ' + value, context.chart)
+                },
               },
             },
           },
@@ -198,7 +247,7 @@ function renderCharts() {
                 display: true,
                 text:
                   (forecast ? 'Cumulative ' : '') +
-                  (metric === 'kwh' ? 'Energy (kWh)' : 'Cost (S$)'),
+                  (metric === 'purchase' ? 'Purchase price (S$)' : metric === 'kwh' ? 'Energy (kWh)' : 'Cost (S$)'),
               },
             },
           },
@@ -804,10 +853,6 @@ function estimate(currentPlan) {
                       This plan: {{ totals.kwh.toFixed(1) }} kWh ·
                       {{ money(totals.cost) }} estimated monthly electricity.
                     </p>
-                    <p class="text-secondary">
-                      Prices and energy figures are catalogue estimates. Purchase prices are
-                      separate from electricity costs.
-                    </p>
                     <details class="small text-secondary mb-3">
                       <summary>How the estimate works</summary>
                       <p>
@@ -891,10 +936,7 @@ function estimate(currentPlan) {
                         Compare all plans
                       </button>
                     </div>
-                    <p class="small text-secondary">
-                      All plans are shown initially. Tick plans above to narrow the comparison;
-                      clear the selection to show all again.
-                    </p>
+                    
                     <div class="row g-4">
                       <section class="col-lg-6">
                         <h4 class="h6">Monthly energy consumption</h4>
@@ -927,14 +969,25 @@ function estimate(currentPlan) {
                         </div>
                       </section>
                     </div>
+                    <section class="mt-4" aria-label="Appliance purchase price comparison">
+                      <h3 class="h5">Total appliance purchase price</h3>
+                      <div class="planner-chart-scroll">
+                        <div class="planner-chart planner-bar-chart" :style="{ width: barChartWidth }">
+                          <canvas
+                            ref="purchaseBars"
+                            role="img"
+                            aria-label="Vertical bar chart comparing total appliance purchase prices"
+                          ></canvas>
+                        </div>
+                      </div>
+                      <ul class="small mt-3">
+                        <li v-for="saved in comparison" :key="saved.id">
+                          {{ saved.name }}:
+                          {{ purchaseCost(saved) == null ? 'Not available — missing appliance prices' : money(purchaseCost(saved)) }}
+                        </li>
+                      </ul>
+                    </section>
                     <h3 class="h5 mt-4">12-month cumulative forecast</h3>
-                    <p class="small text-secondary">
-                      From {{ forecastMonths[0].label }} to {{ forecastMonths[11].label }}. Daily
-                      use and each plan’s saved tariff stay constant. Each point adds all full
-                      months from the start of this forecast through the labelled month, accounting
-                      for the number of days in each month. These are estimates, not actual readings
-                      or seasonal predictions. Appliance purchase prices are excluded.
-                    </p>
                     <div class="row g-4">
                       <section class="col-lg-6">
                         <h4 class="h6">Cumulative energy consumption</h4>
